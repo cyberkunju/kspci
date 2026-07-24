@@ -1,0 +1,7 @@
+{
+  "name": "ksp-crime-ai-client",
+  "version": "0.1.0",
+  "homepage": "index.html",
+  "login_redirect": "index.html",
+  "404": "404.html"
+}
