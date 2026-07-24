@@ -8,9 +8,9 @@ import Sociology from './Sociology';
 import MoneyTrail from './MoneyTrail';
 import {
   TabList, Tab, Grid, Stack, Text, Badge, Table, Selector,
-  Banner, EmptyState, Button, Icon, RefreshCw, proportional, pixel,
+  EmptyState, proportional, pixel,
 } from '../ui';
-import { Kpi, MetricSkeletons, PageHeader, VizCard } from './Cards';
+import { Kpi, MetricSkeletons, PageHeader, ViewError, VizCard } from './Cards';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -47,7 +47,7 @@ export default function Analytics({ role }) {
         if (!current) return;
         setOverview(nextOverview); setTrends(nextTrends);
       })
-      .catch((error) => current && setErr(error.message))
+      .catch((error) => current && setErr(error))
       .finally(() => current && setLoading(false));
     return () => { current = false; };
   }, [role, refreshKey]);
@@ -57,15 +57,15 @@ export default function Analytics({ role }) {
     setErr(null);
     if (tab === 'map') {
       setTabLoading(true); setHotspots(null);
-      api.hotspots(role).then((data) => current && setHotspots(data)).catch((error) => current && setErr(error.message)).finally(() => current && setTabLoading(false));
+      api.hotspots(role).then((data) => current && setHotspots(data)).catch((error) => current && setErr(error)).finally(() => current && setTabLoading(false));
     } else if (tab === 'network') {
       setTabLoading(true); setNet(null); setRing('');
-      api.network(role).then((data) => current && setNet(data)).catch((error) => current && setErr(error.message)).finally(() => current && setTabLoading(false));
+      api.network(role).then((data) => current && setNet(data)).catch((error) => current && setErr(error)).finally(() => current && setTabLoading(false));
     } else if (tab === 'offenders') {
       setTabLoading(true); setOffenders(null); setFinancial(null);
       Promise.all([api.offenders(role), api.financial(role)])
         .then(([nextOffenders, nextFinancial]) => { if (current) { setOffenders(nextOffenders); setFinancial(nextFinancial); } })
-        .catch((error) => current && setErr(error.message))
+        .catch((error) => current && setErr(error))
         .finally(() => current && setTabLoading(false));
     } else {
       setTabLoading(false);
@@ -77,7 +77,7 @@ export default function Analytics({ role }) {
   const selectRing = (nextRing) => {
     setRing(nextRing); setNet(null); setTabLoading(true); setErr(null);
     api.network(role, nextRing || undefined)
-      .then(setNet).catch((error) => setErr(error.message)).finally(() => setTabLoading(false));
+      .then(setNet).catch((error) => setErr(error)).finally(() => setTabLoading(false));
   };
 
   const fmtAmt = (n) => '₹' + Number(n).toLocaleString('en-IN');
@@ -95,12 +95,7 @@ export default function Analytics({ role }) {
         {TABS.map((t) => <Tab key={t.id} value={t.id} label={t.label} />)}
       </TabList>
 
-      {err && (
-        <Banner
-          status="error" title="This intelligence view could not be loaded" description={err}
-          endContent={<Button label="Retry" size="sm" variant="secondary" icon={<Icon icon={RefreshCw} size="sm" />} onClick={() => setRefreshKey((key) => key + 1)} />}
-        />
-      )}
+      {err && <ViewError err={err} onRetry={() => setRefreshKey((key) => key + 1)} />}
 
       {loading ? <MetricSkeletons /> : overview && (
         <Grid columns={{ minWidth: 150, max: 6 }} gap={3}>
@@ -119,7 +114,7 @@ export default function Analytics({ role }) {
         {!tabLoading && tab === 'sociology' && <Sociology role={role} />}
         {!tabLoading && tab === 'money' && <MoneyTrail role={role} />}
 
-        {!tabLoading && tab === 'network' && (
+        {!tabLoading && !err && tab === 'network' && (
           <VizCard
             title="Co-accused network & organized-crime rings"
             action={
@@ -136,13 +131,13 @@ export default function Analytics({ role }) {
           </VizCard>
         )}
 
-        {!tabLoading && tab === 'map' && (
+        {!tabLoading && !err && tab === 'map' && (
           <VizCard title="Crime hotspots across Karnataka">
             <HotspotMap data={hotspots} />
           </VizCard>
         )}
 
-        {!tabLoading && tab === 'offenders' && (
+        {!tabLoading && !err && tab === 'offenders' && (
           <Grid columns={{ minWidth: 420, max: 2 }} gap={3}>
             <VizCard title="Highest-risk repeat offenders">
               <Table

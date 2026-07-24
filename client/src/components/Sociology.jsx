@@ -4,8 +4,8 @@ import { Chart, registerables } from 'chart.js';
 Chart.register(...registerables);
 
 import { PALETTE as PAL, GRID, TICK } from '../lib/chartTheme';
-import { Grid, Stack, Text, Banner } from '../ui';
-import { VizCard } from './Cards';
+import { Grid, Stack, Text } from '../ui';
+import { ViewError, VizCard } from './Cards';
 
 function C({ type, data, options, height = 230 }) {
   const ref = useRef(null); const ch = useRef(null);
@@ -28,8 +28,15 @@ const cat = (arr) => ({ labels: (arr || []).map((x) => x.label), data: (arr || [
 
 export default function Sociology({ role }) {
   const [d, setD] = useState(null); const [err, setErr] = useState(null);
-  useEffect(() => { api.sociology(role).then(setD).catch((e) => setErr(e.message)); }, [role]);
-  if (err) return <Banner status="error" title={err} />;
+  useEffect(() => {
+    let current = true;
+    setErr(null); setD(null);
+    api.sociology(role)
+      .then((data) => { if (current) setD(data); })
+      .catch((e) => { if (current) setErr(e); });
+    return () => { current = false; };
+  }, [role]);
+  if (err) return <ViewError err={err} />;
   if (!d) return <Stack hAlign="center" padding={8}><Text color="tertiary">Loading sociological insights…</Text></Stack>;
   const occ = cat(d.occupation);
   return (

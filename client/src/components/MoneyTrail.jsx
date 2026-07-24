@@ -1,15 +1,22 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import NetworkGraph from './NetworkGraph';
-import { Grid, Stack, Text, Table, Banner, Icon, proportional, pixel, CircleDot } from '../ui';
-import { VizCard } from './Cards';
+import { Grid, Stack, Text, Table, Icon, proportional, pixel, CircleDot } from '../ui';
+import { ViewError, VizCard } from './Cards';
 
 const fmtAmt = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
 
 export default function MoneyTrail({ role }) {
   const [d, setD] = useState(null); const [err, setErr] = useState(null);
-  useEffect(() => { api.moneytrail(role).then(setD).catch((e) => setErr(e.message)); }, [role]);
-  if (err) return <Banner status="error" title={err} />;
+  useEffect(() => {
+    let current = true;
+    setErr(null); setD(null);
+    api.moneytrail(role)
+      .then((data) => { if (current) setD(data); })
+      .catch((e) => { if (current) setErr(e); });
+    return () => { current = false; };
+  }, [role]);
+  if (err) return <ViewError err={err} />;
   if (!d) return <Stack hAlign="center" padding={8}><Text color="tertiary">Tracing money flows…</Text></Stack>;
 
   // adapt to the D3 graph: accused = ring 1 (blue), counterparty = ring 2 (amber)

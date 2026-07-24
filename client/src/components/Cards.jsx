@@ -1,4 +1,35 @@
-import { Card, Grid, Stack, Heading, Text, Badge, Skeleton } from '../ui';
+import { Card, Grid, Stack, Heading, Text, Badge, Skeleton, Banner, Button, Icon, RefreshCw } from '../ui';
+
+// True when an API error is an RBAC 403 (the caller's role can't access the view).
+export function isForbidden(err) {
+  return !!err && (err.status === 403 || err.code === 'forbidden for role');
+}
+
+// Role-aware error surface: a calm "restricted" notice for RBAC 403s, and a
+// real error banner (with optional retry) for genuine failures. Accepts either
+// an Error-like object (with .status/.code/.message) or a plain string.
+export function ViewError({ err, onRetry }) {
+  if (isForbidden(err)) {
+    return (
+      <Banner
+        status="warning"
+        title="Restricted for your access role"
+        description="This view is available to the Analyst, Supervisor, Policymaker, and Admin roles. Switch your working access context to open it."
+      />
+    );
+  }
+  const message = typeof err === 'string' ? err : (err && err.message) || 'Something went wrong.';
+  return (
+    <Banner
+      status="error"
+      title="This view could not be loaded"
+      description={message}
+      endContent={onRetry && (
+        <Button label="Retry" size="sm" variant="secondary" icon={<Icon icon={RefreshCw} size="sm" />} onClick={onRetry} />
+      )}
+    />
+  );
+}
 
 export function PageHeader({ eyebrow, title, description, action, badge }) {
   return (
