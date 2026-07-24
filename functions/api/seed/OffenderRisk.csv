@@ -1,0 +1,346 @@
+OffenderRiskID,AccusedName,TotalCases,ViolentCases,RingID,RiskScore,RiskBand,Factors
+1,Joseph Shetty,280,71,4,100,High,280 cases; 71 violent; organized-ring member
+2,Anitha Murthy,246,56,0,100,High,246 cases; 56 violent
+3,Suresh Hegde,258,53,0,100,High,258 cases; 53 violent
+4,Basavaraj Patil,369,90,2,100,High,369 cases; 90 violent; organized-ring member
+5,Bhavana Gowda,428,106,1,100,High,428 cases; 106 violent; organized-ring member
+6,Manjunath Bhat,243,75,0,100,High,243 cases; 75 violent
+7,Nagaraj Bhat,359,88,3,100,High,359 cases; 88 violent; organized-ring member
+8,Yashwanth Gowda,252,72,0,100,High,252 cases; 72 violent
+9,Girish Kumar,162,51,0,100,High,162 cases; 51 violent
+10,Suresh Shetty,231,60,0,100,High,231 cases; 60 violent
+11,Prakash Shetty,341,87,0,100,High,341 cases; 87 violent
+12,Manjunath Kumar,265,65,3,100,High,265 cases; 65 violent; organized-ring member
+13,Joseph Patil,258,66,3,100,High,258 cases; 66 violent; organized-ring member
+14,Fatima Bhat,196,54,0,100,High,196 cases; 54 violent
+15,Kiran Nayak,190,48,0,100,High,190 cases; 48 violent
+16,Yashwanth Iyengar,203,55,7,100,High,203 cases; 55 violent; organized-ring member
+17,Lakshmi Reddy,218,66,8,100,High,218 cases; 66 violent; organized-ring member
+18,Chetan Shetty,249,60,0,100,High,249 cases; 60 violent
+19,Imran Shetty,257,69,0,100,High,257 cases; 69 violent
+20,Ravi Hegde,285,65,0,100,High,285 cases; 65 violent
+21,Nagaraj Rao,334,90,0,100,High,334 cases; 90 violent
+22,Joseph Murthy,215,47,0,100,High,215 cases; 47 violent
+23,Joseph Nayak,278,73,0,100,High,278 cases; 73 violent
+24,Kiran Desai,262,54,0,100,High,262 cases; 54 violent
+25,Prakash Patil,314,76,0,100,High,314 cases; 76 violent
+26,Prakash Kulkarni,304,100,7,100,High,304 cases; 100 violent; organized-ring member
+27,Rekha Gowda,317,76,0,100,High,317 cases; 76 violent
+28,Anitha Shetty,208,63,0,100,High,208 cases; 63 violent
+29,Manjunath Gowda,341,77,0,100,High,341 cases; 77 violent
+30,Rekha Reddy,278,76,0,100,High,278 cases; 76 violent
+31,Girish Nayak,281,69,0,100,High,281 cases; 69 violent
+32,Joseph Kulkarni,270,66,0,100,High,270 cases; 66 violent
+33,Mary Murthy,357,96,8,100,High,357 cases; 96 violent; organized-ring member
+34,Ashwini Bhat,203,57,0,100,High,203 cases; 57 violent
+35,Shivakumar Hegde,249,75,1,100,High,249 cases; 75 violent; organized-ring member
+36,Anitha Reddy,277,72,0,100,High,277 cases; 72 violent
+37,Fatima Rao,193,51,0,100,High,193 cases; 51 violent
+38,Fatima Desai,191,39,0,100,High,191 cases; 39 violent
+39,Pooja Desai,260,66,0,100,High,260 cases; 66 violent
+40,Lakshmi Kulkarni,301,78,0,100,High,301 cases; 78 violent
+41,Prakash Kumar,286,73,0,100,High,286 cases; 73 violent
+42,Vinutha Bhat,254,78,0,100,High,254 cases; 78 violent
+43,Joseph Reddy,271,68,2,100,High,271 cases; 68 violent; organized-ring member
+44,Prakash Bhat,236,61,0,100,High,236 cases; 61 violent
+45,Vinutha Kulkarni,237,63,0,100,High,237 cases; 63 violent
+46,Imran Murthy,245,68,0,100,High,245 cases; 68 violent
+47,Prakash Murthy,200,63,0,100,High,200 cases; 63 violent
+48,Yashwanth Hegde,324,90,0,100,High,324 cases; 90 violent
+49,Pooja Kumar,250,69,8,100,High,250 cases; 69 violent; organized-ring member
+50,Nagaraj Nayak,176,57,0,100,High,176 cases; 57 violent
+51,Vinutha Prasad,254,58,0,100,High,254 cases; 58 violent
+52,Shivakumar Shetty,432,103,8,100,High,432 cases; 103 violent; organized-ring member
+53,Lakshmi Prasad,265,56,0,100,High,265 cases; 56 violent
+54,Kiran Kumar,284,75,0,100,High,284 cases; 75 violent
+55,Shivakumar Prasad,314,68,0,100,High,314 cases; 68 violent
+56,Ravi Prasad,222,61,0,100,High,222 cases; 61 violent
+57,Shivakumar Rao,191,45,0,100,High,191 cases; 45 violent
+58,Rekha Nayak,213,52,8,100,High,213 cases; 52 violent; organized-ring member
+59,Suresh Prasad,274,80,0,100,High,274 cases; 80 violent
+60,Shivakumar Kumar,265,77,0,100,High,265 cases; 77 violent
+61,Mary Hegde,235,69,5,100,High,235 cases; 69 violent; organized-ring member
+62,Bhavana Bhat,162,43,0,100,High,162 cases; 43 violent
+63,Yashwanth Rao,350,91,0,100,High,350 cases; 91 violent
+64,Chetan Patil,191,55,4,100,High,191 cases; 55 violent; organized-ring member
+65,Bhavana Hegde,215,52,0,100,High,215 cases; 52 violent
+66,Manjunath Shetty,321,85,4,100,High,321 cases; 85 violent; organized-ring member
+67,Rekha Iyengar,215,67,4,100,High,215 cases; 67 violent; organized-ring member
+68,Joseph Rao,153,41,0,100,High,153 cases; 41 violent
+69,Chetan Rao,190,53,0,100,High,190 cases; 53 violent
+70,Yashwanth Reddy,315,86,5,100,High,315 cases; 86 violent; organized-ring member
+71,Imran Bhat,203,57,0,100,High,203 cases; 57 violent
+72,Vinutha Gowda,298,68,0,100,High,298 cases; 68 violent
+73,Deepak Naik,245,59,0,100,High,245 cases; 59 violent
+74,Rekha Murthy,377,88,7,100,High,377 cases; 88 violent; organized-ring member
+75,Pooja Kulkarni,193,50,0,100,High,193 cases; 50 violent
+76,Nagaraj Reddy,199,53,7,100,High,199 cases; 53 violent; organized-ring member
+77,Basavaraj Iyengar,263,58,3,100,High,263 cases; 58 violent; organized-ring member
+78,Lakshmi Bhat,209,61,0,100,High,209 cases; 61 violent
+79,Girish Gowda,245,69,6,100,High,245 cases; 69 violent; organized-ring member
+80,Ravi Shetty,301,71,0,100,High,301 cases; 71 violent
+81,Yashwanth Nayak,283,74,0,100,High,283 cases; 74 violent
+82,Vinutha Nayak,265,59,0,100,High,265 cases; 59 violent
+83,Yashwanth Kumar,238,61,0,100,High,238 cases; 61 violent
+84,Lakshmi Nayak,386,112,1,100,High,386 cases; 112 violent; organized-ring member
+85,Prakash Gowda,310,81,0,100,High,310 cases; 81 violent
+86,Bhavana Shetty,326,81,0,100,High,326 cases; 81 violent
+87,Imran Desai,207,53,8,100,High,207 cases; 53 violent; organized-ring member
+88,Manjunath Naik,245,59,0,100,High,245 cases; 59 violent
+89,Suresh Patil,293,64,0,100,High,293 cases; 64 violent
+90,Fatima Reddy,183,55,0,100,High,183 cases; 55 violent
+91,Ashwini Kumar,217,53,0,100,High,217 cases; 53 violent
+92,Chetan Reddy,209,49,1,100,High,209 cases; 49 violent; organized-ring member
+93,Ashwini Patil,158,35,0,100,High,158 cases; 35 violent
+94,Nagaraj Hegde,220,61,0,100,High,220 cases; 61 violent
+95,Pooja Iyengar,242,58,5,100,High,242 cases; 58 violent; organized-ring member
+96,Pooja Naik,282,75,0,100,High,282 cases; 75 violent
+97,Prakash Prasad,215,53,0,100,High,215 cases; 53 violent
+98,Suresh Naik,194,51,0,100,High,194 cases; 51 violent
+99,Chetan Naik,216,51,0,100,High,216 cases; 51 violent
+100,Mary Reddy,327,84,5,100,High,327 cases; 84 violent; organized-ring member
+101,Suresh Gowda,255,70,0,100,High,255 cases; 70 violent
+102,Anitha Rao,219,48,4,100,High,219 cases; 48 violent; organized-ring member
+103,Nagaraj Desai,200,51,0,100,High,200 cases; 51 violent
+104,Anitha Kumar,269,73,0,100,High,269 cases; 73 violent
+105,Lakshmi Rao,224,64,7,100,High,224 cases; 64 violent; organized-ring member
+106,Fatima Shetty,357,93,7,100,High,357 cases; 93 violent; organized-ring member
+107,Rekha Bhat,228,57,0,100,High,228 cases; 57 violent
+108,Manjunath Rao,252,68,0,100,High,252 cases; 68 violent
+109,Shivakumar Iyengar,172,34,0,100,High,172 cases; 34 violent
+110,Yashwanth Patil,359,98,0,100,High,359 cases; 98 violent
+111,Basavaraj Desai,183,39,0,100,High,183 cases; 39 violent
+112,Deepak Prasad,316,87,0,100,High,316 cases; 87 violent
+113,Lakshmi Iyengar,283,82,0,100,High,283 cases; 82 violent
+114,Pooja Hegde,265,75,0,100,High,265 cases; 75 violent
+115,Lakshmi Murthy,262,56,0,100,High,262 cases; 56 violent
+116,Shivakumar Murthy,251,75,0,100,High,251 cases; 75 violent
+117,Anitha Nayak,337,86,0,100,High,337 cases; 86 violent
+118,Lakshmi Gowda,162,50,0,100,High,162 cases; 50 violent
+119,Bhavana Prasad,178,47,3,100,High,178 cases; 47 violent; organized-ring member
+120,Deepak Kumar,271,74,0,100,High,271 cases; 74 violent
+121,Kiran Iyengar,317,82,0,100,High,317 cases; 82 violent
+122,Chetan Iyengar,277,63,0,100,High,277 cases; 63 violent
+123,Ravi Gowda,270,54,3,100,High,270 cases; 54 violent; organized-ring member
+124,Deepak Hegde,257,66,0,100,High,257 cases; 66 violent
+125,Vinutha Shetty,264,72,0,100,High,264 cases; 72 violent
+126,Kiran Murthy,261,72,8,100,High,261 cases; 72 violent; organized-ring member
+127,Girish Murthy,310,62,0,100,High,310 cases; 62 violent
+128,Nagaraj Patil,347,107,2,100,High,347 cases; 107 violent; organized-ring member
+129,Fatima Hegde,186,45,0,100,High,186 cases; 45 violent
+130,Deepak Nayak,195,45,0,100,High,195 cases; 45 violent
+131,Kiran Reddy,184,50,7,100,High,184 cases; 50 violent; organized-ring member
+132,Basavaraj Reddy,239,58,0,100,High,239 cases; 58 violent
+133,Deepak Gowda,271,58,0,100,High,271 cases; 58 violent
+134,Prakash Hegde,299,74,0,100,High,299 cases; 74 violent
+135,Bhavana Murthy,228,61,0,100,High,228 cases; 61 violent
+136,Vinutha Rao,328,88,0,100,High,328 cases; 88 violent
+137,Vinutha Reddy,286,71,0,100,High,286 cases; 71 violent
+138,Mary Iyengar,339,81,0,100,High,339 cases; 81 violent
+139,Chetan Kumar,189,53,0,100,High,189 cases; 53 violent
+140,Girish Shetty,231,57,0,100,High,231 cases; 57 violent
+141,Bhavana Patil,187,46,0,100,High,187 cases; 46 violent
+142,Pooja Patil,238,61,0,100,High,238 cases; 61 violent
+143,Basavaraj Hegde,272,73,0,100,High,272 cases; 73 violent
+144,Bhavana Nayak,367,85,2,100,High,367 cases; 85 violent; organized-ring member
+145,Ashwini Hegde,187,49,0,100,High,187 cases; 49 violent
+146,Nagaraj Gowda,297,73,0,100,High,297 cases; 73 violent
+147,Chetan Prasad,238,73,6,100,High,238 cases; 73 violent; organized-ring member
+148,Girish Bhat,277,76,6,100,High,277 cases; 76 violent; organized-ring member
+149,Pooja Prasad,213,55,0,100,High,213 cases; 55 violent
+150,Lakshmi Shetty,330,77,0,100,High,330 cases; 77 violent
+151,Yashwanth Murthy,243,63,6,100,High,243 cases; 63 violent; organized-ring member
+152,Yashwanth Desai,239,68,0,100,High,239 cases; 68 violent
+153,Lakshmi Desai,223,57,0,100,High,223 cases; 57 violent
+154,Mary Naik,301,69,7,100,High,301 cases; 69 violent; organized-ring member
+155,Lakshmi Kumar,235,63,4,100,High,235 cases; 63 violent; organized-ring member
+156,Joseph Gowda,214,57,0,100,High,214 cases; 57 violent
+157,Suresh Desai,304,71,0,100,High,304 cases; 71 violent
+158,Joseph Desai,261,78,0,100,High,261 cases; 78 violent
+159,Girish Rao,250,73,0,100,High,250 cases; 73 violent
+160,Chetan Nayak,187,52,0,100,High,187 cases; 52 violent
+161,Mary Gowda,230,56,0,100,High,230 cases; 56 violent
+162,Ravi Bhat,244,58,0,100,High,244 cases; 58 violent
+163,Fatima Nayak,167,53,0,100,High,167 cases; 53 violent
+164,Ashwini Desai,353,80,0,100,High,353 cases; 80 violent
+165,Ravi Reddy,230,77,1,100,High,230 cases; 77 violent; organized-ring member
+166,Basavaraj Kulkarni,168,41,0,100,High,168 cases; 41 violent
+167,Basavaraj Bhat,378,94,2,100,High,378 cases; 94 violent; organized-ring member
+168,Fatima Kulkarni,273,72,3,100,High,273 cases; 72 violent; organized-ring member
+169,Pooja Nayak,227,50,0,100,High,227 cases; 50 violent
+170,Chetan Bhat,282,56,0,100,High,282 cases; 56 violent
+171,Anitha Patil,270,64,0,100,High,270 cases; 64 violent
+172,Prakash Naik,298,88,2,100,High,298 cases; 88 violent; organized-ring member
+173,Basavaraj Shetty,220,56,0,100,High,220 cases; 56 violent
+174,Suresh Bhat,279,77,7,100,High,279 cases; 77 violent; organized-ring member
+175,Kiran Prasad,270,82,0,100,High,270 cases; 82 violent
+176,Chetan Kulkarni,461,141,0,100,High,461 cases; 141 violent
+177,Rekha Desai,263,65,0,100,High,263 cases; 65 violent
+178,Manjunath Murthy,186,42,0,100,High,186 cases; 42 violent
+179,Deepak Rao,344,80,7,100,High,344 cases; 80 violent; organized-ring member
+180,Fatima Gowda,231,56,1,100,High,231 cases; 56 violent; organized-ring member
+181,Ashwini Naik,235,70,5,100,High,235 cases; 70 violent; organized-ring member
+182,Manjunath Reddy,310,88,0,100,High,310 cases; 88 violent
+183,Vinutha Iyengar,225,57,0,100,High,225 cases; 57 violent
+184,Pooja Bhat,251,62,7,100,High,251 cases; 62 violent; organized-ring member
+185,Suresh Rao,245,64,0,100,High,245 cases; 64 violent
+186,Girish Kulkarni,295,88,5,100,High,295 cases; 88 violent; organized-ring member
+187,Bhavana Rao,351,95,0,100,High,351 cases; 95 violent
+188,Shivakumar Bhat,289,87,0,100,High,289 cases; 87 violent
+189,Yashwanth Kulkarni,278,80,0,100,High,278 cases; 80 violent
+190,Manjunath Iyengar,300,81,0,100,High,300 cases; 81 violent
+191,Prakash Reddy,301,77,0,100,High,301 cases; 77 violent
+192,Anitha Desai,292,74,0,100,High,292 cases; 74 violent
+193,Suresh Reddy,247,72,0,100,High,247 cases; 72 violent
+194,Manjunath Patil,305,84,0,100,High,305 cases; 84 violent
+195,Mary Kulkarni,248,67,0,100,High,248 cases; 67 violent
+196,Imran Kumar,237,60,0,100,High,237 cases; 60 violent
+197,Kiran Hegde,323,79,3,100,High,323 cases; 79 violent; organized-ring member
+198,Bhavana Kulkarni,252,71,0,100,High,252 cases; 71 violent
+199,Mary Shetty,295,70,0,100,High,295 cases; 70 violent
+200,Mary Nayak,245,64,0,100,High,245 cases; 64 violent
+201,Ravi Murthy,261,71,0,100,High,261 cases; 71 violent
+202,Nagaraj Kulkarni,310,87,4,100,High,310 cases; 87 violent; organized-ring member
+203,Shivakumar Kulkarni,240,62,0,100,High,240 cases; 62 violent
+204,Vinutha Naik,209,55,0,100,High,209 cases; 55 violent
+205,Ashwini Gowda,233,59,0,100,High,233 cases; 59 violent
+206,Anitha Iyengar,216,53,0,100,High,216 cases; 53 violent
+207,Girish Naik,152,47,0,100,High,152 cases; 47 violent
+208,Kiran Kulkarni,191,43,5,100,High,191 cases; 43 violent; organized-ring member
+209,Girish Patil,357,107,0,100,High,357 cases; 107 violent
+210,Pooja Rao,285,62,7,100,High,285 cases; 62 violent; organized-ring member
+211,Mary Bhat,273,68,0,100,High,273 cases; 68 violent
+212,Girish Hegde,220,54,4,100,High,220 cases; 54 violent; organized-ring member
+213,Joseph Iyengar,290,78,6,100,High,290 cases; 78 violent; organized-ring member
+214,Deepak Murthy,190,44,0,100,High,190 cases; 44 violent
+215,Nagaraj Naik,167,46,0,100,High,167 cases; 46 violent
+216,Manjunath Nayak,301,71,5,100,High,301 cases; 71 violent; organized-ring member
+217,Basavaraj Nayak,229,52,0,100,High,229 cases; 52 violent
+218,Mary Kumar,185,41,0,100,High,185 cases; 41 violent
+219,Vinutha Kumar,263,61,0,100,High,263 cases; 61 violent
+220,Bhavana Naik,279,64,3,100,High,279 cases; 64 violent; organized-ring member
+221,Ashwini Nayak,179,50,0,100,High,179 cases; 50 violent
+222,Ravi Kulkarni,174,37,0,100,High,174 cases; 37 violent
+223,Mary Rao,168,49,0,100,High,168 cases; 49 violent
+224,Ravi Naik,270,62,7,100,High,270 cases; 62 violent; organized-ring member
+225,Basavaraj Prasad,208,43,0,100,High,208 cases; 43 violent
+226,Ashwini Rao,189,52,0,100,High,189 cases; 52 violent
+227,Anitha Hegde,159,45,0,100,High,159 cases; 45 violent
+228,Basavaraj Gowda,227,63,0,100,High,227 cases; 63 violent
+229,Manjunath Prasad,270,73,0,100,High,270 cases; 73 violent
+230,Prakash Rao,304,82,0,100,High,304 cases; 82 violent
+231,Yashwanth Shetty,216,64,0,100,High,216 cases; 64 violent
+232,Rekha Prasad,189,46,0,100,High,189 cases; 46 violent
+233,Deepak Reddy,220,54,0,100,High,220 cases; 54 violent
+234,Vinutha Desai,277,69,0,100,High,277 cases; 69 violent
+235,Vinutha Patil,296,69,2,100,High,296 cases; 69 violent; organized-ring member
+236,Nagaraj Prasad,275,72,0,100,High,275 cases; 72 violent
+237,Fatima Kumar,258,63,0,100,High,258 cases; 63 violent
+238,Shivakumar Nayak,234,62,0,100,High,234 cases; 62 violent
+239,Rekha Naik,155,43,0,100,High,155 cases; 43 violent
+240,Vinutha Hegde,244,61,0,100,High,244 cases; 61 violent
+241,Imran Gowda,301,71,0,100,High,301 cases; 71 violent
+242,Lakshmi Hegde,250,72,1,100,High,250 cases; 72 violent; organized-ring member
+243,Suresh Kumar,219,59,0,100,High,219 cases; 59 violent
+244,Anitha Prasad,267,91,0,100,High,267 cases; 91 violent
+245,Bhavana Desai,214,60,5,100,High,214 cases; 60 violent; organized-ring member
+246,Pooja Shetty,332,86,6,100,High,332 cases; 86 violent; organized-ring member
+247,Chetan Hegde,172,39,0,100,High,172 cases; 39 violent
+248,Lakshmi Patil,270,70,0,100,High,270 cases; 70 violent
+249,Shivakumar Desai,312,81,4,100,High,312 cases; 81 violent; organized-ring member
+250,Nagaraj Shetty,206,53,0,100,High,206 cases; 53 violent
+251,Ashwini Reddy,248,56,0,100,High,248 cases; 56 violent
+252,Ashwini Shetty,236,54,0,100,High,236 cases; 54 violent
+253,Fatima Iyengar,257,58,1,100,High,257 cases; 58 violent; organized-ring member
+254,Anitha Kulkarni,203,53,0,100,High,203 cases; 53 violent
+255,Joseph Naik,229,66,5,100,High,229 cases; 66 violent; organized-ring member
+256,Ashwini Kulkarni,212,57,0,100,High,212 cases; 57 violent
+257,Joseph Prasad,308,91,0,100,High,308 cases; 91 violent
+258,Mary Desai,317,81,0,100,High,317 cases; 81 violent
+259,Basavaraj Naik,270,73,0,100,High,270 cases; 73 violent
+260,Suresh Murthy,233,66,0,100,High,233 cases; 66 violent
+261,Kiran Bhat,214,52,0,100,High,214 cases; 52 violent
+262,Ravi Patil,266,69,0,100,High,266 cases; 69 violent
+263,Yashwanth Bhat,295,73,3,100,High,295 cases; 73 violent; organized-ring member
+264,Shivakumar Gowda,206,48,3,100,High,206 cases; 48 violent; organized-ring member
+265,Rekha Kulkarni,229,65,0,100,High,229 cases; 65 violent
+266,Joseph Hegde,206,53,7,100,High,206 cases; 53 violent; organized-ring member
+267,Ravi Iyengar,270,78,0,100,High,270 cases; 78 violent
+268,Deepak Patil,261,69,2,100,High,261 cases; 69 violent; organized-ring member
+269,Prakash Iyengar,252,62,5,100,High,252 cases; 62 violent; organized-ring member
+270,Joseph Bhat,169,30,0,100,High,169 cases; 30 violent
+271,Bhavana Reddy,261,71,0,100,High,261 cases; 71 violent
+272,Kiran Shetty,212,58,0,100,High,212 cases; 58 violent
+273,Manjunath Kulkarni,353,92,0,100,High,353 cases; 92 violent
+274,Bhavana Iyengar,207,48,0,100,High,207 cases; 48 violent
+275,Ravi Desai,260,72,0,100,High,260 cases; 72 violent
+276,Nagaraj Kumar,219,52,0,100,High,219 cases; 52 violent
+277,Deepak Desai,203,56,0,100,High,203 cases; 56 violent
+278,Imran Hegde,184,52,0,100,High,184 cases; 52 violent
+279,Girish Reddy,253,57,0,100,High,253 cases; 57 violent
+280,Lakshmi Naik,222,62,0,100,High,222 cases; 62 violent
+281,Anitha Naik,270,62,0,100,High,270 cases; 62 violent
+282,Girish Iyengar,261,69,0,100,High,261 cases; 69 violent
+283,Suresh Iyengar,217,48,0,100,High,217 cases; 48 violent
+284,Basavaraj Rao,236,68,0,100,High,236 cases; 68 violent
+285,Imran Patil,193,52,0,100,High,193 cases; 52 violent
+286,Imran Nayak,300,75,0,100,High,300 cases; 75 violent
+287,Mary Prasad,186,50,0,100,High,186 cases; 50 violent
+288,Ashwini Iyengar,284,79,4,100,High,284 cases; 79 violent; organized-ring member
+289,Kiran Patil,260,67,0,100,High,260 cases; 67 violent
+290,Nagaraj Iyengar,243,59,0,100,High,243 cases; 59 violent
+291,Manjunath Desai,321,86,8,100,High,321 cases; 86 violent; organized-ring member
+292,Shivakumar Patil,244,58,0,100,High,244 cases; 58 violent
+293,Deepak Kulkarni,232,50,0,100,High,232 cases; 50 violent
+294,Rekha Rao,281,69,0,100,High,281 cases; 69 violent
+295,Basavaraj Kumar,271,67,0,100,High,271 cases; 67 violent
+296,Fatima Patil,198,39,0,100,High,198 cases; 39 violent
+297,Girish Prasad,171,36,0,100,High,171 cases; 36 violent
+298,Imran Prasad,214,60,0,100,High,214 cases; 60 violent
+299,Ravi Nayak,307,90,1,100,High,307 cases; 90 violent; organized-ring member
+300,Mary Patil,159,48,0,100,High,159 cases; 48 violent
+301,Pooja Murthy,277,72,0,100,High,277 cases; 72 violent
+302,Bhavana Kumar,193,44,0,100,High,193 cases; 44 violent
+303,Deepak Iyengar,246,72,3,100,High,246 cases; 72 violent; organized-ring member
+304,Vinutha Murthy,198,59,0,100,High,198 cases; 59 violent
+305,Fatima Prasad,149,33,0,100,High,149 cases; 33 violent
+306,Imran Reddy,329,76,0,100,High,329 cases; 76 violent
+307,Chetan Gowda,184,45,0,100,High,184 cases; 45 violent
+308,Kiran Naik,229,63,0,100,High,229 cases; 63 violent
+309,Manjunath Hegde,200,49,0,100,High,200 cases; 49 violent
+310,Nagaraj Murthy,231,70,0,100,High,231 cases; 70 violent
+311,Shivakumar Naik,334,90,5,100,High,334 cases; 90 violent; organized-ring member
+312,Ashwini Murthy,219,58,0,100,High,219 cases; 58 violent
+313,Rekha Patil,234,47,0,100,High,234 cases; 47 violent
+314,Basavaraj Murthy,190,33,0,100,High,190 cases; 33 violent
+315,Fatima Murthy,261,55,0,100,High,261 cases; 55 violent
+316,Rekha Kumar,258,70,0,100,High,258 cases; 70 violent
+317,Pooja Gowda,270,75,3,100,High,270 cases; 75 violent; organized-ring member
+318,Anitha Gowda,204,55,0,100,High,204 cases; 55 violent
+319,Kiran Rao,180,51,0,100,High,180 cases; 51 violent
+320,Prakash Desai,159,41,0,100,High,159 cases; 41 violent
+321,Anitha Bhat,196,41,7,100,High,196 cases; 41 violent; organized-ring member
+322,Imran Iyengar,227,49,0,100,High,227 cases; 49 violent
+323,Kiran Gowda,212,60,0,100,High,212 cases; 60 violent
+324,Prakash Nayak,209,50,0,100,High,209 cases; 50 violent
+325,Joseph Kumar,248,58,2,100,High,248 cases; 58 violent; organized-ring member
+326,Ravi Rao,230,64,0,100,High,230 cases; 64 violent
+327,Imran Rao,245,55,8,100,High,245 cases; 55 violent; organized-ring member
+328,Rekha Hegde,189,43,0,100,High,189 cases; 43 violent
+329,Chetan Murthy,217,48,0,100,High,217 cases; 48 violent
+330,Imran Naik,249,56,0,100,High,249 cases; 56 violent
+331,Chetan Desai,209,55,0,100,High,209 cases; 55 violent
+332,Suresh Kulkarni,197,52,0,100,High,197 cases; 52 violent
+333,Deepak Bhat,263,52,0,100,High,263 cases; 52 violent
+334,Deepak Shetty,264,72,0,100,High,264 cases; 72 violent
+335,Ashwini Prasad,207,49,0,100,High,207 cases; 49 violent
+336,Yashwanth Prasad,238,60,0,100,High,238 cases; 60 violent
+337,Rekha Shetty,304,74,3,100,High,304 cases; 74 violent; organized-ring member
+338,Suresh Nayak,340,76,0,100,High,340 cases; 76 violent
+339,Yashwanth Naik,194,52,0,100,High,194 cases; 52 violent
+340,Fatima Naik,109,20,0,100,High,109 cases; 20 violent
+341,Imran Kulkarni,116,31,0,100,High,116 cases; 31 violent
+342,Pooja Reddy,171,45,0,100,High,171 cases; 45 violent
+343,Ravi Kumar,182,40,0,100,High,182 cases; 40 violent
+344,Shivakumar Reddy,204,61,0,100,High,204 cases; 61 violent
+345,Girish Desai,197,55,0,100,High,197 cases; 55 violent
