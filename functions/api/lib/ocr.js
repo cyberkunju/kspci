@@ -3,8 +3,8 @@
 /**
  * OCR-based FIR ingestion (the differentiator) — now fully on Zoho Catalyst.
  * Scanned FIR (image/PDF) -> Catalyst **Zia OCR** (native, 9 international + 10 Indian
- * languages incl. Kannada) -> text -> LLM (Zoho QuickML Qwen) structures it into FIR
- * fields -> inserted into the Data Store so it becomes queryable by the same
+ * languages incl. Kannada) -> text -> LLM (Zoho QuickML GLM-4.7-Flash) structures it into
+ * FIR fields -> inserted into the Data Store so it becomes queryable by the same
  * conversational + analytics pipeline.
  *
  * Zia OCR: app.zia().extractOpticalCharacters(fileStream, { language, modelType }) -> { text, confidence }
