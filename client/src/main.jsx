@@ -1,17 +1,19 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
+import { HashRouter } from 'react-router-dom';
 import App from './App.jsx';
 import './lib/chartTheme'; // global professional Chart.js defaults
 
-// Astryx design system (Meta) — reset, component styles, theme tokens.
+// Astryx design system — reset, component styles, then the neutral theme.
 import '@astryxdesign/core/reset.css';
 import '@astryxdesign/core/astryx.css';
 import '@astryxdesign/theme-neutral/theme.css';
-// App styles + KSP professional theme overrides (loaded last to win where needed).
 import './index.css';
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <App />
+    <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <App />
+    </HashRouter>
   </React.StrictMode>
 );
