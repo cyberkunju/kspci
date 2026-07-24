@@ -1,0 +1,186 @@
+{
+  "generatedAt": "2026-07-23T17:43:35.195Z",
+  "scale": 1,
+  "seed": 20260728,
+  "window": {
+    "start": "2024-01-01T00:00:00.000Z",
+    "end": "2026-07-01T00:00:00.000Z",
+    "years": 2.497,
+    "weeks": 131
+  },
+  "districts": [
+    {
+      "name": "Bengaluru City",
+      "lat": 12.9716,
+      "lng": 77.5946,
+      "popWeight": 0.265
+    },
+    {
+      "name": "Bengaluru Rural",
+      "lat": 13.2846,
+      "lng": 77.6786,
+      "popWeight": 0.045
+    },
+    {
+      "name": "Mysuru",
+      "lat": 12.2958,
+      "lng": 76.6394,
+      "popWeight": 0.085
+    },
+    {
+      "name": "Mangaluru (DK)",
+      "lat": 12.9141,
+      "lng": 74.856,
+      "popWeight": 0.052
+    },
+    {
+      "name": "Hubballi-Dharwad",
+      "lat": 15.3647,
+      "lng": 75.124,
+      "popWeight": 0.06
+    },
+    {
+      "name": "Belagavi",
+      "lat": 15.8497,
+      "lng": 74.4977,
+      "popWeight": 0.07
+    },
+    {
+      "name": "Kalaburagi",
+      "lat": 17.3297,
+      "lng": 76.8343,
+      "popWeight": 0.06
+    },
+    {
+      "name": "Ballari",
+      "lat": 15.1394,
+      "lng": 76.9214,
+      "popWeight": 0.05
+    },
+    {
+      "name": "Vijayapura",
+      "lat": 16.8302,
+      "lng": 75.71,
+      "popWeight": 0.04
+    },
+    {
+      "name": "Shivamogga",
+      "lat": 13.9299,
+      "lng": 75.5681,
+      "popWeight": 0.042
+    },
+    {
+      "name": "Tumakuru",
+      "lat": 13.3379,
+      "lng": 77.101,
+      "popWeight": 0.05
+    },
+    {
+      "name": "Davanagere",
+      "lat": 14.4644,
+      "lng": 75.9218,
+      "popWeight": 0.038
+    },
+    {
+      "name": "Udupi",
+      "lat": 13.3409,
+      "lng": 74.7421,
+      "popWeight": 0.03
+    },
+    {
+      "name": "Hassan",
+      "lat": 13.0072,
+      "lng": 76.0962,
+      "popWeight": 0.04
+    },
+    {
+      "name": "Raichur",
+      "lat": 16.2076,
+      "lng": 77.3463,
+      "popWeight": 0.038
+    }
+  ],
+  "heads": [
+    {
+      "name": "Property Offences",
+      "share": 0.3,
+      "branchingRatio": 0.55,
+      "meanDelayDays": 5,
+      "spatialSigma": 0.01
+    },
+    {
+      "name": "Body Offences",
+      "share": 0.22,
+      "branchingRatio": 0.42,
+      "meanDelayDays": 9,
+      "spatialSigma": 0.006
+    },
+    {
+      "name": "Crime Against Women",
+      "share": 0.14,
+      "branchingRatio": 0.3,
+      "meanDelayDays": 14,
+      "spatialSigma": 0.004
+    },
+    {
+      "name": "Economic Offences",
+      "share": 0.12,
+      "branchingRatio": 0.35,
+      "meanDelayDays": 20,
+      "spatialSigma": 0.02
+    },
+    {
+      "name": "Public Order",
+      "share": 0.09,
+      "branchingRatio": 0.6,
+      "meanDelayDays": 3,
+      "spatialSigma": 0.012
+    },
+    {
+      "name": "Cyber Crime",
+      "share": 0.08,
+      "branchingRatio": 0.25,
+      "meanDelayDays": 12,
+      "spatialSigma": 0.05
+    },
+    {
+      "name": "Narcotics",
+      "share": 0.05,
+      "branchingRatio": 0.5,
+      "meanDelayDays": 7,
+      "spatialSigma": 0.008
+    }
+  ],
+  "monthMult": [
+    0.9,
+    0.88,
+    1.05,
+    1.12,
+    1.15,
+    0.98,
+    0.95,
+    0.97,
+    1.08,
+    1.28,
+    1.35,
+    1.2
+  ],
+  "dowMult": [
+    0.95,
+    0.98,
+    1,
+    1.02,
+    1.08,
+    1.2,
+    1.12
+  ],
+  "counts": {
+    "events": 39582,
+    "background": 21536,
+    "offspring": 18046,
+    "offenders": 1979,
+    "rings": 8,
+    "coAccusedEdges": 39792,
+    "offenderRisk": 345
+  }
+}
