@@ -4,8 +4,7 @@
       "api"
     ],
     "ignore": [
-      ".output",
-      "node_modules"
+      ".output"
     ],
     "source": "functions"
   },
