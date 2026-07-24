@@ -5,9 +5,9 @@ import 'leaflet/dist/leaflet.css';
 import { Chart, registerables } from 'chart.js';
 import {
   Grid, Stack, Text, Badge, Button, Card, Table, Banner, StatusDot,
-  Spinner, Icon, Collapsible, Markdown, proportional, pixel, Sparkles, ArrowUp, ArrowDown, Server, RefreshCw,
+  Spinner, Icon, Collapsible, Markdown, proportional, pixel, Sparkles, ArrowUp, ArrowDown, Server,
 } from '../ui';
-import { Kpi, MetricSkeletons, PageHeader, VizCard } from './Cards';
+import { Kpi, MetricSkeletons, PageHeader, ViewError, VizCard } from './Cards';
 Chart.register(...registerables);
 
 const GRID = 'rgba(255,255,255,0.06)';
@@ -143,19 +143,25 @@ export default function EarlyWarning({ role, language }) {
   useEffect(() => {
     let current = true;
     setLoading(true); setErr(null); setFc(null); setEw(null); setBt(null); setWl(null); setBrief(null);
-    Promise.all([api.forecast(role), api.earlywarning(role), api.backtest(role), api.watchlist(role)])
-      .then(([nextForecast, nextWarning, nextBacktest, nextWatchlist]) => {
+    // Forecast + early-warning are open to every role; backtest + watchlist are
+    // role-gated (analyst+). Settle independently so a lower role still sees the
+    // sections it's allowed instead of the whole page failing on one 403.
+    Promise.allSettled([api.forecast(role), api.earlywarning(role), api.backtest(role), api.watchlist(role)])
+      .then(([fcR, ewR, btR, wlR]) => {
         if (!current) return;
-        setFc(nextForecast); setEw(nextWarning); setBt(nextBacktest); setWl(nextWatchlist.watchlist || []);
+        if (fcR.status === 'fulfilled') setFc(fcR.value);
+        else setErr(fcR.reason); // forecast is the core signal; surface its failure
+        if (ewR.status === 'fulfilled') setEw(ewR.value);
+        if (btR.status === 'fulfilled') setBt(btR.value);
+        if (wlR.status === 'fulfilled') setWl((wlR.value && wlR.value.watchlist) || []);
       })
-      .catch((error) => current && setErr(error.message))
       .finally(() => current && setLoading(false));
     return () => { current = false; };
   }, [role, refreshKey]);
 
   const loadBrief = () => {
     setBriefLoading(true); setBrief(null);
-    api.brief(role, language).then((data) => setBrief(data)).catch((error) => setErr(error.message)).finally(() => setBriefLoading(false));
+    api.brief(role, language).then((data) => setBrief(data)).catch((error) => setErr(error)).finally(() => setBriefLoading(false));
   };
 
   return (
@@ -181,12 +187,7 @@ export default function EarlyWarning({ role, language }) {
         ) : undefined}
       />
 
-      {err && (
-        <Banner
-          status="error" title="Early-warning intelligence could not be loaded" description={err}
-          endContent={<Button label="Retry" size="sm" variant="secondary" icon={<Icon icon={RefreshCw} size="sm" />} onClick={() => setRefreshKey((key) => key + 1)} />}
-        />
-      )}
+      {err && <ViewError err={err} onRetry={() => setRefreshKey((key) => key + 1)} />}
       {loading ? <MetricSkeletons /> : <Scorecard bt={bt} />}
 
       {bt?.validation && (
@@ -206,7 +207,9 @@ export default function EarlyWarning({ role, language }) {
         </VizCard>
 
         <VizCard title="Backtest — predicted vs actual (statewide)" note="Expanding-window walk-forward. Dashed = ensemble forecast, solid = ground truth.">
-          {bt && bt.statewide ? <LineChart statewide={bt.statewide} /> : <Stack hAlign="center" padding={6}><Spinner size="sm" /></Stack>}
+          {bt && bt.statewide
+            ? <LineChart statewide={bt.statewide} />
+            : <Stack hAlign="center" padding={6}><Text type="supporting" color="tertiary">Backtest metrics are available to the Analyst role and higher.</Text></Stack>}
         </VizCard>
 
         <VizCard title="Model comparison (learned ensemble)">
