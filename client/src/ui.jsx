@@ -9,6 +9,7 @@ export { SideNavItem } from '@astryxdesign/core/SideNav';
 export { SideNavSection } from '@astryxdesign/core/SideNav';
 export { TopNav } from '@astryxdesign/core/TopNav';
 export { TopNavHeading } from '@astryxdesign/core/TopNav';
+export { MobileNav, MobileNavToggle } from '@astryxdesign/core/MobileNav';
 
 // Layout primitives
 export { Stack } from '@astryxdesign/core/Stack';
@@ -34,6 +35,8 @@ export { ToggleButton } from '@astryxdesign/core/ToggleButton';
 export { SegmentedControl } from '@astryxdesign/core/SegmentedControl';
 export { SegmentedControlItem } from '@astryxdesign/core/SegmentedControl';
 export { TextInput } from '@astryxdesign/core/TextInput';
+export { TextArea } from '@astryxdesign/core/TextArea';
+export { FileInput } from '@astryxdesign/core/FileInput';
 export { Selector } from '@astryxdesign/core/Selector';
 
 // Tabs
@@ -51,8 +54,12 @@ export { ProgressBar } from '@astryxdesign/core/ProgressBar';
 export { EmptyState } from '@astryxdesign/core/EmptyState';
 export { Banner } from '@astryxdesign/core/Banner';
 export { Spinner } from '@astryxdesign/core/Spinner';
+export { Skeleton } from '@astryxdesign/core/Skeleton';
 export { Tooltip } from '@astryxdesign/core/Tooltip';
 export { Icon } from '@astryxdesign/core/Icon';
+export { Markdown } from '@astryxdesign/core/Markdown';
+export { Citation } from '@astryxdesign/core/Citation';
+export { Collapsible, CollapsibleGroup } from '@astryxdesign/core/Collapsible';
 
 // Chat
 export { ChatLayout } from '@astryxdesign/core/Chat';
@@ -76,4 +83,5 @@ export {
   Plus, Filter, Globe, Languages, Brain, Layers, Target, CheckCircle2,
   CircleAlert, Route, Fingerprint, ScrollText, UserRound, ShieldAlert,
   BadgeCheck, Waypoints, GitBranch, Timer, Flame, Server, Upload, X, Menu,
+  Database, RefreshCw, LockKeyhole, FileSearch, CircleCheckBig, WandSparkles,
 } from 'lucide-react';
