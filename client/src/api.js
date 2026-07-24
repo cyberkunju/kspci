@@ -1,15 +1,20 @@
 // API client for the KSP Crime AI backend (Catalyst Advanced I/O function via API Gateway).
 const BASE = '/server/api';
 
-async function req(path, { method = 'GET', body, role, userId } = {}) {
+async function req(path, { method = 'GET', body, role, userId, signal } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (role) headers['x-user-role'] = role;
   if (userId) headers['x-user-id'] = userId;
   const res = await fetch(BASE + path, {
-    method, headers, body: body ? JSON.stringify(body) : undefined
+    method, headers, signal, body: body ? JSON.stringify(body) : undefined
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const error = new Error(data.message || data.error || `Request failed (${res.status})`);
+    error.status = res.status;
+    error.code = data.error;
+    throw error;
+  }
   return data;
 }
 
@@ -38,8 +43,10 @@ export const api = {
   backtest: (role) => req('/analytics/backtest', { role }),
   watchlist: (role) => req('/analytics/watchlist?limit=15', { role }),
   brief: (role, language) => req(`/analytics/brief${language ? `?language=${language}` : ''}`, { role }),
-  ingestOcr: ({ fileBase64, filename, language, role }) =>
-    req('/ingest/ocr', { method: 'POST', role, body: { fileBase64, filename, language, insert: true } }),
+  extractOcr: ({ fileBase64, filename, language, role }) =>
+    req('/ingest/ocr', { method: 'POST', role, body: { fileBase64, filename, language } }),
+  confirmIngest: ({ structured, text, role }) =>
+    req('/ingest/confirm', { method: 'POST', role, body: { structured, text } }),
 };
 
 export const ROLES = ['investigator', 'analyst', 'supervisor', 'policymaker', 'admin'];

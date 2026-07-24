@@ -72,36 +72,47 @@ async function structureFir(app, text) {
   try { return m ? JSON.parse(m[0]) : {}; } catch { return {}; }
 }
 
-// Insert the ingested FIR into the Data Store so it's queryable everywhere.
+// Insert a reviewed FIR into the Data Store so it is queryable everywhere.
 async function insertIngestedCase(app, structured, text) {
   const ds = app.datastore();
+  const safe = (value, max = 240) => (
+    typeof value === 'string' || typeof value === 'number'
+      ? String(value).trim().slice(0, max)
+      : ''
+  );
   const caseId = 900000000 + (Date.now() % 100000000);
   const crimeNo = 'OCR' + Date.now();
-  const dt = (structured.IncidentDate || '').match(/^\d{4}-\d{2}-\d{2}/) ? structured.IncidentDate : new Date().toISOString().slice(0, 10);
+  const incidentDate = safe(structured.IncidentDate, 32);
+  const dt = /^\d{4}-\d{2}-\d{2}/.test(incidentDate) ? incidentDate.slice(0, 10) : new Date().toISOString().slice(0, 10);
   const row = {
     CaseMasterID: caseId, CrimeNo: crimeNo, CaseNo: crimeNo.slice(-9),
     CrimeRegisteredDate: dt, Year: Number(dt.slice(0, 4)), CrimeMonth: Number(dt.slice(5, 7)),
     IncidentDate: dt + ' 00:00:00',
-    DistrictName: structured.DistrictName || 'Unknown', StationName: structured.StationName || 'Unknown',
+    DistrictName: safe(structured.DistrictName) || 'Unknown', StationName: safe(structured.StationName) || 'Unknown',
     latitude: 0, longitude: 0,
-    CaseCategory: structured.CaseCategory || 'FIR', Gravity: structured.Gravity || 'Non-Heinous',
-    CrimeHead: structured.CrimeHead || 'Unclassified', CrimeSubHead: structured.CrimeSubHead || 'Unclassified',
+    CaseCategory: safe(structured.CaseCategory, 120) || 'FIR', Gravity: safe(structured.Gravity, 80) || 'Non-Heinous',
+    CrimeHead: safe(structured.CrimeHead) || 'Unclassified', CrimeSubHead: safe(structured.CrimeSubHead) || 'Unclassified',
     CaseStatus: 'Under Investigation', CourtName: '', OfficerName: 'OCR-Ingested',
-    ActsSections: structured.ActsSections || '',
-    AccusedCount: Array.isArray(structured.AccusedNames) ? structured.AccusedNames.length : 0,
-    VictimCount: 0, BriefFacts: (structured.BriefFacts || text || '').slice(0, 9000)
+    ActsSections: safe(structured.ActsSections, 1000),
+    AccusedCount: Array.isArray(structured.AccusedNames) ? structured.AccusedNames.map((name) => safe(name)).filter(Boolean).slice(0, 10).length : 0,
+    VictimCount: 0, BriefFacts: (safe(structured.BriefFacts, 9000) || safe(text, 9000))
   };
   await ds.table('Cases').insertRow(row);
 
+  const warnings = [];
   if (Array.isArray(structured.AccusedNames) && structured.AccusedNames.length) {
-    const accused = structured.AccusedNames.filter(Boolean).slice(0, 10).map((name, i) => ({
+    const accused = structured.AccusedNames.map((name) => safe(name, 120)).filter(Boolean).slice(0, 10).map((name, i) => ({
       AccusedMasterID: caseId * 100 + i, CaseMasterID: caseId, CrimeNo: crimeNo,
-      AccusedName: String(name).slice(0, 120), AgeYear: 0, Gender: '', PersonID: 'A' + (i + 1),
+      AccusedName: name, AgeYear: 0, Gender: '', PersonID: 'A' + (i + 1),
       RingID: 0, DistrictName: row.DistrictName, CrimeSubHead: row.CrimeSubHead
     }));
-    try { await ds.table('Accused').insertRows(accused); } catch (_) {}
+    try {
+      await ds.table('Accused').insertRows(accused);
+    } catch (_) {
+      warnings.push('The case was created, but one or more accused records could not be added. Review the case before continuing.');
+    }
   }
-  return { caseId, crimeNo };
+  return { caseId, crimeNo, warnings };
 }
 
 async function ingestFir(app, { fileBase64, filename, language, insert = true }) {
@@ -113,4 +124,4 @@ async function ingestFir(app, { fileBase64, filename, language, insert = true })
   return { engine: ocr.engine, confidence: ocr.confidence, text: ocr.text, structured, inserted };
 }
 
-module.exports = { ingestFir, runZiaOcr, structureFir };
+module.exports = { ingestFir, insertIngestedCase, runZiaOcr, structureFir };

@@ -296,17 +296,50 @@ app.get('/chat/:sessionId', requireRole(), async (req, res) => {
 });
 app.post('/chat/:sessionId/pdf', requireRole(), notYet('chat-pdf'));
 
-// ---- OCR-based FIR ingestion (Catalyst Zia OCR -> LLM structure -> Data Store) ----
+// ---- OCR-based FIR ingestion (Catalyst Zia OCR -> LLM structure -> reviewed Data Store write) ----
 app.post('/ingest/ocr', requireRole('investigator', 'analyst', 'supervisor', 'admin'), async (req, res) => {
   try {
     const { ingestFir } = require('./lib/ocr');
-    const { fileBase64, filename, language, insert } = req.body || {};
-    if (!fileBase64) return res.status(400).json({ error: 'fileBase64 required' });
+    const { fileBase64, filename, language } = req.body || {};
+    if (typeof fileBase64 !== 'string' || !fileBase64) {
+      return res.status(400).json({ error: 'fileBase64 required' });
+    }
+    // 10 MB decoded file limit. Base64 expands data by roughly 4/3.
+    if (fileBase64.length > Math.ceil(10 * 1024 * 1024 * 4 / 3) + 4) {
+      return res.status(413).json({ error: 'file_too_large', message: 'FIR scans must be 10 MB or smaller.' });
+    }
     const adminApp = catalyst.initialize(req, { scope: 'admin' });
-    const out = await ingestFir(adminApp, { fileBase64, filename, language, insert: insert !== false });
+    // Extraction is deliberately read-only. Database writes only happen through /ingest/confirm.
+    const out = await ingestFir(adminApp, { fileBase64, filename, language, insert: false });
     res.json(out);
   } catch (e) {
     res.status(500).json({ error: 'ocr_failed', message: String((e && e.message) || e) });
+  }
+});
+
+app.post('/ingest/confirm', requireRole('investigator', 'analyst', 'supervisor', 'admin'), async (req, res) => {
+  try {
+    const { insertIngestedCase } = require('./lib/ocr');
+    const { structured, text = '' } = req.body || {};
+    if (!structured || typeof structured !== 'object' || Array.isArray(structured)) {
+      return res.status(400).json({ error: 'structured FIR fields required' });
+    }
+    const requiredFields = ['DistrictName', 'StationName', 'CrimeHead'];
+    const missingFields = requiredFields.filter((field) => (
+      typeof structured[field] !== 'string' || !structured[field].trim()
+    ));
+    if (missingFields.length) {
+      return res.status(400).json({
+        error: 'required_fir_fields_missing',
+        message: 'District, police station, and crime head are required.',
+        fields: missingFields,
+      });
+    }
+    const adminApp = catalyst.initialize(req, { scope: 'admin' });
+    const inserted = await insertIngestedCase(adminApp, structured, typeof text === 'string' ? text : '');
+    res.status(201).json({ inserted });
+  } catch (e) {
+    res.status(500).json({ error: 'fir_insert_failed', message: String((e && e.message) || e) });
   }
 });
 
