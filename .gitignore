@@ -41,5 +41,8 @@ Thumbs.db
 .vscode/
 *.log
 
+# Local browser-automation (Playwright MCP) artifacts — snapshots, console logs
+.playwright-mcp/
+
 # Source PDF (confidential reference, not for repo)
 Police_FIR_ER_Diagram.pdf
