@@ -198,13 +198,13 @@ body {
   font: inherit; font-size: 13px; width: 100%; min-width: 0;
 }
 .ng-search input::placeholder { color: var(--muted-2); }
-.ng-zoom { pointer-events: auto; display: inline-flex; gap: 4px; }
-.ng-zoom button {
-  display: grid; place-items: center; width: 32px; height: 32px; cursor: pointer;
+.ng-fit {
+  pointer-events: auto; display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  height: 34px; padding: 0 12px; font: inherit; font-size: 13px; font-weight: 600;
   background: color-mix(in srgb, var(--bg-1) 88%, transparent); border: 1px solid var(--line-2);
   border-radius: var(--r-sm); color: var(--muted); backdrop-filter: blur(8px); transition: color .12s, border-color .12s;
 }
-.ng-zoom button:hover { color: var(--text); border-color: var(--accent); }
+.ng-fit:hover { color: var(--text); border-color: var(--accent); }
 .ng-legend {
   position: absolute; left: 10px; bottom: 10px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center;
   background: color-mix(in srgb, var(--bg-1) 82%, transparent); border: 1px solid var(--line);
