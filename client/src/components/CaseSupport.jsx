@@ -1,18 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api';
 import {
   Grid, Stack, Heading, Text, Badge, Button, TextInput, Table, Banner, EmptyState,
-  MetadataList, MetadataListItem, Divider, Icon, proportional, pixel, Search, Sparkles, Fingerprint,
+  MetadataList, MetadataListItem, Divider, Icon, Markdown, Skeleton, Card,
+  proportional, pixel, Search, Sparkles, Fingerprint, FileSearch,
 } from '../ui';
-import { VizCard } from './Cards';
-
-function fmt(t) {
-  return String(t || '').split('\n').map((line, i) => {
-    const parts = line.split(/(\*\*[^*]+\*\*)/g).map((p, j) =>
-      p.startsWith('**') && p.endsWith('**') ? <strong key={j}>{p.slice(2, -2)}</strong> : <span key={j}>{p}</span>);
-    return <p key={i} style={{ margin: '0 0 8px' }}>{parts}</p>;
-  });
-}
+import { PageHeader, VizCard } from './Cards';
 
 export default function CaseSupport({ role, language }) {
   const [crimeNo, setCrimeNo] = useState('');
@@ -20,36 +13,57 @@ export default function CaseSupport({ role, language }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
 
-  const load = (cn) => {
+  useEffect(() => {
+    setD(null);
+    setErr(null);
+  }, [role, language]);
+
+  const load = (cn, sample = false) => {
+    if (!sample && !cn?.trim()) return;
     setLoading(true); setErr(null); setD(null);
-    api.investigatorCase({ crimeNo: cn || undefined, caseId: cn ? undefined : 1, language, role })
-      .then((r) => { if (r.error) setErr(r.error); else setD(r); })
+    api.investigatorCase({ crimeNo: sample ? undefined : cn.trim(), caseId: sample ? 1 : undefined, language, role })
+      .then((response) => { if (response.error) setErr(response.error); else setD(response); })
       .catch((e) => setErr(e.message)).finally(() => setLoading(false));
   };
 
   const c = d && d.case;
   return (
     <div className="view">
-      <Stack gap={1} className="view-head">
-        <Heading level={3}>Investigator Decision Support</Heading>
-        <Text type="body" color="secondary">Case dossier · timeline · similar-case outcomes · AI-generated leads — grounded in the crime database</Text>
-      </Stack>
+      <PageHeader
+        eyebrow="INVESTIGATION WORKSPACE"
+        title="Build a case dossier with the evidence in view"
+        description="Bring together the FIR, people, timeline, comparable outcomes, and grounded AI leads without losing source context."
+        badge="Decision support"
+      />
 
-      <Stack direction="horizontal" gap={2} vAlign="end" className="case-search">
-        <TextInput
-          label="CrimeNo" isLabelHidden value={crimeNo} onChange={setCrimeNo} onEnter={() => load(crimeNo)}
-          startIcon={<Icon icon={Search} size="sm" />} width="100%"
-          placeholder="Enter CrimeNo (or leave blank for a sample case)"
-        />
-        <Button label={loading ? 'Analyzing…' : 'Analyze case'} variant="primary" isLoading={loading}
-          icon={<Icon icon={Sparkles} size="sm" />} onClick={() => load(crimeNo)} />
-      </Stack>
+      <Card variant="muted" padding={4}>
+        <Stack gap={2}>
+          <Text type="label" color="tertiary">OPEN A CASE</Text>
+          <Stack direction="horizontal" gap={2} vAlign="end" wrap="wrap" className="case-search">
+            <TextInput
+              label="Crime number" value={crimeNo} onChange={setCrimeNo} onEnter={() => load(crimeNo)}
+              startIcon={<Icon icon={Search} size="sm" />} width="100%" isDisabled={loading}
+              placeholder="Enter an exact CrimeNo"
+              description="Use the number recorded on the FIR."
+            />
+            <Button label={loading ? 'Building dossier…' : 'Analyze case'} variant="primary" isLoading={loading}
+              isDisabled={!crimeNo.trim()} icon={<Icon icon={Sparkles} size="sm" />} onClick={() => load(crimeNo)} />
+            <Button label="Open sample" variant="secondary" isDisabled={loading}
+              icon={<Icon icon={FileSearch} size="sm" />} onClick={() => load('', true)} />
+          </Stack>
+        </Stack>
+      </Card>
 
-      {err && <Banner status={err === 'case_not_found' ? 'warning' : 'error'} title={err === 'case_not_found' ? 'No case found with that CrimeNo.' : err} />}
+      {err && <Banner status={err === 'case_not_found' ? 'warning' : 'error'} title={err === 'case_not_found' ? 'No case matches that CrimeNo' : 'The dossier could not be built'} description={err === 'case_not_found' ? 'Check the number and try again.' : err} />}
+      {loading && (
+        <Grid columns={{ minWidth: 360, max: 2 }} gap={3} aria-label="Building case dossier">
+          {[0, 1, 2, 3].map((index) => <Skeleton key={index} height={260} index={index} />)}
+        </Grid>
+      )}
       {!d && !err && !loading && (
         <EmptyState icon={<Icon icon={Fingerprint} size="lg" color="tertiary" />}
-          title="Build a decision-support dossier"
-          description="Enter a CrimeNo (or click Analyze for a sample) to assemble a full case dossier, timeline, similar-case outcomes and AI leads." />
+          title="No case open"
+          description="Enter a CrimeNo to build a live dossier, or open the clearly labelled sample to explore the workflow." />
       )}
 
       {c && (
@@ -79,7 +93,11 @@ export default function CaseSupport({ role, language }) {
           </VizCard>
 
           <VizCard title="AI case summary & investigative leads" action={<Badge variant="info" label={d.model} />}>
-            <div className="brief-body">{d.brief ? fmt(d.brief) : <Text color="tertiary">No brief generated.</Text>}</div>
+            {d.brief ? (
+              <Markdown density="compact" headingLevelStart={3} contentWidth="100%">{d.brief}</Markdown>
+            ) : (
+              <Text color="tertiary">No AI brief was returned for this case.</Text>
+            )}
           </VizCard>
 
           <VizCard title="Investigation timeline">

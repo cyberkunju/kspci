@@ -4,10 +4,10 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Chart, registerables } from 'chart.js';
 import {
-  Grid, Stack, Heading, Text, Badge, Button, Card, Table, Banner, StatusDot,
-  Spinner, Icon, proportional, pixel, Radar, Sparkles, ArrowUp, ArrowDown, Server,
+  Grid, Stack, Text, Badge, Button, Card, Table, Banner, StatusDot,
+  Spinner, Icon, Collapsible, Markdown, proportional, pixel, Sparkles, ArrowUp, ArrowDown, Server, RefreshCw,
 } from '../ui';
-import { Kpi, VizCard } from './Cards';
+import { Kpi, MetricSkeletons, PageHeader, VizCard } from './Cards';
 Chart.register(...registerables);
 
 const GRID = 'rgba(255,255,255,0.06)';
@@ -15,14 +15,6 @@ const TICK = '#8695b3';
 const SEV_COLOR = { critical: '#f43f5e', elevated: '#fbbf24', watch: '#22d3ee' };
 const SEV_VARIANT = { critical: 'error', elevated: 'warning', watch: 'info' };
 const SEV_DOT = { critical: 'error', elevated: 'warning', watch: 'accent' };
-
-function fmtBrief(t) {
-  return String(t || '').split('\n').map((line, i) => {
-    const parts = line.split(/(\*\*[^*]+\*\*)/g).map((p, j) =>
-      p.startsWith('**') && p.endsWith('**') ? <strong key={j}>{p.slice(2, -2)}</strong> : <span key={j}>{p}</span>);
-    return <p key={i} style={{ margin: '0 0 8px' }}>{parts}</p>;
-  });
-}
 
 // Predicted-hotspot map: circle size = predicted volume, colour = severity/trend.
 function ForecastMap({ forecasts, alerts }) {
@@ -48,7 +40,21 @@ function ForecastMap({ forecasts, alerts }) {
       const r = 8 + (f.predicted / max) * 32;
       const c = L.circleMarker([f.lat, f.lng], { radius: r, color: col, weight: 2, fillColor: col, fillOpacity: sev ? 0.45 : 0.22 }).addTo(group);
       c.bindTooltip(`${f.district}: predicted ${f.predicted} (${f.trendPct >= 0 ? '+' : ''}${f.trendPct}%)`, { direction: 'top' });
-      c.bindPopup(`<b>${f.district}</b><br>Predicted: ${f.predicted}<br>90% CI: ${f.low}–${f.high}<br>Baseline: ${f.baseline}<br>Trend: ${f.trendPct >= 0 ? '+' : ''}${f.trendPct}%${sev ? `<br><b style="color:${col}">${sev.toUpperCase()}</b>` : ''}`);
+      const popup = document.createElement('div');
+      const title = document.createElement('strong');
+      title.textContent = f.district;
+      popup.append(title);
+      [
+        `Predicted: ${f.predicted}`,
+        `90% CI: ${f.low}–${f.high}`,
+        `Baseline: ${f.baseline}`,
+        `Trend: ${f.trendPct >= 0 ? '+' : ''}${f.trendPct}%`,
+        ...(sev ? [`Alert: ${sev.toUpperCase()}`] : []),
+      ].forEach((line) => {
+        popup.append(document.createElement('br'));
+        popup.append(document.createTextNode(line));
+      });
+      c.bindPopup(popup);
     });
   }, [forecasts, alerts]);
   return <div className="hotspot-map" ref={elRef} />;
@@ -130,53 +136,69 @@ export default function EarlyWarning({ role, language }) {
   const [wl, setWl] = useState(null);
   const [brief, setBrief] = useState(null);
   const [briefLoading, setBriefLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
-    setErr(null);
-    api.forecast(role).then(setFc).catch((e) => setErr(e.message));
-    api.earlywarning(role).then(setEw).catch(() => {});
-    api.backtest(role).then(setBt).catch(() => {});
-    api.watchlist(role).then((d) => setWl(d.watchlist || [])).catch(() => {});
-  }, [role]);
+    let current = true;
+    setLoading(true); setErr(null); setFc(null); setEw(null); setBt(null); setWl(null); setBrief(null);
+    Promise.all([api.forecast(role), api.earlywarning(role), api.backtest(role), api.watchlist(role)])
+      .then(([nextForecast, nextWarning, nextBacktest, nextWatchlist]) => {
+        if (!current) return;
+        setFc(nextForecast); setEw(nextWarning); setBt(nextBacktest); setWl(nextWatchlist.watchlist || []);
+      })
+      .catch((error) => current && setErr(error.message))
+      .finally(() => current && setLoading(false));
+    return () => { current = false; };
+  }, [role, refreshKey]);
 
   const loadBrief = () => {
     setBriefLoading(true); setBrief(null);
-    api.brief(role, language).then((d) => setBrief(d)).catch((e) => setBrief({ brief: '⚠️ ' + e.message })).finally(() => setBriefLoading(false));
+    api.brief(role, language).then((data) => setBrief(data)).catch((error) => setErr(error.message)).finally(() => setBriefLoading(false));
   };
 
   return (
     <div className="view">
-      <Stack direction="horizontal" vAlign="start" gap={3} className="view-head">
-        <Stack gap={1}>
-          <Heading level={3}>Predictive Early-Warning Engine</Heading>
-          <Text type="body" color="secondary">4-model ensemble (Seasonal-Trend · Holt · Hawkes self-excitation · Gradient-Boosted ML) · walk-forward backtested · conformal intervals</Text>
-        </Stack>
-        {fc && !fc.error && (
-          <div className="push-right">
-            <Card variant="muted" padding={3}>
-              <Stack gap={0.5} hAlign="end">
-                <Text type="supporting" color="tertiary">Forecast horizon</Text>
-                <Text type="large" weight="bold" color="accent">{fc.horizon}</Text>
-                {fc.servedBy && (
-                  <Stack direction="horizontal" gap={1} vAlign="center">
-                    <Icon icon={Server} size="xsm" color="success" />
-                    <Text type="supporting" color="success">{fc.servedBy.includes('appsail') ? 'Catalyst AppSail (Python ML)' : 'in-function engine'}</Text>
-                  </Stack>
-                )}
-              </Stack>
-            </Card>
-          </div>
-        )}
-      </Stack>
+      <PageHeader
+        eyebrow="OPERATIONAL FORECAST"
+        title="Prioritize review—never automate enforcement"
+        description="See where incident concentration may change next, how confident the forecast is, and which signals need human assessment."
+        badge="Decision support only"
+        action={fc && !fc.error ? (
+          <Card variant="muted" padding={3}>
+            <Stack gap={0.5} hAlign="end">
+              <Text type="supporting" color="tertiary">Forecast horizon</Text>
+              <Text type="large" weight="bold" color="accent">{fc.horizon}</Text>
+              {fc.servedBy && (
+                <Stack direction="horizontal" gap={1} vAlign="center">
+                  <Icon icon={Server} size="xsm" color="success" />
+                  <Text type="supporting" color="success">{fc.servedBy.includes('appsail') ? 'Python ML service' : 'In-function engine'}</Text>
+                </Stack>
+              )}
+            </Stack>
+          </Card>
+        ) : undefined}
+      />
 
-      {err && <Banner status="error" title={err} />}
-      {bt && bt.validation && <RealDataValidation v={bt.validation} />}
+      {err && (
+        <Banner
+          status="error" title="Early-warning intelligence could not be loaded" description={err}
+          endContent={<Button label="Retry" size="sm" variant="secondary" icon={<Icon icon={RefreshCw} size="sm" />} onClick={() => setRefreshKey((key) => key + 1)} />}
+        />
+      )}
+      {loading ? <MetricSkeletons /> : <Scorecard bt={bt} />}
 
-      <Text type="label" color="tertiary">Live self-check · synthetic KSP demo data (district×month)</Text>
-      <Scorecard bt={bt} />
+      {bt?.validation && (
+        <Collapsible trigger={<Text weight="semibold">Validation &amp; methodology</Text>} defaultIsOpen={false}>
+          <Stack gap={3}>
+            <RealDataValidation v={bt.validation} />
+            <Text type="supporting" color="tertiary">Live self-check · synthetic KSP demo data (district × month)</Text>
+          </Stack>
+        </Collapsible>
+      )}
 
-      <Grid columns={{ minWidth: 440, max: 2 }} gap={3}>
+      {!loading && !err && <Grid columns={{ minWidth: 440, max: 2 }} gap={3}>
         <VizCard title="Predicted crime concentration · next month"
           action={fc && !fc.error && <Text type="supporting" color="tertiary">Statewide: <b>{fc.statewide?.predicted}</b> · circles sized by forecast, coloured by alert severity</Text>}
           full>
@@ -246,11 +268,13 @@ export default function EarlyWarning({ role, language }) {
 
         <VizCard title="AI analyst brief"
           action={<Button label={briefLoading ? 'Generating…' : 'Generate brief'} variant="primary" size="sm" isLoading={briefLoading} icon={<Icon icon={Sparkles} size="sm" />} onClick={loadBrief} />}>
-          <div className="brief-body">
-            {brief ? fmtBrief(brief.brief) : <Text color="tertiary">Generate a decision-ready early-warning brief for leadership from the live forecast (GLM-4.7-Flash).</Text>}
-          </div>
+          {brief?.brief ? (
+            <Markdown density="compact" headingLevelStart={3} contentWidth="100%">{brief.brief}</Markdown>
+          ) : (
+            <Text color="tertiary">Generate a concise leadership brief grounded in the current forecast and alert data.</Text>
+          )}
         </VizCard>
-      </Grid>
+      </Grid>}
     </div>
   );
 }
