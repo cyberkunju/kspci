@@ -1,0 +1,13 @@
+{
+  "name": "ksp-crime-ai-api",
+  "version": "0.1.0",
+  "description": "KSP Crime AI — Advanced I/O API function (Catalyst Serverless)",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "zcatalyst-sdk-node": "^2.1.1"
+  }
+}
