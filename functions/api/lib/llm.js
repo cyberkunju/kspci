@@ -19,9 +19,17 @@ const QUICKML_ORG = process.env.QUICKML_ORG_ID || process.env.CATALYST_ORG_ID ||
 // GLM "thinking" mode improves reasoning but adds latency; off by default for speed.
 const QUICKML_THINKING = process.env.QUICKML_THINKING === 'true';
 
-/** GLM-4.7-Flash supports native tool-calling; the ReAct loop can be forced for testing. */
+/**
+ * QuickML's GLM serving accepts an initial `tools` request and returns tool_calls,
+ * but rejects the FOLLOW-UP turn that carries the tool result
+ * (EXTRA_KEY_FOUND_IN_JSON — "Error in processing zoho-inputstream"), so multi-turn
+ * native tool-calling is unusable here. Default to the ReAct text protocol, which
+ * uses plain user/assistant turns the endpoint handles reliably. Opt in with
+ * LLM_ENABLE_NATIVE_TOOLS=true only for a provider proven to support the full
+ * tool-call → tool-result round-trip.
+ */
 function supportsNativeTools() {
-  return process.env.LLM_FORCE_REACT !== 'true';
+  return process.env.LLM_ENABLE_NATIVE_TOOLS === 'true';
 }
 
 /** Human-readable label of the model answering (for audit logs / UI). */
@@ -36,7 +44,7 @@ async function chatLLM(app, opts) {
 async function chatQuickML(app, { messages, tools, toolChoice, maxTokens = 1500, temperature } = {}) {
   if (!QUICKML_ENDPOINT) throw new Error('QUICKML_LLM_ENDPOINT not set');
   const token = await getQuickMLToken(app);
-  const forceReact = process.env.LLM_FORCE_REACT === 'true';
+  const nativeTools = supportsNativeTools();
 
   const body = {
     model: QUICKML_MODEL,
@@ -47,7 +55,7 @@ async function chatQuickML(app, { messages, tools, toolChoice, maxTokens = 1500,
     // GLM "thinking" mode — extra reasoning tokens; off by default to minimise latency.
     chat_template_kwargs: { enable_thinking: QUICKML_THINKING }
   };
-  if (tools && tools.length && !forceReact) {
+  if (tools && tools.length && nativeTools) {
     body.tools = tools;
     body.tool_choice = toolChoice || 'auto';
   }
@@ -85,7 +93,7 @@ async function chatQuickML(app, { messages, tools, toolChoice, maxTokens = 1500,
     message,
     content,
     toolCalls,
-    supportsTools: !forceReact,
+    supportsTools: nativeTools,
     provider: 'zoho-quickml',
     finishReason: (j.choices && j.choices[0] && j.choices[0].finish_reason) || (toolCalls.length ? 'tool_calls' : 'stop'),
     usage: j.usage || null,
