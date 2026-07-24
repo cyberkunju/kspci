@@ -1,0 +1,182 @@
+/* ============================================================================
+   KSP Crime Intelligence — app glue only.
+   The UI is built from genuine Astryx components (they own their own styling via
+   StyleX + theme-neutral tokens). This file only styles what Astryx doesn't:
+   the chat/evidence rail geometry, Chart.js/Leaflet/D3 canvases, the case
+   timeline, and a few mono code blocks. Palette below is used by those canvases.
+   ============================================================================ */
+:root {
+  --bg-0: #0a0c10;
+  --bg-1: #101318;
+  --bg-2: #161a21;
+  --bg-3: #1d222b;
+  --line: #232830;
+  --line-2: #30363f;
+  --text: #e9ecf1;
+  --muted: #9aa3b2;
+  --muted-2: #646d7c;
+  --accent: #5b8cff;
+  --accent-2: #29b6d8;
+  --good: #34c98a;
+  --warn: #d9a441;
+  --bad: #e5644e;
+  --mono: "JetBrains Mono", "SF Mono", "Fira Code", Consolas, monospace;
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body {
+  font-family: var(--sans);
+  background: var(--bg-0);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "cv02","cv03","cv04","cv11";
+  overflow: hidden;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ---- brand mark in the side-nav heading ---- */
+.brand-mark {
+  width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center;
+  background: linear-gradient(140deg, rgba(91,140,255,0.22), rgba(41,182,216,0.14));
+  border: 1px solid var(--line-2);
+}
+
+/* ---- scrollable analytics views inside the AppShell content area ---- */
+.scroll-view { height: 100%; overflow-y: auto; }
+.view { padding: clamp(16px, 2.4vw, 28px) clamp(16px, 2.4vw, 28px) 48px; display: flex; flex-direction: column; gap: clamp(14px, 2vw, 20px); }
+.view-narrow { max-width: 1080px; }
+.push-right { margin-left: auto; }
+.grid-full { grid-column: 1 / -1; }
+
+/* ---- responsive visibility utilities (used in the top nav) ---- */
+.hide-sm, .hide-md { display: inline-flex; }
+.topnav-title { min-width: 0; }
+@media (max-width: 900px) { .hide-md { display: none !important; } }
+@media (max-width: 640px) { .hide-sm { display: none !important; } }
+
+/* ---- chat split (chat area + evidence rail) ---- */
+.chat-split { min-height: 0; }
+.chat-split > * { min-height: 0; }
+
+/* ---- chat message avatars ---- */
+.msg-avatar {
+  width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; flex: none;
+  background: var(--bg-3); border: 1px solid var(--line-2); color: var(--accent);
+}
+.msg-avatar.user { color: var(--muted); }
+.bubble-error { color: var(--bad); display: inline-flex; align-items: center; gap: 7px; }
+
+/* ---- welcome / empty chat state ---- */
+.welcome-wrap { display: grid; place-items: center; min-height: min(70vh, 640px); padding: clamp(20px, 5vh, 56px) clamp(16px, 4vw, 32px) 24px; }
+.welcome-wrap :where(h1) { font-size: clamp(23px, 4.4vw, 44px); line-height: 1.14; }
+
+/* ---- evidence rail (Explainable-AI panel) ----
+   Static column on wide screens; slide-over drawer below 1200px. */
+.evidence-rail {
+  width: 372px; flex: none; display: flex; flex-direction: column; min-height: 0;
+  background: var(--bg-1); border-left: 1px solid var(--line);
+}
+.rail-head {
+  display: flex; align-items: center; gap: 10px; padding: 15px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.rail-count { margin-left: auto; }
+.rail-close { display: none; }
+.rail-body { flex: 1; overflow-y: auto; padding: 18px; min-height: 0; }
+.evidence-backdrop { display: none; }
+
+@media (max-width: 1200px) {
+  .evidence-rail {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 60;
+    width: min(400px, 92vw); transform: translateX(100%);
+    transition: transform .24s ease; box-shadow: -14px 0 44px rgba(0,0,0,0.5);
+  }
+  .evidence-rail.open { transform: translateX(0); }
+  .rail-count { margin-left: 0; }
+  .rail-close { display: inline-flex; margin-left: auto; }
+  .evidence-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 59;
+    background: rgba(0,0,0,0.55); backdrop-filter: blur(2px);
+  }
+}
+.ev-quote { border-left: 2px solid var(--accent); padding: 4px 0 4px 12px; }
+.ev-quote-accent { border-left-color: var(--accent-2); }
+.ev-cite { padding: 7px 10px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; }
+.ev-table { overflow: auto; max-height: 340px; border: 1px solid var(--line); border-radius: 8px; }
+
+/* ---- mono code blocks (ZCQL, OCR) ---- */
+.code-block {
+  font-family: var(--mono); font-size: 12px; line-height: 1.55; color: #9fd0ff;
+  background: #060a13; border: 1px solid var(--line); border-radius: 8px; padding: 12px;
+  white-space: pre-wrap; word-break: break-word; margin: 0;
+}
+.ocr-raw { max-height: 420px; overflow: auto; }
+
+/* ---- Chart.js / Leaflet / D3 canvases ---- */
+.chart-h { position: relative; }
+.hotspot-map { height: clamp(340px, 56vh, 560px); border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
+.leaflet-container { background: #0b1120; }
+.netgraph {
+  position: relative; height: clamp(340px, 52vh, 520px); border-radius: 10px;
+  background: radial-gradient(circle at 50% 40%, rgba(91,140,255,0.05), transparent 70%);
+}
+.netgraph-hover {
+  position: absolute; top: 10px; left: 10px; background: var(--bg-3); border: 1px solid var(--line-2);
+  padding: 6px 12px; border-radius: 8px; font-size: 12.5px; color: var(--text); font-weight: 600;
+}
+.viz-empty { color: var(--muted-2); text-align: center; padding: 40px; font-size: 13px; }
+
+/* ---- investigator brief prose ---- */
+.brief-body { font-size: 14px; line-height: 1.65; color: var(--text); max-height: 360px; overflow-y: auto; }
+.brief-body strong { color: var(--accent-2); }
+
+/* ---- case dossier timeline ---- */
+.timeline { display: flex; flex-direction: column; gap: 2px; }
+.tl-row { display: grid; grid-template-columns: 12px 92px 1fr; gap: 12px; align-items: start; padding: 8px 0; }
+.tl-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); margin-top: 4px; }
+.tl-arrest .tl-dot { background: var(--warn); }
+.tl-status .tl-dot { background: var(--good); }
+.tl-incident .tl-dot { background: var(--bad); }
+.tl-date { font-size: 11px; color: var(--muted-2); font-family: var(--mono); margin-top: 3px; }
+
+/* ---- ingest drop zone + key/value table ---- */
+.ingest-drop {
+  border: 1.5px dashed var(--line-2); border-radius: 12px; background: var(--bg-1);
+  padding: 40px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+}
+.ingest-drop:hover { border-color: var(--accent); background: var(--bg-2); }
+.kv-table { width: 100%; border-collapse: collapse; }
+.kv-table td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.kv-table .kv-key { width: 140px; }
+
+/* case-search: let the input grow */
+.case-search { width: 100%; }
+.case-search > *:first-child { flex: 1; }
+
+/* ============================================================================
+   Display scaling — Astryx is rem-based, so lifting the root font-size scales
+   the whole UI (type, icons, control padding) proportionally on larger
+   monitors. Mobile/laptop stay at the base 16px; big screens grow so the app
+   never feels tiny or sparse. Paired with a wider chat column + evidence rail.
+   ============================================================================ */
+/* Thresholds are keyed to the CSS viewport (after OS display scaling), starting
+   at 1200px where the desktop 3-column layout is active. This is intentionally
+   generous so the app never feels tiny on a scaled desktop. */
+@media (min-width: 1200px) { html { font-size: 17.5px; } }
+@media (min-width: 1500px) { html { font-size: 18px; } }
+@media (min-width: 1800px) { html { font-size: 19px; } }
+@media (min-width: 2200px) { html { font-size: 20.5px; } }
+
+/* Let the chat message + composer column use the available width instead of the
+   default ~800px cap, so desktops fill nicely.
+   (Targets the Astryx spacious content max-width utility.) */
+@media (min-width: 1200px) {
+  .astryx-chat-layout [class~="x1ap80js"] { max-width: 1080px !important; }
+}
+@media (min-width: 1500px) { .evidence-rail { width: 416px; } }
+@media (min-width: 2100px) { .evidence-rail { width: 480px; } }
