@@ -75,14 +75,19 @@ async function chatQuickML(app, { messages, tools, toolChoice, maxTokens = 1500,
   }
   if (!r.ok || j.error) throw new Error('QuickML GLM error: ' + JSON.stringify(j.error || j).slice(0, 400));
 
-  const msg = (j.choices && j.choices[0] && j.choices[0].message) || {};
+  // Catalyst GLM serving returns a flat shape: { response, tool_calls, usage, model }.
+  // (Fall back to OpenAI-style choices[0].message if a future version returns that.)
+  const oa = j.choices && j.choices[0] && j.choices[0].message;
+  const content = (oa && oa.content != null) ? oa.content : (j.response || '');
+  const toolCalls = (oa && oa.tool_calls) || j.tool_calls || [];
+  const message = oa || { role: 'assistant', content, tool_calls: toolCalls };
   return {
-    message: msg,
-    content: msg.content || '',
-    toolCalls: msg.tool_calls || [],
+    message,
+    content,
+    toolCalls,
     supportsTools: !forceReact,
     provider: 'zoho-quickml',
-    finishReason: j.choices && j.choices[0] && j.choices[0].finish_reason,
+    finishReason: (j.choices && j.choices[0] && j.choices[0].finish_reason) || (toolCalls.length ? 'tool_calls' : 'stop'),
     usage: j.usage || null,
     raw: j
   };
