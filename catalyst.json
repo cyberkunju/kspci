@@ -1,0 +1,16 @@
+{
+  "functions": {
+    "targets": [
+      "api"
+    ],
+    "ignore": [
+      ".output",
+      "node_modules"
+    ],
+    "source": "functions"
+  },
+  "client": {
+    "source": "client/dist",
+    "ignore": []
+  }
+}

@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build output
+client/dist/
+.output/
+
+# Catalyst
+.catalyst/
+catalyst-cli.log
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Catalyst function config carries real API keys — keep out of the repo.
+# Use catalyst-config.example.json as the template (placeholders only).
+functions/api/catalyst-config.json
+
+# Synthetic data (regenerated via script)
+datastore/seed/*.csv
+datastore/train/*.csv
+
+# ML pipeline (local training on GPU; large artifacts)
+ml/.venv/
+ml/data/
+ml/models/
+**/__pycache__/
+*.parquet
+
+# Vendored Linux wheels for the AppSail Python service (~200MB; reinstall via pip/requirements)
+ml/service/vendor/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+*.log
+
+# Source PDF (confidential reference, not for repo)
+Police_FIR_ER_Diagram.pdf
