@@ -5,6 +5,7 @@ import { ChatComposer, IconButton, Spinner, Icon, Mic, Square } from '../ui';
 export default function Composer({ onSend, disabled, language, role }) {
   const [text, setText] = useState('');
   const [voiceState, setVoiceState] = useState('idle'); // idle | recording | transcribing
+  const [voiceError, setVoiceError] = useState(null);
   const recRef = useRef(null);
 
   const submit = (value) => {
@@ -15,14 +16,25 @@ export default function Composer({ onSend, disabled, language, role }) {
   };
 
   const toggleMic = async () => {
-    if (voiceState === 'recording') { recRef.current && recRef.current.stop(); return; }
+    if (voiceState === 'recording') { recRef.current?.stop(); return; }
     if (voiceState === 'transcribing') return;
-    recRef.current = await startRecording({
-      language, role,
-      onText: (t) => { if (t) setText((prev) => (prev ? prev + ' ' : '') + t); },
-      onState: setVoiceState,
-      onError: () => setVoiceState('idle'),
-    });
+    setVoiceError(null);
+    try {
+      recRef.current = await startRecording({
+        language, role,
+        onText: (nextText) => {
+          if (nextText) setText((previous) => (previous ? previous + ' ' : '') + nextText);
+        },
+        onState: setVoiceState,
+        onError: () => {
+          setVoiceState('idle');
+          setVoiceError('Voice input failed. Check microphone permission and try again.');
+        },
+      });
+    } catch {
+      setVoiceState('idle');
+      setVoiceError('Microphone access was not available. You can continue by typing.');
+    }
   };
 
   const micButton = isRecordingSupported() ? (
@@ -45,6 +57,7 @@ export default function Composer({ onSend, disabled, language, role }) {
       onSubmit={submit}
       isDisabled={disabled}
       sendActions={micButton}
+      status={voiceError ? { type: 'error', message: voiceError } : undefined}
       placeholder={language === 'kn'
         ? 'ಅಪರಾಧ ದತ್ತಾಂಶವನ್ನು ಕೇಳಿ… (ಉದಾ: ಬೆಂಗಳೂರಿನಲ್ಲಿ ಕೊಲೆ ಪ್ರಕರಣಗಳು)'
         : 'Ask anything about the crime data…  (e.g. who is the top offender and their linked cases?)'}

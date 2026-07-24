@@ -1,10 +1,13 @@
-// Explainable-AI panel: shows the generated ZCQL, the model's rationale,
-// cited evidence records, and the raw query result — the transparency layer
-// that satisfies the "Explainable AI & audit trail" requirement.
+// Explainable-AI panel: the transparency layer for the "Explainable AI & audit
+// trail" requirement. Leads with plain-language reasoning and the cited source
+// records an officer actually trusts; the generated query and model reasoning
+// trace stay available but tucked into one collapsed "technical" section so the
+// panel reads like a production evidence view, not a query console.
 // Static rail on wide screens; slide-over drawer on smaller screens.
 import {
-  Stack, Heading, Text, Badge, StatusDot, Table, EmptyState, IconButton, Icon,
-  proportional, Route, Layers, Network, ScrollText, ChartNoAxesCombined, ShieldCheck, X,
+  Stack, Heading, Text, StatusDot, Table, EmptyState, IconButton, Icon,
+  Citation, Collapsible, Markdown, proportional, Route, Layers, Network,
+  ChartNoAxesCombined, ShieldCheck, X,
 } from '../ui';
 
 function SectionLabel({ icon, children }) {
@@ -24,7 +27,7 @@ export default function EvidencePanel({ evidence, open, onClose }) {
       <EmptyState
         icon={<Icon icon={ShieldCheck} size="lg" color="tertiary" />}
         title="Grounded in the crime database"
-        description="Ask a question and the exact query, reasoning, and cited records appear here."
+        description="Ask a question and the reasoning, cited records, and underlying query appear here."
       />
     );
   } else {
@@ -33,45 +36,62 @@ export default function EvidencePanel({ evidence, open, onClose }) {
     const tableCols = cols.map((c) => ({ key: c, header: c, width: proportional(1, 110) }));
     count = <Text type="supporting" color="tertiary">{rows.length} record{rows.length === 1 ? '' : 's'}</Text>;
     body = (
-      <Stack gap={4}>
+      <Stack gap={3}>
         {rationale && (
-          <Stack gap={2}>
-            <SectionLabel icon={Route}>Why this query</SectionLabel>
-            <div className="ev-quote"><Text type="body" color="secondary">{rationale}</Text></div>
-          </Stack>
-        )}
-        {zcql && (
-          <Stack gap={2}>
-            <SectionLabel icon={Layers}>Generated ZCQL</SectionLabel>
-            <pre className="code-block">{zcql}</pre>
-          </Stack>
+          <div className="ev-section">
+            <Stack gap={1.5}>
+              <SectionLabel icon={Route}>Why this answer</SectionLabel>
+              <Text type="body" color="secondary">{rationale}</Text>
+            </Stack>
+          </div>
         )}
         {citations.length > 0 && (
-          <Stack gap={2}>
-            <SectionLabel icon={Network}>Cited evidence ({citations.length})</SectionLabel>
-            <Stack gap={1.5}>
-              {citations.slice(0, 30).map((c, i) => (
-                <Stack key={i} direction="horizontal" gap={2} vAlign="center" className="ev-cite">
-                  <Badge variant="info" label={c.type} />
-                  <Text type="code" size="small">{c.id}</Text>
-                </Stack>
-              ))}
+          <div className="ev-section">
+            <Stack gap={2}>
+              <SectionLabel icon={Network}>Source records ({citations.length})</SectionLabel>
+              <Stack gap={1.5}>
+                {citations.slice(0, 30).map((citation, index) => (
+                  <Citation
+                    key={`${citation.type}-${citation.id}-${index}`}
+                    source={{ title: `${citation.type} · ${citation.id}` }}
+                    number={index + 1}
+                    variant="label"
+                  />
+                ))}
+              </Stack>
             </Stack>
-          </Stack>
+          </div>
         )}
         {rows.length > 0 && (
-          <Stack gap={2}>
-            <SectionLabel icon={ChartNoAxesCombined}>Query result</SectionLabel>
-            <div className="ev-table">
-              <Table data={rows.slice(0, 100)} columns={tableCols} density="compact" dividers="rows" hasHover textOverflow="truncate" />
-            </div>
-          </Stack>
+          <div className="ev-section">
+            <Stack gap={2}>
+              <SectionLabel icon={ChartNoAxesCombined}>Records returned</SectionLabel>
+              <div className="ev-table">
+                <Table data={rows.slice(0, 100)} columns={tableCols} density="compact" dividers="rows" hasHover textOverflow="truncate" />
+              </div>
+            </Stack>
+          </div>
         )}
-        {reasoning && (
-          <Stack gap={2}>
-            <SectionLabel icon={ScrollText}>Model reasoning trace</SectionLabel>
-            <div className="ev-quote ev-quote-accent"><Text type="body" color="secondary">{reasoning}</Text></div>
-          </Stack>
+        {(zcql || reasoning) && (
+          <Collapsible
+            trigger={<SectionLabel icon={Layers}>Query &amp; reasoning</SectionLabel>}
+            defaultIsOpen={false}
+          >
+            <Stack gap={3}>
+              {zcql && (
+                <Stack gap={1}>
+                  <Text type="supporting" color="tertiary">Generated ZCQL</Text>
+                  <pre className="code-block">{zcql}</pre>
+                </Stack>
+              )}
+              {reasoning && (
+                <Stack gap={1}>
+                  <Text type="supporting" color="tertiary">Model reasoning trace</Text>
+                  <Markdown density="compact" headingLevelStart={4} contentWidth="100%">{reasoning}</Markdown>
+                </Stack>
+              )}
+            </Stack>
+          </Collapsible>
         )}
       </Stack>
     );
@@ -79,11 +99,11 @@ export default function EvidencePanel({ evidence, open, onClose }) {
 
   return (
     <>
-      {open && <div className="evidence-backdrop" onClick={onClose} />}
-      <aside className={`evidence-rail${open ? ' open' : ''}`}>
+      {open && <button type="button" className="evidence-backdrop" aria-label="Close evidence panel" onClick={onClose} />}
+      <aside className={`evidence-rail${open ? ' open' : ''}`} aria-label="Evidence and reasoning">
         <div className="rail-head">
-          <StatusDot variant={evidence ? 'success' : 'neutral'} label={evidence ? 'grounded' : 'idle'} isPulsing={!!evidence} />
-          <Heading level={6}>Evidence &amp; Reasoning</Heading>
+          <StatusDot variant={evidence ? 'success' : 'neutral'} label={evidence ? 'grounded' : 'idle'} />
+          <Heading level={6}>Evidence &amp; reasoning</Heading>
           <span className="rail-count">{count}</span>
           <span className="rail-close">
             <IconButton icon={<Icon icon={X} size="sm" />} label="Close evidence panel" variant="ghost" onClick={onClose} />
