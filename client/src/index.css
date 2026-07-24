@@ -6,22 +6,44 @@
    timeline, and a few mono code blocks. Palette below is used by those canvases.
    ============================================================================ */
 :root {
-  --bg-0: #0a0c10;
-  --bg-1: #101318;
-  --bg-2: #161a21;
-  --bg-3: #1d222b;
-  --line: #232830;
-  --line-2: #30363f;
-  --text: #e9ecf1;
-  --muted: #9aa3b2;
-  --muted-2: #646d7c;
-  --accent: #5b8cff;
-  --accent-2: #29b6d8;
-  --good: #34c98a;
-  --warn: #d9a441;
-  --bad: #e5644e;
+  color-scheme: dark;
+  /* Palette aligned to the Astryx theme-neutral dark tokens so our custom
+     canvases (charts, map, evidence rail, code blocks) share one cohesive
+     surface family with every Astryx component. App ships dark-only, so the
+     resolved dark values are used directly for predictable canvas/JS colors. */
+  --bg-0: #1b1b1b;   /* page / body (Astryx --color-background-body) */
+  --bg-1: #1f1f1f;   /* panels & rails, a hair above page for separation */
+  --bg-2: #262626;   /* raised surface (Astryx --color-background-surface) */
+  --bg-3: #2f2f2f;   /* hover / highest surface */
+  --line: #333333;   /* subtle divider on dark neutral */
+  --line-2: #525252; /* emphasized border (Astryx --color-border-emphasized) */
+  --text: #fafafa;   /* --color-text-primary */
+  --muted: #a3a3a3;  /* --color-text-secondary */
+  --muted-2: #7a7a7a;
+  --accent: #6d93f5;
+  --accent-2: #45b5d1;
+  --good: #42c990;
+  --warn: #e0aa4e;
+  --bad: #ec6d5f;
   --mono: "JetBrains Mono", "SF Mono", "Fira Code", Consolas, monospace;
-  --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Custom-surface radii, matched to the overridden Astryx container radius. */
+  --r-lg: 24px;   /* panels, hero surfaces */
+  --r-md: 20px;   /* cards, canvases, code blocks */
+  --r-sm: 14px;   /* chips, small controls, avatars */
+}
+
+/* Round the whole Astryx component set by overriding the theme radius tokens.
+   They're defined on <html data-astryx-theme="neutral"> via @scope; matching
+   that element with element+attribute specificity guarantees the override wins.
+   Every Astryx surface (cards, buttons, inputs, chat bubbles, banners, badges,
+   selectors) reads these vars, so this is the single lever for the softer,
+   curved look the product is meant to have. */
+html[data-astryx-theme="neutral"] {
+  --radius-container: 20px;  /* cards, banners, panels (Astryx default 12) */
+  --radius-element: 14px;    /* buttons, inputs, chips (default 10) */
+  --radius-inner: 10px;      /* inner controls (default 6) */
+  --radius-page: 28px;       /* large page containers */
 }
 
 * { box-sizing: border-box; }
@@ -41,17 +63,27 @@ body {
 
 /* ---- brand mark in the side-nav heading ---- */
 .brand-mark {
-  width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center;
-  background: linear-gradient(140deg, rgba(91,140,255,0.22), rgba(41,182,216,0.14));
+  width: 32px; height: 32px; border-radius: var(--r-sm); display: grid; place-items: center;
+  background: linear-gradient(140deg, rgba(109,147,245,0.24), rgba(69,181,209,0.14));
   border: 1px solid var(--line-2);
 }
 
-/* ---- scrollable analytics views inside the AppShell content area ---- */
-.scroll-view { height: 100%; overflow-y: auto; }
-.view { padding: clamp(16px, 2.4vw, 28px) clamp(16px, 2.4vw, 28px) 48px; display: flex; flex-direction: column; gap: clamp(14px, 2vw, 20px); }
-.view-narrow { max-width: 1080px; }
+/* ---- scrollable workspaces inside the AppShell content area ---- */
+.scroll-view { height: 100%; overflow-y: auto; overscroll-behavior: contain; }
+.view {
+  width: min(100%, 1600px); margin-inline: auto;
+  padding: clamp(20px, 2.5vw, 36px) clamp(16px, 2.5vw, 36px) 64px;
+  display: flex; flex-direction: column; gap: clamp(18px, 2vw, 28px);
+}
+.view-narrow { max-width: 1120px; }
+.view-head { padding-bottom: 4px; }
+.view-head-copy { flex: 1 1 520px; max-width: 840px; }
+.view-head-action { margin-left: auto; }
+.view-body { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
 .push-right { margin-left: auto; }
 .grid-full { grid-column: 1 / -1; }
+.sidenav-role { padding-block: 4px; }
+.sidenav-empty { padding: 8px 12px 12px; }
 
 /* ---- responsive visibility utilities (used in the top nav) ---- */
 .hide-sm, .hide-md { display: inline-flex; }
@@ -59,27 +91,44 @@ body {
 @media (max-width: 900px) { .hide-md { display: none !important; } }
 @media (max-width: 640px) { .hide-sm { display: none !important; } }
 
-/* ---- chat split (chat area + evidence rail) ---- */
-.chat-split { min-height: 0; }
-.chat-split > * { min-height: 0; }
+/* ---- chat split (chat area + evidence rail) ----
+   ChatLayout owns its own scroll context: it needs a bounded flex-column
+   parent so its flex:1 root can size and its sticky composer docks correctly.
+   Anything less makes the composer resolve against the AppShell scroller and
+   drift out of frame. */
+.chat-split { display: flex; height: 100%; min-height: 0; }
+.chat-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+
+/* Empty-chat welcome: centered, scrollable hero with the composer docked at the
+   bottom. Rendered instead of ChatLayout when there are no messages, so the
+   layout's auto-scroll-to-bottom never clips the tall welcome hero. */
+.chat-welcome { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.chat-welcome-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; }
+.chat-welcome-dock { padding: 12px clamp(12px, 3vw, 28px) 16px; }
+.chat-welcome-dock > * { max-width: 820px; margin-inline: auto; }
 
 /* ---- chat message avatars ---- */
 .msg-avatar {
-  width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; flex: none;
+  width: 30px; height: 30px; border-radius: var(--r-sm); display: grid; place-items: center; flex: none;
   background: var(--bg-3); border: 1px solid var(--line-2); color: var(--accent);
 }
 .msg-avatar.user { color: var(--muted); }
 .bubble-error { color: var(--bad); display: inline-flex; align-items: center; gap: 7px; }
 
 /* ---- welcome / empty chat state ---- */
-.welcome-wrap { display: grid; place-items: center; min-height: min(70vh, 640px); padding: clamp(20px, 5vh, 56px) clamp(16px, 4vw, 32px) 24px; }
-.welcome-wrap :where(h1) { font-size: clamp(23px, 4.4vw, 44px); line-height: 1.14; }
+.welcome-wrap {
+  width: 100%; padding: clamp(24px, 5vh, 56px) clamp(18px, 5vw, 64px);
+  display: flex; justify-content: center; align-items: center;
+  background: radial-gradient(circle at 25% 12%, rgba(109,147,245,0.07), transparent 36%);
+}
+.welcome-copy { max-width: 760px; }
+.welcome-wrap :where(h1) { font-size: clamp(28px, 3.6vw, 46px); line-height: 1.08; letter-spacing: -0.03em; }
 
 /* ---- evidence rail (Explainable-AI panel) ----
    Static column on wide screens; slide-over drawer below 1200px. */
 .evidence-rail {
   width: 372px; flex: none; display: flex; flex-direction: column; min-height: 0;
-  background: var(--bg-1); border-left: 1px solid var(--line);
+  background: transparent; border-left: 1px solid var(--line);
 }
 .rail-head {
   display: flex; align-items: center; gap: 10px; padding: 15px 18px;
@@ -87,16 +136,24 @@ body {
 }
 .rail-count { margin-left: auto; }
 .rail-close { display: none; }
-.rail-body { flex: 1; overflow-y: auto; padding: 18px; min-height: 0; }
+.rail-body { flex: 1; overflow-y: auto; padding: 16px; min-height: 0; }
 .evidence-backdrop { display: none; }
+
+/* Rounded, sectioned evidence content — reads as a polished audit panel
+   rather than a raw query console. */
+.ev-section {
+  background: var(--bg-0); border: 1px solid var(--line);
+  border-radius: var(--r-md); padding: 14px;
+}
 
 @media (max-width: 1200px) {
   .evidence-rail {
     position: fixed; top: 0; right: 0; bottom: 0; z-index: 60;
-    width: min(400px, 92vw); transform: translateX(100%);
-    transition: transform .24s ease; box-shadow: -14px 0 44px rgba(0,0,0,0.5);
+    width: min(400px, 92vw); transform: translateX(100%); visibility: hidden;
+    background: var(--bg-2);
+    transition: transform .24s ease, visibility 0s linear .24s; box-shadow: -14px 0 44px rgba(0,0,0,0.5);
   }
-  .evidence-rail.open { transform: translateX(0); }
+  .evidence-rail.open { transform: translateX(0); visibility: visible; transition-delay: 0s; }
   .rail-count { margin-left: 0; }
   .rail-close { display: inline-flex; margin-left: auto; }
   .evidence-backdrop {
@@ -104,30 +161,27 @@ body {
     background: rgba(0,0,0,0.55); backdrop-filter: blur(2px);
   }
 }
-.ev-quote { border-left: 2px solid var(--accent); padding: 4px 0 4px 12px; }
-.ev-quote-accent { border-left-color: var(--accent-2); }
-.ev-cite { padding: 7px 10px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; }
-.ev-table { overflow: auto; max-height: 340px; border: 1px solid var(--line); border-radius: 8px; }
+.ev-table { overflow: auto; max-height: 320px; border: 1px solid var(--line); border-radius: var(--r-sm); }
 
 /* ---- mono code blocks (ZCQL, OCR) ---- */
 .code-block {
-  font-family: var(--mono); font-size: 12px; line-height: 1.55; color: #9fd0ff;
-  background: #060a13; border: 1px solid var(--line); border-radius: 8px; padding: 12px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.55; color: #cdd6e3;
+  background: #0a0a0a; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 12px;
   white-space: pre-wrap; word-break: break-word; margin: 0;
 }
 .ocr-raw { max-height: 420px; overflow: auto; }
 
 /* ---- Chart.js / Leaflet / D3 canvases ---- */
 .chart-h { position: relative; }
-.hotspot-map { height: clamp(340px, 56vh, 560px); border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
-.leaflet-container { background: #0b1120; }
+.hotspot-map { height: clamp(340px, 56vh, 560px); border-radius: var(--r-md); overflow: hidden; border: 1px solid var(--line); }
+.leaflet-container { background: var(--bg-2); }
 .netgraph {
-  position: relative; height: clamp(340px, 52vh, 520px); border-radius: 10px;
-  background: radial-gradient(circle at 50% 40%, rgba(91,140,255,0.05), transparent 70%);
+  position: relative; height: clamp(340px, 52vh, 520px); border-radius: var(--r-md);
+  background: radial-gradient(circle at 50% 40%, rgba(109,147,245,0.05), transparent 70%);
 }
 .netgraph-hover {
   position: absolute; top: 10px; left: 10px; background: var(--bg-3); border: 1px solid var(--line-2);
-  padding: 6px 12px; border-radius: 8px; font-size: 12.5px; color: var(--text); font-weight: 600;
+  padding: 6px 12px; border-radius: var(--r-sm); font-size: 12.5px; color: var(--text); font-weight: 600;
 }
 .viz-empty { color: var(--muted-2); text-align: center; padding: 40px; font-size: 13px; }
 
@@ -144,39 +198,44 @@ body {
 .tl-incident .tl-dot { background: var(--bad); }
 .tl-date { font-size: 11px; color: var(--muted-2); font-family: var(--mono); margin-top: 3px; }
 
-/* ---- ingest drop zone + key/value table ---- */
-.ingest-drop {
-  border: 1.5px dashed var(--line-2); border-radius: 12px; background: var(--bg-1);
-  padding: 40px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+/* ---- reviewed-ingestion workflow ---- */
+.sticky-actions {
+  position: sticky; bottom: 0; z-index: 4; padding: 14px;
+  background: color-mix(in srgb, var(--bg-1) 92%, transparent);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  box-shadow: 0 -10px 30px rgba(0,0,0,0.18); backdrop-filter: blur(16px);
 }
-.ingest-drop:hover { border-color: var(--accent); background: var(--bg-2); }
-.kv-table { width: 100%; border-collapse: collapse; }
-.kv-table td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-.kv-table .kv-key { width: 140px; }
+.success-panel {
+  max-width: 720px; padding: clamp(24px, 4vw, 44px);
+  background: linear-gradient(145deg, rgba(66,201,144,0.10), rgba(109,147,245,0.05));
+  border: 1px solid color-mix(in srgb, var(--good) 38%, var(--line)); border-radius: var(--r-lg);
+}
 
 /* case-search: let the input grow */
 .case-search { width: 100%; }
-.case-search > *:first-child { flex: 1; }
+.case-search > *:first-child { flex: 1 1 360px; }
 
-/* ============================================================================
-   Display scaling — Astryx is rem-based, so lifting the root font-size scales
-   the whole UI (type, icons, control padding) proportionally on larger
-   monitors. Mobile/laptop stay at the base 16px; big screens grow so the app
-   never feels tiny or sparse. Paired with a wider chat column + evidence rail.
-   ============================================================================ */
-/* Thresholds are keyed to the CSS viewport (after OS display scaling), starting
-   at 1200px where the desktop 3-column layout is active. This is intentionally
-   generous so the app never feels tiny on a scaled desktop. */
-@media (min-width: 1200px) { html { font-size: 17.5px; } }
-@media (min-width: 1500px) { html { font-size: 18px; } }
-@media (min-width: 1800px) { html { font-size: 19px; } }
-@media (min-width: 2200px) { html { font-size: 20.5px; } }
-
-/* Let the chat message + composer column use the available width instead of the
-   default ~800px cap, so desktops fill nicely.
-   (Targets the Astryx spacious content max-width utility.) */
-@media (min-width: 1200px) {
-  .astryx-chat-layout [class~="x1ap80js"] { max-width: 1080px !important; }
+/* ---- interaction, responsiveness, and motion ---- */
+:where(button, a, input, textarea, select):focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 3px;
 }
+
+@media (max-width: 760px) {
+  .view { padding: 20px 14px 48px; }
+  .view-head-action { width: 100%; margin-left: 0; }
+  .case-search > * { flex: 1 1 100%; }
+  .sticky-actions { margin-inline: -6px; }
+  .tl-row { grid-template-columns: 10px 76px 1fr; gap: 8px; }
+}
+
 @media (min-width: 1500px) { .evidence-rail { width: 416px; } }
-@media (min-width: 2100px) { .evidence-rail { width: 480px; } }
+@media (min-width: 2100px) { .evidence-rail { width: 460px; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
