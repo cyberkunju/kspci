@@ -1,0 +1,37 @@
+{
+    "deployment": {
+        "name": "api",
+        "stack": "node18",
+        "type": "advancedio",
+        "memory": 1024,
+        "env_variables": {
+            "ADMIN_KEY": "<set-a-strong-admin-key>",
+
+            "LLM_PROVIDER": "quickml",
+
+            "//": "--- Zoho Catalyst QuickML LLM Serving — GLM-4.7-Flash ---",
+            "QUICKML_LLM_ENDPOINT": "https://api.catalyst.zoho.in/quickml/v1/project/<PROJECT_ID>/glm/chat",
+            "QUICKML_MODEL": "crm-di-glm47b_30b_it",
+            "QUICKML_THINKING": "false",
+            "QUICKML_ORG_ID": "<your-catalyst-org-id>",
+            "ZOHO_CLIENT_ID": "<self-client-id>",
+            "ZOHO_CLIENT_SECRET": "<self-client-secret>",
+            "ZOHO_REFRESH_TOKEN": "<refresh-token-with-QuickML.deployment.READ-scope>",
+            "ZOHO_ACCOUNTS_URL": "https://accounts.zoho.in",
+
+            "//voice": "--- Sarvam AI (voice STT/TTS — Catalyst has no speech model) ---",
+            "SARVAM_API_KEY": "<your-sarvam-api-key>",
+            "SARVAM_STT_MODEL": "saarika:v2.5",
+            "SARVAM_TTS_MODEL": "bulbul:v3",
+            "SARVAM_TTS_SPEAKER": "ritu",
+
+            "//3": "--- Optional tuning ---",
+            "LLM_TIMEOUT_MS": "60000",
+            "LLM_FORCE_REACT": "false",
+            "FORECAST_SERVICE_URL": "https://<your-appsail-app>.development.catalystappsail.in"
+        }
+    },
+    "execution": {
+        "main": "index.js"
+    }
+}
