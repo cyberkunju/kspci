@@ -175,14 +175,70 @@ body {
 .chart-h { position: relative; }
 .hotspot-map { height: clamp(340px, 56vh, 560px); border-radius: var(--r-md); overflow: hidden; border: 1px solid var(--line); }
 .leaflet-container { background: var(--bg-2); }
-.netgraph {
-  position: relative; height: clamp(340px, 52vh, 520px); border-radius: var(--r-md);
-  background: radial-gradient(circle at 50% 40%, rgba(109,147,245,0.05), transparent 70%);
+
+/* ---- interactive network graph (canvas) ---- */
+.ng-wrap {
+  position: relative; width: 100%; border-radius: var(--r-md); overflow: hidden;
+  border: 1px solid var(--line); background: #12151b; touch-action: none;
 }
-.netgraph-hover {
-  position: absolute; top: 10px; left: 10px; background: var(--bg-3); border: 1px solid var(--line-2);
-  padding: 6px 12px; border-radius: var(--r-sm); font-size: 12.5px; color: var(--text); font-weight: 600;
+.ng-canvas { display: block; width: 100%; height: 100%; }
+.ng-toolbar {
+  position: absolute; top: 10px; left: 10px; right: 10px;
+  display: flex; gap: 8px; align-items: center; justify-content: space-between;
+  pointer-events: none;
 }
+.ng-search {
+  pointer-events: auto; display: inline-flex; align-items: center; gap: 7px;
+  background: color-mix(in srgb, var(--bg-1) 88%, transparent); border: 1px solid var(--line-2);
+  border-radius: var(--r-sm); padding: 6px 10px; color: var(--muted); backdrop-filter: blur(8px);
+  min-width: 0; max-width: 280px; flex: 1 1 200px;
+}
+.ng-search input {
+  border: 0; background: transparent; outline: none; color: var(--text);
+  font: inherit; font-size: 13px; width: 100%; min-width: 0;
+}
+.ng-search input::placeholder { color: var(--muted-2); }
+.ng-zoom { pointer-events: auto; display: inline-flex; gap: 4px; }
+.ng-zoom button {
+  display: grid; place-items: center; width: 32px; height: 32px; cursor: pointer;
+  background: color-mix(in srgb, var(--bg-1) 88%, transparent); border: 1px solid var(--line-2);
+  border-radius: var(--r-sm); color: var(--muted); backdrop-filter: blur(8px); transition: color .12s, border-color .12s;
+}
+.ng-zoom button:hover { color: var(--text); border-color: var(--accent); }
+.ng-legend {
+  position: absolute; left: 10px; bottom: 10px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center;
+  background: color-mix(in srgb, var(--bg-1) 82%, transparent); border: 1px solid var(--line);
+  border-radius: var(--r-sm); padding: 7px 11px; backdrop-filter: blur(8px); max-width: calc(100% - 20px);
+}
+.ng-legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.ng-legend-item i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.ng-legend-note { font-size: 11px; color: var(--muted-2); }
+.ng-tooltip {
+  position: absolute; z-index: 5; pointer-events: none; display: flex; flex-direction: column; gap: 1px;
+  background: var(--bg-3); border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  padding: 6px 10px; font-size: 12px; color: var(--text); max-width: 240px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.ng-tooltip span { color: var(--muted); font-size: 11px; }
+.ng-detail {
+  position: absolute; top: 52px; right: 10px; width: min(240px, calc(100% - 20px)); z-index: 5;
+  background: color-mix(in srgb, var(--bg-1) 92%, transparent); border: 1px solid var(--line-2);
+  border-radius: var(--r-md); padding: 14px; backdrop-filter: blur(12px);
+  box-shadow: 0 12px 32px rgba(0,0,0,0.4);
+}
+.ng-detail strong { display: block; font-size: 14px; color: var(--text); padding-right: 18px; word-break: break-word; }
+.ng-detail-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-bottom: 8px; }
+.ng-detail-close {
+  position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 24px; height: 24px;
+  border: 0; background: transparent; color: var(--muted-2); cursor: pointer; border-radius: 6px;
+}
+.ng-detail-close:hover { color: var(--text); background: var(--bg-3); }
+.ng-detail dl { margin: 10px 0 0; display: flex; flex-direction: column; gap: 6px; }
+.ng-detail dl div { display: flex; justify-content: space-between; gap: 8px; }
+.ng-detail dt { color: var(--muted-2); font-size: 12px; }
+.ng-detail dd { margin: 0; color: var(--text); font-size: 12px; font-weight: 600; }
+.ng-detail-hint { margin: 10px 0 0; font-size: 11px; color: var(--muted-2); line-height: 1.4; }
+
 .viz-empty { color: var(--muted-2); text-align: center; padding: 40px; font-size: 13px; }
 
 /* ---- investigator brief prose ---- */

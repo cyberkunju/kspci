@@ -39,7 +39,7 @@ export default function MoneyTrail({ role }) {
         }
         note="Edges = money transfers. Counterparties linked to many distinct accused are potential mule/layering hubs (flagged)."
       >
-        <NetworkGraph data={graph} />
+        <NetworkGraph data={graph} kind="money" />
       </VizCard>
       <VizCard title="Suspicious hubs (money-mule / layering signals)">
         <Table
