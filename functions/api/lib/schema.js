@@ -10,9 +10,12 @@ const SCHEMA_PROMPT = `DATABASE SCHEMA (Catalyst Data Store, query with ZCQL —
 All tables are denormalized; names are embedded so you never need JOINs.
 
 Cases(CaseMasterID, CrimeNo, CaseNo, CrimeRegisteredDate, Year, CrimeMonth, IncidentDate,
-  DistrictName, StationName, latitude, longitude, CaseCategory, Gravity, CrimeHead,
+  StateName, DistrictName, StationName, latitude, longitude, CaseCategory, Gravity, CrimeHead,
   CrimeSubHead, CaseStatus, CourtName, OfficerName, ActsSections, AccusedCount,
   VictimCount, BriefFacts)
+  -- Coverage is all-India: StateName holds the state/UT (e.g. 'Karnataka', 'Delhi',
+  -- 'Tamil Nadu') and DistrictName the district. Group by StateName for national
+  -- comparisons and by DistrictName for local detail.
 Accused(AccusedMasterID, CaseMasterID, CrimeNo, AccusedName, AgeYear, Gender, PersonID,
   RingID, DistrictName, CrimeSubHead)
 Victims(VictimMasterID, CaseMasterID, VictimName, AgeYear, Gender)

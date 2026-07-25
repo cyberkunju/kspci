@@ -3,15 +3,26 @@
 // Analytics engine — ZCQL aggregations over the Data Store powering the
 // visualization dashboards (overview KPIs, hotspots, trends, network, offenders).
 
-const KARNATAKA_CENTROIDS = {
-  'Bengaluru City': [12.9716, 77.5946], 'Bengaluru Rural': [13.2846, 77.6786],
-  'Mysuru': [12.2958, 76.6394], 'Mangaluru (DK)': [12.9141, 74.856],
-  'Hubballi-Dharwad': [15.3647, 75.124], 'Belagavi': [15.8497, 74.4977],
-  'Kalaburagi': [17.3297, 76.8343], 'Ballari': [15.1394, 76.9214],
-  'Vijayapura': [16.8302, 75.71], 'Shivamogga': [13.9299, 75.5681],
-  'Tumakuru': [13.3379, 77.101], 'Davanagere': [14.4644, 75.9218],
-  'Udupi': [13.3409, 74.7421], 'Hassan': [13.0072, 76.0962], 'Raichur': [16.2076, 77.3463]
-};
+// All-India geography: real district centroids (population-weighted) for ~416
+// districts across 35 states/UTs, generated alongside the seed data.
+// Falls back to an empty set so the API still answers if the file is absent.
+let DISTRICT_REF = [];
+try {
+  DISTRICT_REF = require('../ref/india_districts.json');
+} catch (_) { DISTRICT_REF = []; }
+
+const DISTRICT_CENTROIDS = new Map();
+const STATE_CENTROIDS = new Map();
+for (const d of DISTRICT_REF) {
+  DISTRICT_CENTROIDS.set(d.district, [d.lat, d.lng]);
+  const s = STATE_CENTROIDS.get(d.state) || { lat: 0, lng: 0, w: 0 };
+  const w = Number(d.population) || 1;
+  s.lat += d.lat * w; s.lng += d.lng * w; s.w += w;
+  STATE_CENTROIDS.set(d.state, s);
+}
+for (const [k, v] of STATE_CENTROIDS) {
+  STATE_CENTROIDS.set(k, [+(v.lat / v.w).toFixed(5), +(v.lng / v.w).toFixed(5)]);
+}
 
 function flatten(row) {
   const out = {};
@@ -31,34 +42,67 @@ async function q(app, query) {
 
 async function overview(app) {
   const one = async (query) => { const r = await q(app, query); return r.length ? countOf(r[0]) : 0; };
-  const [cases, accused, heinous, chargesheeted, highRisk] = await Promise.all([
+  const [cases, accused, heinous, chargesheeted, highRisk, districtRows, stateRows] = await Promise.all([
     one('SELECT COUNT(ROWID) FROM Cases'),
     one('SELECT COUNT(ROWID) FROM Accused'),
     one("SELECT COUNT(ROWID) FROM Cases WHERE Gravity='Heinous'"),
-    one("SELECT COUNT(ROWID) FROM Cases WHERE CaseStatus='Chargesheet Filed'"),
-    one("SELECT COUNT(ROWID) FROM OffenderRisk WHERE RiskBand='High'")
+    // Anything past investigation has been chargesheeted at some point.
+    one("SELECT COUNT(ROWID) FROM Cases WHERE CaseStatus IN ('Chargesheet Filed','Pending Trial','Convicted','Acquitted')"),
+    one("SELECT COUNT(ROWID) FROM OffenderRisk WHERE RiskBand='High'"),
+    q(app, 'SELECT DistrictName, COUNT(ROWID) FROM Cases GROUP BY DistrictName LIMIT 300'),
+    q(app, 'SELECT StateName, COUNT(ROWID) FROM Cases GROUP BY StateName LIMIT 300'),
   ]);
   return {
     totalCases: cases, totalAccused: accused, heinous,
     heinousPct: cases ? Math.round((heinous / cases) * 100) : 0,
     chargesheeted, chargesheetRate: cases ? Math.round((chargesheeted / cases) * 100) : 0,
-    highRiskOffenders: highRisk, districts: Object.keys(KARNATAKA_CENTROIDS).length
+    highRiskOffenders: highRisk,
+    districts: districtRows.length,
+    states: stateRows.filter((r) => r.StateName).length,
   };
 }
 
-async function hotspots(app) {
-  const rows = await q(app, 'SELECT DistrictName, COUNT(ROWID) FROM Cases GROUP BY DistrictName ORDER BY COUNT(ROWID) DESC LIMIT 40');
-  const districts = rows.map((r) => ({
-    name: r.DistrictName, count: countOf(r),
-    lat: (KARNATAKA_CENTROIDS[r.DistrictName] || [null, null])[0],
-    lng: (KARNATAKA_CENTROIDS[r.DistrictName] || [null, null])[1]
-  })).filter((d) => d.lat != null);
-  // Sample incident points for a heat layer
-  const pts = await q(app, 'SELECT latitude, longitude, CrimeSubHead, DistrictName FROM Cases LIMIT 200');
+/**
+ * Hotspots at two zoom levels. India has ~400 districts in this dataset, which is
+ * far too many to read on one map, so the default view rolls up to state/UT and
+ * callers can drill into districts (optionally within one state).
+ */
+async function hotspots(app, { level = 'state', state, limit = 300 } = {}) {
+  const lim = Math.min(Number(limit) || 300, 300); // ZCQL caps LIMIT at 300
+  const safeState = state ? String(state).replace(/'/g, "''") : null;
+
+  let districts = [];
+  let states = [];
+  if (level === 'district' || safeState) {
+    const where = safeState ? `WHERE StateName='${safeState}'` : '';
+    const rows = await q(app, `SELECT DistrictName, COUNT(ROWID) FROM Cases ${where} GROUP BY DistrictName ORDER BY COUNT(ROWID) DESC LIMIT ${lim}`);
+    districts = rows.map((r) => {
+      const c = DISTRICT_CENTROIDS.get(r.DistrictName) || [null, null];
+      return { name: r.DistrictName, district: r.DistrictName, count: countOf(r), lat: c[0], lng: c[1] };
+    }).filter((d) => d.lat != null);
+  }
+  if (level !== 'district') {
+    const rows = await q(app, `SELECT StateName, COUNT(ROWID) FROM Cases GROUP BY StateName ORDER BY COUNT(ROWID) DESC LIMIT ${lim}`);
+    states = rows.map((r) => {
+      const c = STATE_CENTROIDS.get(r.StateName) || [null, null];
+      return { name: r.StateName, state: r.StateName, count: countOf(r), lat: c[0], lng: c[1] };
+    }).filter((d) => d.lat != null);
+  }
+
+  // Sampled incident points for the scatter layer.
+  const ptWhere = safeState ? `WHERE StateName='${safeState}'` : '';
+  const pts = await q(app, `SELECT latitude, longitude, CrimeSubHead, DistrictName FROM Cases ${ptWhere} LIMIT 300`);
   const points = pts.map((p) => ({
     lat: Number(p.latitude), lng: Number(p.longitude), sub: p.CrimeSubHead, district: p.DistrictName
   })).filter((p) => p.lat && p.lng);
-  return { districts, points };
+
+  return {
+    level: level === 'district' || safeState ? 'district' : 'state',
+    state: safeState || null,
+    // `districts` stays populated for the existing map component contract.
+    districts: (level === 'district' || safeState) ? districts : states,
+    states, points,
+  };
 }
 
 async function trends(app) {
@@ -191,4 +235,13 @@ async function moneytrail(app, { limit = 300 } = {}) {
   return { nodes: [...nodes.values()], links: edges, hubs, totalFlows: edges.length };
 }
 
-module.exports = { overview, hotspots, trends, network, offenders, financial, sociology, moneytrail, KARNATAKA_CENTROIDS };
+// Plain-object centroid lookup keyed by district name, for modules that index it
+// directly (forecast/backtest). `KARNATAKA_CENTROIDS` is kept as an alias so those
+// call sites keep working now that coverage is all-India, not just Karnataka.
+const CENTROIDS = Object.fromEntries([...DISTRICT_CENTROIDS.entries()]);
+
+module.exports = {
+  overview, hotspots, trends, network, offenders, financial, sociology, moneytrail,
+  DISTRICT_CENTROIDS, STATE_CENTROIDS, CENTROIDS,
+  KARNATAKA_CENTROIDS: CENTROIDS,
+};
