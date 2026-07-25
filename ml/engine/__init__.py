@@ -7,9 +7,11 @@ Modules:
     conformal    split, Mondrian and CQR prediction intervals
     metrics      point, distributional and NIJ-style spatial scoring
     walkforward  the expanding-window evaluation harness
+    serve        one-step-ahead forecasting for production
 """
 
 from .panel import Panel  # noqa: F401
+from .serve import forecast_next  # noqa: F401
 from .walkforward import Result, evaluate, make_split  # noqa: F401
 
-__all__ = ["Panel", "evaluate", "make_split", "Result"]
+__all__ = ["Panel", "evaluate", "make_split", "Result", "forecast_next"]

@@ -97,12 +97,17 @@ def baseline_preds(counts: np.ndarray, t: int, season: int, month: np.ndarray | 
 # ----------------------------------------------------------------- learned models
 @dataclass
 class PoissonGBM:
-    """LightGBM with a Poisson objective, or a HistGB fallback in log space.
+    """Gradient boosting with a Poisson objective.
 
-    The fallback exists so the engine still runs where LightGBM is unavailable (the
-    AppSail vendored environment, for instance). It trains on log1p targets and inverts,
-    which is a reasonable stand-in for a Poisson link but not equivalent — runs record
-    which one was used so results are never compared across backends by accident.
+    LightGBM when available, otherwise scikit-learn's ``HistGradientBoostingRegressor`` with
+    ``loss="poisson"``. The fallback matters because the AppSail serving environment installs
+    dependencies as vendored wheels and LightGBM needs a binary wheel plus libgomp; sklearn is
+    already there. Both optimise Poisson deviance, so the fallback is the same objective rather
+    than the log-space approximation this used to do — that version trained on log1p targets
+    and inverted, which is not the same estimator and quietly biases predictions low.
+
+    The backend is recorded on every run and in every report, so results are never compared
+    across backends by accident.
     """
 
     booster: object | None = None
@@ -110,6 +115,13 @@ class PoissonGBM:
 
     def fit(self, X: np.ndarray, y: np.ndarray, rounds: int = 400, seed: int = 7) -> "PoissonGBM":
         if len(X) < 40:
+            return self
+        # An all-zero target happens on a real panel: a stray record far outside the data's
+        # actual range stretches the timeline, and a training window can land entirely inside
+        # the empty stretch. A Poisson objective is undefined there — sklearn raises and
+        # LightGBM fits a degenerate model — so the honest response is to stay unfitted and let
+        # the caller fall back to a baseline.
+        if not np.any(np.asarray(y) > 0):
             return self
         if lgb is not None:
             ds = lgb.Dataset(X, label=y, free_raw_data=True)
@@ -132,20 +144,20 @@ class PoissonGBM:
             self.backend = "lightgbm-poisson"
         else:
             g = HistGradientBoostingRegressor(
-                max_depth=6, learning_rate=0.06, max_iter=350,
+                loss="poisson", max_depth=6, learning_rate=0.06, max_iter=350,
                 l2_regularization=1.0, min_samples_leaf=30, random_state=seed,
             )
-            g.fit(X, np.log1p(y))
+            # The Poisson loss requires non-negative targets; counts are, but a caller passing
+            # residuals would otherwise get an opaque sklearn error.
+            g.fit(X, np.maximum(0.0, y))
             self.booster = g
-            self.backend = "sklearn-histgb-log"
+            self.backend = "sklearn-histgb-poisson"
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         if self.booster is None:
             return np.zeros(len(X), dtype=np.float32)
-        if self.backend.startswith("lightgbm"):
-            return np.maximum(0.0, self.booster.predict(X)).astype(np.float32)
-        return np.maximum(0.0, np.expm1(self.booster.predict(X))).astype(np.float32)
+        return np.maximum(0.0, self.booster.predict(X)).astype(np.float32)
 
 
 @dataclass
@@ -165,7 +177,22 @@ class QuantileGBM:
 
     def fit(self, X: np.ndarray, y: np.ndarray, rounds: int = 250, seed: int = 7) -> "QuantileGBM":
         self.boosters = {}
-        if lgb is None or len(X) < 60:
+        if len(X) < 60 or not np.any(np.asarray(y) > 0):
+            return self
+        if lgb is None:
+            # sklearn's quantile loss, so the serving environment gets a real predictive
+            # distribution instead of silently dropping to point forecasts with no CQR. Fewer
+            # iterations than LightGBM because nine sequential sklearn fits are the slowest
+            # part of a refresh and the marginal accuracy past this is negligible.
+            for q in self.quantiles:
+                g = HistGradientBoostingRegressor(
+                    loss="quantile", quantile=q, max_depth=5, learning_rate=0.08,
+                    max_iter=150, l2_regularization=1.0, min_samples_leaf=40,
+                    random_state=seed,
+                )
+                g.fit(X, y)
+                self.boosters[q] = g
+            self.backend = "sklearn-histgb-quantile"
             return self
         for q in self.quantiles:
             ds = lgb.Dataset(X, label=y, free_raw_data=True)
