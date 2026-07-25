@@ -25,6 +25,11 @@ functions/api/catalyst-config.json
 datastore/seed/*.csv
 datastore/train/*.csv
 
+# Raw open-data inputs for build-geo.js (~57MB; refetch via datastore/fetch-geo.sh)
+datastore/raw/
+# Locality table derived from those inputs (9MB; generator-only, rebuilt by build-geo.js)
+datastore/ref/india_localities.json
+
 # ML pipeline (local training on GPU; large artifacts)
 ml/.venv/
 ml/data/
