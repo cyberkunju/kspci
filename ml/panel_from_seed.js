@@ -26,11 +26,25 @@ const SEED = path.join(__dirname, '..', 'datastore', 'seed', 'Cases.csv');
 const arg = (n, d) => { const i = process.argv.indexOf('--' + n); return i > -1 ? process.argv[i + 1] : d; };
 const has = (n) => process.argv.includes('--' + n);
 
-const LEVEL = arg('level', 'state');          // state | district
-const PERIOD = arg('period', 'month');        // month | week
+const LEVEL = arg('level', 'state');          // state | district | taluk | grid
+const PERIOD = arg('period', 'month');        // month | week | day
 const STATE = arg('state', null);
+const DISTRICT = arg('district', null);
 const OUT = arg('out', null);
 const HEAD = arg('head', null);               // optional: restrict to one CrimeHead group
+const GRID_M = Number(arg('grid-m', 1000));   // grid cell size in metres
+const MIN_TOTAL = Number(arg('min-total', 0));// drop units below this many events
+
+// Grid cells are the resolution at which a model can actually beat "patrol where crime
+// usually is". At district level the ranking problem is nearly solved by the long-run mean
+// — measured PAI@1% 8.146 for the model against 8.127 for that baseline — because district
+// shares barely move. Below the district, concentration is dynamic and there is real
+// spatial signal to capture.
+//
+// Cells are indexed on an equirectangular projection about the data's own mean latitude,
+// which is accurate enough for cell assignment over a region and avoids pulling in a
+// projection library.
+const M_PER_DEG_LAT = 110574;
 
 function splitCsv(line) {
   const out = [];
@@ -55,31 +69,50 @@ const weekIndexOf = (ms) => Math.floor((ms - WEEK_EPOCH) / (7 * 86400000));
 async function build() {
   const counts = new Map();          // unitKey -> Map(periodIndex -> n)
   const unitState = new Map();
+  const unitCentroid = new Map();    // unitKey -> {latSum, lngSum, n}
   let minP = Infinity, maxP = -Infinity, rows = 0, kept = 0;
 
   const rl = readline.createInterface({
     input: fs.createReadStream(SEED, { highWaterMark: 1 << 20 }), crlfDelay: Infinity,
   });
-  let cols = null, iState, iDist, iY, iM, iDate, iHead;
+  let cols = null, iState, iDist, iY, iM, iDate, iHead, iTaluk, iLat, iLng;
   for await (const line of rl) {
     if (!cols) {
       cols = splitCsv(line);
       iState = cols.indexOf('StateName'); iDist = cols.indexOf('DistrictName');
       iY = cols.indexOf('Year'); iM = cols.indexOf('CrimeMonth');
       iDate = cols.indexOf('CrimeRegisteredDate'); iHead = cols.indexOf('CrimeHead');
+      iTaluk = cols.indexOf('TalukName');
+      iLat = cols.indexOf('latitude'); iLng = cols.indexOf('longitude');
       continue;
     }
     if (!line) continue;
     rows++;
     const v = splitCsv(line);
     if (STATE && v[iState] !== STATE) continue;
+    if (DISTRICT && v[iDist] !== DISTRICT) continue;
     if (HEAD && v[iHead] !== HEAD) continue;
     kept++;
-    const key = LEVEL === 'district' ? `${v[iState]}|${v[iDist]}` : v[iState];
+    const lat = Number(v[iLat]), lng = Number(v[iLng]);
+    let key;
+    if (LEVEL === 'district') key = `${v[iState]}|${v[iDist]}`;
+    else if (LEVEL === 'taluk') key = `${v[iState]}|${v[iDist]}|${v[iTaluk]}`;
+    else if (LEVEL === 'grid') {
+      const degLat = GRID_M / M_PER_DEG_LAT;
+      const degLng = GRID_M / (M_PER_DEG_LAT * Math.cos(lat * Math.PI / 180) || 1);
+      key = `G${Math.floor(lat / degLat)}_${Math.floor(lng / degLng)}`;
+    } else key = v[iState];
     unitState.set(key, v[iState]);
-    const p = PERIOD === 'week'
-      ? weekIndexOf(Date.parse(v[iDate] + 'T00:00:00Z'))
-      : Number(v[iY]) * 12 + (Number(v[iM]) - 1);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      const c = unitCentroid.get(key) || { latSum: 0, lngSum: 0, n: 0 };
+      c.latSum += lat; c.lngSum += lng; c.n++;
+      unitCentroid.set(key, c);
+    }
+    const p = PERIOD === 'day'
+      ? Math.floor((Date.parse(v[iDate] + 'T00:00:00Z') - WEEK_EPOCH) / 86400000)
+      : PERIOD === 'week'
+        ? weekIndexOf(Date.parse(v[iDate] + 'T00:00:00Z'))
+        : Number(v[iY]) * 12 + (Number(v[iM]) - 1);
     if (p < minP) minP = p;
     if (p > maxP) maxP = p;
     if (!counts.has(key)) counts.set(key, new Map());
@@ -88,7 +121,15 @@ async function build() {
   }
 
   const T = maxP - minP + 1;
-  const units = [...counts.keys()].sort();
+  let units = [...counts.keys()].sort();
+  if (MIN_TOTAL > 0) {
+    // Grid panels have a long tail of cells holding one or two events over the whole
+    // window. They are unforecastable and their seasonal-naive error is near zero, which
+    // distorts MASE in both directions, so a floor is applied explicitly and reported.
+    const before = units.length;
+    units = units.filter((u) => [...counts.get(u).values()].reduce((a, b) => a + b, 0) >= MIN_TOTAL);
+    console.log(`  min-total=${MIN_TOTAL}: kept ${units.length} of ${before} units`);
+  }
   const series = {};
   for (const u of units) {
     const arr = new Array(T).fill(0);
@@ -100,7 +141,10 @@ async function build() {
   const timeline = [];
   for (let i = 0; i < T; i++) {
     const p = minP + i;
-    if (PERIOD === 'week') {
+    if (PERIOD === 'day') {
+      const d = new Date(WEEK_EPOCH + p * 86400000);
+      timeline.push({ year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, dow: d.getUTCDay(), idx: i, label: d.toISOString().slice(0, 10) });
+    } else if (PERIOD === 'week') {
       const d = new Date(WEEK_EPOCH + p * 7 * 86400000);
       timeline.push({ year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, week: p, idx: i, label: d.toISOString().slice(0, 10) });
     } else {
@@ -108,7 +152,7 @@ async function build() {
       timeline.push({ year: y, month: m, idx: i, label: `${y}-${String(m).padStart(2, '0')}` });
     }
   }
-  return { rows, kept, units, series, timeline, T, unitState };
+  return { rows, kept, units, series, timeline, T, unitState, unitCentroid };
 }
 
 (async () => {
@@ -137,7 +181,19 @@ async function build() {
     const popTotal = [...stAgg.values()].reduce((a, s) => a + s.pop, 0) || 1;
     const unitMeta = {};
     for (const u of p.units) {
-      if (LEVEL === 'district') {
+      if (LEVEL === 'grid' || LEVEL === 'taluk') {
+        // Sub-district units have no reference centroid, so it comes from the mean of the
+        // incidents themselves. Exposure is left at zero: there is no population figure
+        // below district level, and inventing one would put a fabricated feature into the
+        // model.
+        const c = p.unitCentroid.get(u);
+        unitMeta[u] = {
+          name: u, state: p.unitState.get(u) || null,
+          lat: c ? +(c.latSum / c.n).toFixed(5) : null,
+          lng: c ? +(c.lngSum / c.n).toFixed(5) : null,
+          pop: 0,
+        };
+      } else if (LEVEL === 'district') {
         const d = byDist.get(u);
         unitMeta[u] = d
           ? { name: d.district, state: d.state, lat: d.lat, lng: d.lng, pop: (Number(d.population) || 0) / popTotal }

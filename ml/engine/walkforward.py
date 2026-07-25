@@ -81,6 +81,7 @@ class Result:
     spatial: dict = field(default_factory=dict)
     conformal: dict = field(default_factory=dict)
     weights: dict = field(default_factory=dict)
+    achievability: dict = field(default_factory=dict)
     diagnostics: dict = field(default_factory=dict)
     runtime_s: float = 0.0
 
@@ -92,6 +93,13 @@ class Result:
             lines.append(
                 f"    {m:<22} MASE {v['mase']:.3f}  RMSSE {v['rmsse']:.3f}  "
                 f"MAE {v['mae']:.2f}  bias {v['bias']:+.2f}"
+            )
+        if self.achievability:
+            a = self.achievability
+            lines.append(
+                f"  achievability: Poisson noise floor MAE {a['poisson_floor_mae']} "
+                f"vs achieved {a['achieved_mae']} → efficiency {a['efficiency']} "
+                f"({a['headroom_pct']}% headroom remains); floor MASE {a['floor_mase']}"
             )
         if self.spatial:
             lines.append("  spatial (flagged-area budget → PAI / PEI / hit-rate):")
@@ -224,6 +232,7 @@ def evaluate(
             "weight": weights.get(m, 0.0),
         }
     ens_test = ensemble(sp.t_calib, T)
+    achieve = MT.achievability(ens_test, y_test, naive_test)
     point["ENSEMBLE"] = {
         "mase": round(MT.mase(ens_test, y_test, naive_test), 4),
         "rmsse": round(MT.rmsse(ens_test, y_test, naive_test), 4),
@@ -303,6 +312,7 @@ def evaluate(
         spatial=spatial,
         conformal=conformal,
         weights=weights,
+        achievability=achieve,
         diagnostics={
             "gbm_backend": gbm.backend if gbm else None,
             "quantile_backend": qgbm.backend if qgbm else None,

@@ -51,6 +51,19 @@ const arg = (name, dflt) => {
 const TARGET_CASES = parseInt(arg('cases', '1500000'), 10);
 const YEARS_SPAN = parseFloat(arg('years', '3'));
 const SEED = parseInt(arg('seed', '20260725'), 10);
+/**
+ * Events-only mode writes a single incident table and skips every person, arrest,
+ * transaction and offender-network record.
+ *
+ * This exists for the forecasting engine. Spatial skill needs sub-district resolution, and
+ * sub-district resolution needs real incident density: a 1 km national grid at 1.5M cases
+ * has a median of one event per cell, because India is five thousand times the area of
+ * Chicago. Reaching real national volume — around 27M cases over five years — would cost
+ * roughly 30 GB across the eight application tables, almost all of it person records the
+ * forecaster never reads. The incident table alone is under 2 GB.
+ */
+const EVENTS_ONLY = process.argv.includes('--events-only');
+const EVENTS_OUT = arg('events-out', path.join(TRAIN_DIR, 'events.csv'));
 
 // ---------------- seeded RNG ----------------
 let _s = SEED >>> 0;
@@ -660,6 +673,45 @@ for (const st of statesList) {
     rings.push({ ring: ringSeq, members, bursts, district: pick(stDistricts).district });
   }
   ringsByState[st] = rings;
+}
+
+// ---------------- events-only fast path ----------------
+if (EVENTS_ONLY) {
+  fs.mkdirSync(path.dirname(EVENTS_OUT), { recursive: true });
+  const w = csvWriter(path.dirname(EVENTS_OUT), path.basename(EVENTS_OUT).replace(/\.csv$/, ''),
+    ['date', 'state', 'district', 'taluk', 'locality', 'latitude', 'longitude',
+      'head', 'subhead', 'gravity', 'detected']);
+  const headTally = new Int32Array(HEADS.length);
+  const stTally = new Map();
+  for (let n = 0; n < evN; n++) {
+    const ev = order[n];
+    const d = DISTRICTS[evDi[ev]];
+    const h = HEADS[evHi[ev]];
+    const loc = d.locs[evLoc[ev]];
+    const cal = STATE_CAL.get(d.state);
+    const t = evT[ev];
+    const bb = d.bbox;
+    const detP = stateHeadWeights.get(d.state).detect[evHi[ev]];
+    w.write({
+      date: new Date(t).toISOString().slice(0, 10),
+      state: d.state, district: d.district, taluk: loc.taluk, locality: loc.name,
+      latitude: Math.min(bb[3], Math.max(bb[1], evLat[ev])).toFixed(5),
+      longitude: Math.min(bb[2], Math.max(bb[0], evLng[ev])).toFixed(5),
+      head: h.group, subhead: h.head, gravity: h.gravity,
+      detected: rand() < detP ? 1 : 0,
+    });
+    headTally[evHi[ev]]++;
+    stTally.set(d.state, (stTally.get(d.state) || 0) + 1);
+    if (n && n % 2000000 === 0) process.stdout.write(`\r  ${(n / 1e6).toFixed(0)}M events…   `);
+  }
+  process.stdout.write('\r');
+  console.log('\nWriting incident table (events-only mode):');
+  const nEv = w.close();
+  console.log(`  states=${stTally.size}  districts=${DISTRICTS.length}  heads used=${headTally.filter((c) => c > 0).length}/${HEADS.length}`);
+  console.log(`  window ${new Date(START).toISOString().slice(0, 10)} .. ${new Date(END).toISOString().slice(0, 10)}`);
+  console.log(`  ${nEv.toLocaleString('en-IN')} incidents -> ${EVENTS_OUT}`);
+  console.log('\nBuild panels with:  ml/.venv/bin/python ml/build_panels.py --help');
+  return;
 }
 
 // ---------------- investigating officers ----------------
