@@ -384,7 +384,13 @@ function forecastRoute(fn) {
     try {
       const engine = require('./lib/backtest');
       const adminApp = catalyst.initialize(req, { scope: 'admin' });
-      const data = await engine[fn](adminApp, { ...req.query });
+      // level=state|district and state=<name> mirror the hotspot map's drill-down, so
+      // the forecast is computed on units of comparable size.
+      const data = await engine[fn](adminApp, {
+        ...req.query,
+        level: req.query.level === 'district' ? 'district' : 'state',
+        state: req.query.state || null,
+      });
       res.json(data);
     } catch (e) {
       res.status(500).json({ error: fn + '_failed', message: String((e && e.message) || e) });

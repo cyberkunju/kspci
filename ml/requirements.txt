@@ -1,6 +1,14 @@
-numpy>=1.26
-pandas>=2.2
-scikit-learn>=1.4
+# Forecasting engine — offline training, evaluation and batch scoring.
+# Pinned to majors that ship wheels for Python 3.14 (verified on this environment).
+numpy>=2.3
+scipy>=1.18
+pandas>=3.0
+scikit-learn>=1.9
+lightgbm>=4.7          # gradient boosting with Poisson/Tweedie/quantile objectives
+pyarrow>=25.0          # columnar panel storage
+duckdb>=1.5            # out-of-core aggregation for multi-million-row real datasets
 requests>=2.31
-pyarrow>=15.0
-scipy>=1.12
+
+# Optional, for the neural bake-off in the final phase. CPU wheels; install with
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch
+# torch>=2.13

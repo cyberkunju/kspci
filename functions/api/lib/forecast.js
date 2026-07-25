@@ -27,13 +27,55 @@
 
 const { KARNATAKA_CENTROIDS } = require('./analytics');
 
-// ---- district population weights (NCRB-calibrated, mirror generator) ----
-const POP_WEIGHT = {
-  'Bengaluru City': 0.265, 'Bengaluru Rural': 0.045, 'Mysuru': 0.085, 'Mangaluru (DK)': 0.052,
-  'Hubballi-Dharwad': 0.06, 'Belagavi': 0.07, 'Kalaburagi': 0.06, 'Ballari': 0.05,
-  'Vijayapura': 0.04, 'Shivamogga': 0.042, 'Tumakuru': 0.05, 'Davanagere': 0.038,
-  'Udupi': 0.03, 'Hassan': 0.04, 'Raichur': 0.038
+// ---- unit metadata: population weight and centroid per forecast unit ----
+// Population is a model feature, and it used to be a hardcoded 15-entry Karnataka
+// table. With all-India coverage every one of 640 districts fell through to the same
+// default, so the feature was a constant and contributed nothing. It is now read from
+// the real district reference.
+//
+// Unit keys are state-qualified ('Karnataka|Bangalore'). Six district names exist in
+// two states each, so keying on the bare name merged two real districts into one
+// series.
+let DISTRICT_REF = [];
+try { DISTRICT_REF = require('../ref/india_districts.json'); } catch (_) { DISTRICT_REF = []; }
+
+const unitKey = (state, district) => `${state || ''}|${district || ''}`;
+const UNIT_META = new Map();
+const STATE_META = new Map();
+{
+  const nameCount = new Map();
+  for (const d of DISTRICT_REF) nameCount.set(d.district, (nameCount.get(d.district) || 0) + 1);
+  let popTotal = 0;
+  for (const d of DISTRICT_REF) popTotal += Number(d.population) || 0;
+  for (const d of DISTRICT_REF) {
+    const pop = Number(d.population) || 0;
+    UNIT_META.set(unitKey(d.state, d.district), {
+      name: nameCount.get(d.district) > 1 ? `${d.district} (${d.state})` : d.district,
+      district: d.district, state: d.state, lat: d.lat, lng: d.lng,
+      // Share of national population, on the same scale as the old Karnataka weights.
+      pop: popTotal ? pop / popTotal : 0,
+    });
+    const s = STATE_META.get(d.state) || { pop: 0, lat: 0, lng: 0, w: 0 };
+    s.pop += pop; s.lat += d.lat * (pop || 1); s.lng += d.lng * (pop || 1); s.w += (pop || 1);
+    STATE_META.set(d.state, s);
+  }
+  for (const [st, s] of STATE_META) {
+    STATE_META.set(st, {
+      name: st, state: st, district: null,
+      lat: +(s.lat / s.w).toFixed(5), lng: +(s.lng / s.w).toFixed(5),
+      pop: popTotal ? s.pop / popTotal : 0,
+    });
+  }
+}
+/** Population weight for a unit key, with a small non-zero floor so the feature is defined. */
+const popOf = (key) => {
+  const m = UNIT_META.get(key) || STATE_META.get(key);
+  return m ? Math.max(m.pop, 1e-5) : 1e-4;
 };
+const metaOf = (key) => UNIT_META.get(key) || STATE_META.get(key) || null;
+
+// Kept for backward compatibility with call sites that index a plain object by name.
+const POP_WEIGHT = Object.fromEntries([...UNIT_META.values()].map((m) => [m.district, m.pop]));
 
 // =================== small math ===================
 const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
@@ -72,26 +114,48 @@ const countOf = (r) => Number(r['COUNT(ROWID)'] ?? r.cnt ?? r.count ?? 0);
  * Returns { districts, timeline:[{year,month,label,idx}], series:{district:[counts]}, headByMonth }
  */
 // ZCQL caps LIMIT at 300 — page through grouped results with LIMIT offset,count.
-async function pagedQuery(app, base) {
+//
+// The page cap matters. A national district x month panel is ~22,100 groups; the old
+// 60-page ceiling stopped at 18,000 and silently returned a truncated panel, so a fifth
+// of the districts came back with partial or all-zero series and no error was raised.
+// The cap is now high enough for the largest panel we build, and truncation is reported
+// rather than hidden.
+async function pagedQuery(app, base, maxPages = 200) {
   const out = []; let offset = 0; const PAGE = 300;
-  for (let i = 0; i < 60; i++) {
+  let truncated = true;
+  for (let i = 0; i < maxPages; i++) {
     const res = await app.zcql().executeZCQLQuery(`${base} LIMIT ${offset}, ${PAGE}`);
     const batch = (res || []).map(flatten);
     out.push(...batch);
-    if (batch.length < PAGE) break;
+    if (batch.length < PAGE) { truncated = false; break; }
     offset += PAGE;
   }
+  out.truncated = truncated;
   return out;
 }
 
-async function fetchPanel(app) {
+/**
+ * Build a dense unit x month panel.
+ *
+ * Two levels, mirroring the hotspot map. State is the default: pooling 640 districts
+ * that span two to twenty-two thousand cases breaks the assumptions both the shared
+ * gradient-boosted model and the conformal interval rest on — one absolute residual
+ * quantile cannot describe a metro and a Himalayan district at the same time. District
+ * level is used when scoped to a single state, where the units are comparable.
+ */
+async function fetchPanel(app, { level = 'state', state = null } = {}) {
+  const scoped = state ? String(state).replace(/'/g, "''") : null;
+  const byDistrict = level === 'district' || !!scoped;
+  const where = scoped ? `WHERE StateName='${scoped}'` : '';
+  const groupCols = byDistrict ? 'StateName, DistrictName' : 'StateName';
   const rows = await pagedQuery(app,
-    'SELECT DistrictName, Year, CrimeMonth, COUNT(ROWID) FROM Cases GROUP BY DistrictName, Year, CrimeMonth ORDER BY Year, CrimeMonth');
+    `SELECT ${groupCols}, Year, CrimeMonth, COUNT(ROWID) FROM Cases ${where} GROUP BY ${groupCols}, Year, CrimeMonth ORDER BY Year, CrimeMonth`);
+  const panelTruncated = !!rows.truncated;
   // crime-head split (for narrative + per-head early warning)
   let headRows = [];
   try {
     headRows = await pagedQuery(app,
-      'SELECT CrimeHead, Year, CrimeMonth, COUNT(ROWID) FROM Cases GROUP BY CrimeHead, Year, CrimeMonth ORDER BY Year, CrimeMonth');
+      `SELECT CrimeHead, Year, CrimeMonth, COUNT(ROWID) FROM Cases ${where} GROUP BY CrimeHead, Year, CrimeMonth ORDER BY Year, CrimeMonth`);
   } catch (_) { /* optional */ }
 
   const ymKey = (y, m) => y * 100 + m;
@@ -101,7 +165,9 @@ async function fetchPanel(app) {
     if (!y || !m) continue;
     minYM = Math.min(minYM, ymKey(y, m)); maxYM = Math.max(maxYM, ymKey(y, m));
   }
-  if (!isFinite(minYM)) return { districts: [], timeline: [], series: {}, headSeries: {}, headByMonth: [] };
+  if (!isFinite(minYM)) {
+    return { districts: [], timeline: [], series: {}, headSeries: {}, headByMonth: [], meta: {}, level, state: scoped };
+  }
 
   // build contiguous month timeline
   const timeline = [];
@@ -116,13 +182,23 @@ async function fetchPanel(app) {
   }
   const T = timeline.length;
 
-  const districts = [...new Set(rows.map((r) => r.DistrictName).filter(Boolean))];
+  // Unit keys are state-qualified at district level so the six shared district names
+  // stay separate series.
+  const keyOf = (r) => (byDistrict ? unitKey(r.StateName, r.DistrictName) : r.StateName);
+  const districts = [...new Set(rows.map(keyOf).filter((k) => k && k !== '|'))];
   const series = {};
   for (const d of districts) series[d] = new Array(T).fill(0);
   for (const r of rows) {
     const ti = timeIndex[ymKey(Number(r.Year), Number(r.CrimeMonth))];
-    if (ti == null || !series[r.DistrictName]) continue;
-    series[r.DistrictName][ti] = countOf(r);
+    const k = keyOf(r);
+    if (ti == null || !series[k]) continue;
+    series[k][ti] = countOf(r);
+  }
+  // Display name / centroid / population per unit, resolved once.
+  const meta = {};
+  for (const k of districts) {
+    const m = metaOf(k);
+    meta[k] = m || { name: byDistrict ? k.split('|')[1] || k : k, state: k.split('|')[0], district: byDistrict ? k.split('|')[1] : null, lat: null, lng: null, pop: 1e-4 };
   }
 
   // per-head statewide monthly series
@@ -134,7 +210,10 @@ async function fetchPanel(app) {
     if (ti == null || !headSeries[r.CrimeHead]) continue;
     headSeries[r.CrimeHead][ti] = countOf(r);
   }
-  return { districts, timeline, series, headSeries };
+  return {
+    districts, timeline, series, headSeries, meta,
+    level: byDistrict ? 'district' : 'state', state: scoped, truncated: panelTruncated,
+  };
 }
 
 // =================== seasonal index (multiplicative) ===================
@@ -259,27 +338,80 @@ function trainGBM(X, y, opts = {}) {
     predict(x) { let p = base; for (const t of trees) p += lr * treePredict(t, x); return Math.max(0, p); }
   };
 }
-// feature vector for district series at time t (predict count at t using info < t)
+/**
+ * Feature vector for a unit's series at time t, predicting the count at t from data
+ * strictly before t.
+ *
+ * Counts are log1p-transformed. The model is pooled across units, and on raw counts a
+ * panel spanning single-digit to four-digit monthly volumes is dominated entirely by
+ * the largest units — the loss is quadratic in absolute error, so a 5% miss on a metro
+ * outweighs a 100% miss everywhere else. In log space the model learns proportional
+ * behaviour, which is what actually generalises across units.
+ */
+const l1p = Math.log1p;
 function featAt(series, timeline, t, pop) {
-  const lag = (k) => (t - k >= 0 ? series[t - k] : 0);
-  const roll = (k) => { let s = 0, c = 0; for (let j = 1; j <= k && t - j >= 0; j++) { s += series[t - j]; c++; } return c ? s / c : 0; };
+  const lag = (k) => l1p(t - k >= 0 ? series[t - k] : 0);
+  const roll = (k) => {
+    let s = 0, c = 0;
+    for (let j = 1; j <= k && t - j >= 0; j++) { s += series[t - j]; c++; }
+    return l1p(c ? s / c : 0);
+  };
   const mo = timeline[t] ? timeline[t].month : 1;
+  // Recent direction, in log space, so momentum is scale-free.
+  const trend = roll(3) - roll(6);
   return [lag(1), lag(2), lag(3), lag(12), roll(3), roll(6),
-    Math.sin(2 * Math.PI * mo / 12), Math.cos(2 * Math.PI * mo / 12), pop];
+    Math.sin(2 * Math.PI * mo / 12), Math.cos(2 * Math.PI * mo / 12), l1p(pop * 1e4), trend];
 }
-// Assemble a pooled training set across all districts (leak-free: features use only past).
+/** Assemble a pooled training set across all units (leak-free: features use only past). */
 function buildGBMDataset(series, timeline, districts, upto) {
   const X = [], y = [];
   const T = upto == null ? timeline.length : upto;
   for (const d of districts) {
-    const s = series[d]; const pop = POP_WEIGHT[d] || 0.04;
-    for (let t = 4; t < T; t++) { X.push(featAt(s, timeline, t, pop)); y.push(s[t]); }
+    const s = series[d]; const pop = popOf(d);
+    for (let t = 4; t < T; t++) { X.push(featAt(s, timeline, t, pop)); y.push(l1p(s[t])); }
   }
-  return { X, y };
+  return { X, y, log: true };
+}
+/** GBM prediction converted back to a count. */
+function gbmCount(gbm, series, timeline, t, pop) {
+  if (!gbm) return null;
+  return Math.max(0, Math.expm1(gbm.predict(featAt(series, timeline, t, pop))));
+}
+
+/**
+ * Conformal quantiles computed per unit-size stratum rather than once for the whole
+ * panel. A single absolute residual quantile applied to every unit produces intervals
+ * that are far too narrow for high-volume units and absurd for low-volume ones — an
+ * interval of plus or minus forty on a district that averages half a case a month. The
+ * aggregate coverage number still looks correct while being wrong almost everywhere,
+ * which is the worst kind of wrong.
+ */
+function stratifiedConformal(residualsByUnit, levelOf, quantileLevel = 0.9) {
+  const byStratum = new Map();
+  for (const [unit, res] of Object.entries(residualsByUnit)) {
+    const s = levelOf(unit);
+    if (!byStratum.has(s)) byStratum.set(s, []);
+    byStratum.get(s).push(...res);
+  }
+  const q = {};
+  for (const [s, res] of byStratum) {
+    const n = res.length || 1;
+    q[s] = quantile(res, Math.min(1, Math.ceil((n + 1) * quantileLevel) / n));
+  }
+  return q;
+}
+/** Size bands used for stratification: order-of-magnitude of the unit's mean volume. */
+function sizeBand(meanVolume) {
+  if (meanVolume < 3) return 'xs';
+  if (meanVolume < 15) return 's';
+  if (meanVolume < 60) return 'm';
+  if (meanVolume < 250) return 'l';
+  return 'xl';
 }
 
 module.exports = {
   fetchPanel, seasonalIndex, mSeasonalTrend, mHolt, mHawkes,
-  trainGBM, buildGBMDataset, featAt, quantile, mean, sum, linreg,
+  trainGBM, buildGBMDataset, featAt, gbmCount, quantile, mean, sum, linreg,
+  stratifiedConformal, sizeBand, popOf, metaOf, unitKey, UNIT_META, STATE_META,
   POP_WEIGHT, KARNATAKA_CENTROIDS
 };

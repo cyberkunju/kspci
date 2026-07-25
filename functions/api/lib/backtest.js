@@ -46,7 +46,7 @@ const SERVICE_URL = process.env.FORECAST_SERVICE_URL || '';
 
 async function forecastViaService(panel) {
   if (!SERVICE_URL) return null;
-  const { series, timeline } = panel;
+  const { series, timeline, meta = {} } = panel;
   const nt = nextTimeMonth(timeline);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), Number(process.env.FORECAST_SVC_TIMEOUT_MS || 25000));
@@ -68,8 +68,9 @@ async function forecastViaService(panel) {
     const sigma = std(s.slice(-12)) || 1;
     const baseline = f.baseline != null ? f.baseline : F.mean(s.slice(-12));
     return {
-      district: f.unit,
-      lat: (F.KARNATAKA_CENTROIDS[f.unit] || [])[0], lng: (F.KARNATAKA_CENTROIDS[f.unit] || [])[1],
+      district: (panel.meta[f.unit] || {}).name || f.unit,
+      unit: f.unit, state: (panel.meta[f.unit] || {}).state || null,
+      lat: (panel.meta[f.unit] || {}).lat, lng: (panel.meta[f.unit] || {}).lng,
       predicted: round(f.predicted, 1), low: round(Math.max(0, f.low), 1), high: round(f.high, 1),
       baseline: round(baseline, 1), lastMonth: s[T - 1] != null ? s[T - 1] : (f.last || 0),
       trendPct: round(f.trendPct, 0), z: round((f.predicted - baseline) / sigma, 2), models: {}
@@ -102,12 +103,12 @@ function nextTimeMonth(timeline) {
 function modelPreds(series, timeline, d, t, gbm) {
   const hist = series[d].slice(0, t);
   const nextMonth = timeline[t] ? timeline[t].month : nextTimeMonth(timeline).month;
-  const pop = F.POP_WEIGHT[d] || 0.04;
+  const g = F.gbmCount(gbm, series[d], timeline, t, F.popOf(d));
   return {
     seasonalTrend: F.mSeasonalTrend(hist, timeline, nextMonth),
     holt: F.mHolt(hist),
     hawkes: F.mHawkes(hist),
-    gbm: gbm ? gbm.predict(F.featAt(series[d], timeline, t, pop)) : F.mean(hist)
+    gbm: g == null ? F.mean(hist) : g
   };
 }
 
@@ -171,15 +172,31 @@ function runBacktest(panel, opts = {}) {
   MODEL_KEYS.forEach((k) => { inv[k] = 1 / (fitMae[k] + 0.5); invSum += inv[k]; });
   const weights = {}; MODEL_KEYS.forEach((k) => (weights[k] = inv[k] / invSum));
 
-  // Conformal q from fit-window ensemble residuals (finite-sample corrected).
+  // Conformal quantiles from fit-window ensemble residuals (finite-sample corrected),
+  // computed per unit-size band as well as globally. The per-band quantile is what the
+  // interval actually uses; the global one is retained for reporting continuity.
   const fitResid = [];
+  const residByUnit = {};
+  const bandOf = {};
+  for (const d of districts) {
+    bandOf[d] = F.sizeBand(F.mean(series[d].slice(0, t0)) || 0);
+    residByUnit[d] = [];
+  }
   for (const o of fitOrigins) for (const d of districts) {
     const { preds, actual } = o.byDistrict[d];
-    fitResid.push(Math.abs(MODEL_KEYS.reduce((s, k) => s + weights[k] * preds[k], 0) - actual));
+    const r = Math.abs(MODEL_KEYS.reduce((s, k) => s + weights[k] * preds[k], 0) - actual);
+    fitResid.push(r);
+    residByUnit[d].push(r);
   }
   const nfit = fitResid.length || 1;
   const q90 = round(F.quantile(fitResid, Math.min(1, Math.ceil((nfit + 1) * 0.9) / nfit)), 2);
-  const conformal = { q80: round(F.quantile(fitResid, 0.8), 2), q90, q95: round(F.quantile(fitResid, 0.95), 2) };
+  const qBand = F.stratifiedConformal(residByUnit, (u) => bandOf[u], 0.9);
+  const qFor = (d) => (qBand[bandOf[d]] != null ? qBand[bandOf[d]] : q90);
+  const conformal = {
+    q80: round(F.quantile(fitResid, 0.8), 2), q90, q95: round(F.quantile(fitResid, 0.95), 2),
+    byBand: Object.fromEntries(Object.entries(qBand).map(([k, v]) => [k, round(v, 2)])),
+    method: 'split-conformal, stratified by unit volume band',
+  };
 
   // Measure everything on the held-out eval origins.
   const absErr = { seasonalTrend: [], holt: [], hawkes: [], gbm: [], seasonalNaive: [] };
@@ -210,8 +227,9 @@ function runBacktest(panel, opts = {}) {
       naiveMaeSum += Math.abs(snaive - actual); naiveMaeN++;
       ensAbs.push(Math.abs(e - actual));
       if (actual > 0) ensPct.push(Math.abs(e - actual) / actual);
-      // 90% conformal interval coverage on held-out data
-      if (actual >= Math.max(0, e - q90) && actual <= e + q90) covHit++;
+      // 90% conformal interval coverage on held-out data, using the band-specific width
+      const qd = qFor(d);
+      if (actual >= Math.max(0, e - qd) && actual <= e + qd) covHit++;
       covN++;
       swActual += actual; swPred += e;
       ranked.push({ d, pred: e, actual });
@@ -276,8 +294,8 @@ function runBacktest(panel, opts = {}) {
 
 // =================== high-level orchestrators (used by API) ===================
 
-async function computeForecast(app) {
-  const panel = await F.fetchPanel(app);
+async function computeForecast(app, { level, state } = {}) {
+  const panel = await F.fetchPanel(app, { level, state });
   if (!panel.districts.length) return { error: 'no_data' };
   // Prefer the Catalyst AppSail-hosted Python ML model; fall back to the in-function engine.
   try {
@@ -285,11 +303,13 @@ async function computeForecast(app) {
     if (svc) return svc;
   } catch (_) { /* fall through to local engine */ }
   const bt = runBacktest(panel);
-  const { series, timeline, districts } = panel;
+  const { series, timeline, districts, meta } = panel;
   const nt = nextTimeMonth(timeline);
   const gbm = bt.gbm || null;
-  const q90 = (bt.conformal && bt.conformal.q90) || 0;
   const weights = bt.weights || { seasonalTrend: 0.25, holt: 0.25, hawkes: 0.25, gbm: 0.25 };
+  // Interval width comes from the unit's own volume band, not one number for the panel.
+  const qBand = (bt.conformal && bt.conformal.byBand) || {};
+  const qGlobal = (bt.conformal && bt.conformal.q90) || 0;
 
   const T = timeline.length;
   const forecasts = districts.map((d) => {
@@ -299,11 +319,15 @@ async function computeForecast(app) {
     const baseline = F.mean(recent);
     const sigma = std(recent) || 1;
     const z = (point - baseline) / sigma;
+    const band = F.sizeBand(F.mean(series[d]) || 0);
+    const q = qBand[band] != null ? qBand[band] : qGlobal;
+    const m = meta[d] || {};
     return {
-      district: d,
-      lat: (F.KARNATAKA_CENTROIDS[d] || [])[0], lng: (F.KARNATAKA_CENTROIDS[d] || [])[1],
+      district: m.name || d, unit: d, state: m.state || null,
+      lat: m.lat, lng: m.lng,
       predicted: round(point, 1),
-      low: Math.max(0, round(point - q90, 1)), high: round(point + q90, 1),
+      low: Math.max(0, round(point - q, 1)), high: round(point + q, 1),
+      band,
       baseline: round(baseline, 1), lastMonth: series[d][T - 1] || 0,
       trendPct: baseline > 0 ? round(((point - baseline) / baseline) * 100, 0) : 0,
       z: round(z, 2),
@@ -313,6 +337,8 @@ async function computeForecast(app) {
 
   return {
     horizon: nt.label, generatedAt: new Date().toISOString(),
+    level: panel.level, state: panel.state, units: districts.length,
+    panelTruncated: panel.truncated || false,
     weights: Object.fromEntries(MODEL_KEYS.map((k) => [k, round(weights[k], 3)])),
     conformal: bt.conformal, accuracy: bt.perModel && bt.perModel.ensemble,
     coverageTarget: 90, forecasts,
@@ -320,8 +346,8 @@ async function computeForecast(app) {
   };
 }
 
-async function computeEarlyWarning(app) {
-  const fc = await computeForecast(app);
+async function computeEarlyWarning(app, { level, state } = {}) {
+  const fc = await computeForecast(app, { level, state });
   if (fc.error) return fc;
   // Expectation-based flags: forecast exceeds baseline by control-chart threshold.
   const alerts = fc.forecasts.map((f) => {
@@ -340,8 +366,8 @@ async function computeEarlyWarning(app) {
   };
 }
 
-async function computeBacktest(app) {
-  const panel = await F.fetchPanel(app);
+async function computeBacktest(app, { level, state } = {}) {
+  const panel = await F.fetchPanel(app, { level, state });
   if (!panel.districts.length) return { error: 'no_data' };
   const bt = runBacktest(panel);
   if (bt.insufficient) return { error: 'insufficient_history', T: bt.T };
