@@ -20,10 +20,13 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
  *   isolates the ego-network. Search focuses a specific person.
  * - Money view animates directional particles to convey flow.
  */
-export default function NetworkGraph({ data, kind = 'crime', height = 520, onSelect }) {
+export default function NetworkGraph({ data, kind = 'crime', height, onSelect }) {
   const wrapRef = useRef(null);
   const fgRef = useRef(null);
   const [width, setWidth] = useState(800);
+  // Responsive canvas height: shorter on phones so the graph plus its controls
+  // fit the viewport without endless scrolling, taller on desktop for detail.
+  const graphHeight = height ?? (width < 560 ? 360 : width < 900 ? 440 : 520);
   const [selected, setSelected] = useState(null);
   const [hoverNode, setHoverNode] = useState(null);
   const [tip, setTip] = useState(null);
@@ -62,11 +65,16 @@ export default function NetworkGraph({ data, kind = 'crime', height = 520, onSel
     return { hlNodes: hn, hlLinks: hl };
   }, [focus]);
 
-  // Track container width for a crisp, responsive canvas.
+  // Measure the PARENT, not our own wrapper: the canvas sets an explicit width
+  // on the wrapper, so observing the wrapper would feed its own size back in and
+  // latch at the initial default (leaving the graph clipped on small screens).
   useEffect(() => {
-    if (!wrapRef.current) return;
-    const ro = new ResizeObserver(([e]) => setWidth(Math.max(320, e.contentRect.width)));
-    ro.observe(wrapRef.current);
+    const host = wrapRef.current?.parentElement;
+    if (!host) return;
+    const apply = () => setWidth(Math.max(280, Math.floor(host.clientWidth)));
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(host);
     return () => ro.disconnect();
   }, []);
 
@@ -141,17 +149,20 @@ export default function NetworkGraph({ data, kind = 'crime', height = 520, onSel
 
   if (!data || !data.nodes?.length) return <div className="viz-empty">No network data to display.</div>;
 
+  // Keep the legend to a single row: fewer ring swatches on narrow screens so it
+  // never stacks over the graph itself.
+  const maxLegend = width < 560 ? 3 : 6;
   const legend = kind === 'money'
     ? [{ c: moneyColor(1), t: 'Accused' }, { c: moneyColor(2), t: 'Counterparty' }]
-    : (data.rings || []).slice(0, 6).map((r) => ({ c: ringColor(r.ring), t: `Ring ${r.ring}` }));
+    : (data.rings || []).slice(0, maxLegend).map((r) => ({ c: ringColor(r.ring), t: `Ring ${r.ring}` }));
   const selNeighbors = selected ? (selected.neighbors?.length || 0) : 0;
 
   return (
-    <div className="ng-wrap" ref={wrapRef} style={{ height }}>
+    <div className="ng-wrap" ref={wrapRef} style={{ height: graphHeight }}>
       <ForceGraph2D
         ref={fgRef}
         width={width}
-        height={height}
+        height={graphHeight}
         graphData={graphData}
         backgroundColor={CANVAS_BG}
         nodeRelSize={5}
@@ -185,8 +196,8 @@ export default function NetworkGraph({ data, kind = 'crime', height = 520, onSel
             aria-label="Search the network"
           />
         </form>
-        <button type="button" className="ng-fit" onClick={fit} aria-label="Fit graph to view">
-          <Scan size={15} /> Fit
+        <button type="button" className="ng-fit" onClick={fit} aria-label="Fit graph to view" title="Fit to view">
+          <Scan size={15} /><span>Fit</span>
         </button>
       </div>
 

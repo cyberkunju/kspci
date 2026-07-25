@@ -79,9 +79,9 @@ export function VizCard({ title, action, note, children, full }) {
     <Card padding={4} className={full ? 'grid-full' : undefined}>
       <Stack gap={3} height="100%">
         {(title || action) && (
-          <Stack direction="horizontal" vAlign="center" gap={2}>
+          <Stack direction="horizontal" vAlign="center" gap={2} wrap="wrap" className="viz-head">
             {title && <Heading level={5}>{title}</Heading>}
-            {action && <div className="push-right">{action}</div>}
+            {action && <div className="push-right viz-head-action">{action}</div>}
           </Stack>
         )}
         {children}
