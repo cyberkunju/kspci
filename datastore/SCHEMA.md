@@ -24,6 +24,8 @@ Every table also has the automatic `ROWID`, `CREATEDTIME`, `MODIFIEDTIME` column
 | IncidentDate | Text |
 | **StateName** | **Text** — *added for all-India coverage; group by this for national comparisons* |
 | DistrictName | Text |
+| **TalukName** | **Text** — *real taluk/tehsil from the postal directory; the sub-district level* |
+| **LocalityName** | **Text** — *real locality (village, town or urban locality) where the offence occurred* |
 | StationName | Text |
 | latitude | Decimal |
 | longitude | Decimal |
@@ -44,7 +46,9 @@ CaseMasterID(BigInt), AccusedMasterID(BigInt), CrimeNo(Text), AccusedName(Text),
 AgeYear(Int), Gender(Text), PersonID(Text), RingID(Int), DistrictName(Text), CrimeSubHead(Text)
 
 ### 3. Victims
-VictimMasterID(BigInt), CaseMasterID(BigInt), VictimName(Text), AgeYear(Int), Gender(Text)
+VictimMasterID(BigInt), CaseMasterID(BigInt), VictimName(Text), AgeYear(Int), Gender(Text),
+**Caste(Text)**, **Religion(Text)**  — *added: drawn from the district's census composition, so
+victim-profile analysis is demographically grounded rather than uniform*
 
 ### 4. Complainants
 ComplainantID(BigInt), CaseMasterID(BigInt), ComplainantName(Text), AgeYear(Int),

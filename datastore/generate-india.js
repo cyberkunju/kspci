@@ -3,29 +3,35 @@
 /**
  * All-India crime-data generator — NCRB-calibrated ETAS/Hawkes simulation.
  *
- * Geography  : 528 real Indian cities (>=1 lakh population) aggregated into ~416
- *              districts across 35 states/UTs, with real coordinates and
- *              population-weighted centroids.  (datastore/ref/india_cities.json)
- * Calibration: NCRB "Crime in India" 2023 per state/UT — crime rate per lakh,
- *              chargesheet rate, conviction rate, violent-crime rate, and
- *              murder/rape/kidnapping/extortion/robbery rates.
- *              (datastore/ref/ncrb_states_2023.json)
+ * Geography  : all 640 Census 2011 districts across 36 states/UTs, each with real
+ *              boundaries, real demography, and ~154,800 real localities grouped
+ *              into 9,700 taluks. Built by build-geo.js.
+ * Taxonomy   : 186 real NCRB crime heads in 16 operational groups, weighted by
+ *              published 2022 all-India case counts (ncrb_crime_heads_2022.json).
+ * Volume     : each state's case total is anchored on its real NCRB 2023 count,
+ *              then split across districts by population and urban share.
+ * Outcomes   : chargesheet and conviction follow each state's real 2023 rates.
+ * Demography : complainant and victim caste, religion, occupation and age are
+ *              drawn from that district's actual census distributions.
  *
- * Why this produces *realistic variance* rather than uniform noise:
- *   - Volume per district = state crime rate x district population (so Kerala and
- *     Delhi are dense, Nagaland and Sikkim are sparse — a ~19x real spread).
- *   - Severity mix per state is driven by that state's real violent/murder/rape
- *     rates, so the heinous share differs genuinely by region.
- *   - Case outcomes (chargesheeted / convicted / acquitted / pending) follow each
- *     state's real chargesheet and conviction rates.
- *   - Crime is generated as a self-exciting spatio-temporal point process, giving
- *     near-repeat clustering, seasonality, weekly cycles and organized-crime rings.
+ * Why the output has realistic variance rather than uniform noise:
+ *   - State volumes are real, so Kerala and Delhi are dense while Nagaland and
+ *     Sikkim are sparse, across a ~19x spread that matches reality.
+ *   - Head mix is tilted per state by that state's real murder, rape, kidnapping,
+ *     extortion and robbery rates, so the severity profile differs by region.
+ *   - Offences that only exist in some states (the Prohibition Act) are generated
+ *     only there.
+ *   - Incidents land on real localities inside real district boundaries, and the
+ *     police station follows the locality's taluk.
+ *   - Crime is a self-exciting spatio-temporal point process, producing
+ *     near-repeat clustering, seasonality, weekly cycles and organised rings.
  *
  * Usage:
- *   node datastore/generate-india.js --cases 200000            # target case volume
- *   node datastore/generate-india.js --cases 50000 --years 3
+ *   node datastore/generate-india.js --cases 1500000
+ *   node datastore/generate-india.js --cases 200000 --years 3
  *
- * Outputs CSVs to datastore/seed/ (app tables) and datastore/train/ (model data).
+ * Rows are streamed to disk as they are built, so output size is not bounded by
+ * memory. See the scale note printed at the end for the Data Store ceiling.
  */
 
 const fs = require('fs');
@@ -42,7 +48,7 @@ const arg = (name, dflt) => {
   const i = process.argv.indexOf('--' + name);
   return i > -1 ? process.argv[i + 1] : dflt;
 };
-const TARGET_CASES = parseInt(arg('cases', '200000'), 10);
+const TARGET_CASES = parseInt(arg('cases', '1500000'), 10);
 const YEARS_SPAN = parseFloat(arg('years', '3'));
 const SEED = parseInt(arg('seed', '20260725'), 10);
 
@@ -63,98 +69,111 @@ function poisson(lambda) {
   do { k++; p *= rand(); } while (p > L);
   return k - 1;
 }
-function weightedIndex(weights) {
-  const tot = weights.reduce((a, b) => a + b, 0);
-  let r = rand() * tot;
+/** Draw an index from unnormalised weights. */
+function weightedIndex(weights, total) {
+  let r = rand() * (total === undefined ? weights.reduce((a, b) => a + b, 0) : total);
   for (let i = 0; i < weights.length; i++) { r -= weights[i]; if (r <= 0) return i; }
   return weights.length - 1;
 }
-
-// ---------------- geography: cities -> districts ----------------
-const cities = JSON.parse(fs.readFileSync(path.join(REF_DIR, 'india_cities.json'), 'utf8'));
-const ncrb = JSON.parse(fs.readFileSync(path.join(REF_DIR, 'ncrb_states_2023.json'), 'utf8'));
-const STATE_CAL = new Map(ncrb.states.map((s) => [s.state, s]));
-
-const distMap = new Map();
-for (const c of cities) {
-  const state = c.state;
-  const district = c.district || c.city;
-  const key = state + '||' + district;
-  const pop = Number(c.population) || 0;
-  const d = distMap.get(key) || { state, district, pop: 0, lat: 0, lng: 0, cities: [] };
-  d.pop += pop;
-  d.lat += (Number(c.latitude) || 0) * pop;
-  d.lng += (Number(c.longitude) || 0) * pop;
-  d.cities.push(c.city);
-  distMap.set(key, d);
+/** Draw a key from a {key: share} map. Shares need not sum to 1. */
+function weightedKey(dist) {
+  const keys = Object.keys(dist);
+  let tot = 0;
+  for (const k of keys) tot += dist[k];
+  let r = rand() * tot;
+  for (const k of keys) { r -= dist[k]; if (r <= 0) return k; }
+  return keys[keys.length - 1];
 }
-const DISTRICTS = [...distMap.values()]
-  .filter((d) => d.pop > 0 && STATE_CAL.has(d.state))
-  .map((d) => ({
-    state: d.state,
-    district: d.district,
-    pop: d.pop,
-    lat: +(d.lat / d.pop).toFixed(5),
-    lng: +(d.lng / d.pop).toFixed(5),
-    // Urban spread: bigger metros scatter incidents over a wider area.
-    spread: +(0.035 + Math.min(0.09, Math.log10(Math.max(d.pop, 1e5)) * 0.012)).toFixed(4),
-    cities: d.cities,
-  }));
 
-// Expected registered-crime intensity per district (relative), from real state rate.
-DISTRICTS.forEach((d) => {
+// ---------------- reference data ----------------
+const ncrb = JSON.parse(fs.readFileSync(path.join(REF_DIR, 'ncrb_states_2023.json'), 'utf8'));
+const tax = JSON.parse(fs.readFileSync(path.join(REF_DIR, 'ncrb_crime_heads_2022.json'), 'utf8'));
+const districtRef = JSON.parse(fs.readFileSync(path.join(REF_DIR, 'india_districts_full.json'), 'utf8'));
+const localityPath = path.join(REF_DIR, 'india_localities.json');
+if (!fs.existsSync(localityPath)) {
+  console.error('Missing ref/india_localities.json. Run:  ./datastore/fetch-geo.sh && node datastore/build-geo.js');
+  process.exit(1);
+}
+const localityRef = JSON.parse(fs.readFileSync(localityPath, 'utf8'));
+
+const STATE_CAL = new Map(ncrb.states.map((s) => [s.state, s]));
+const PROHIBITION_SHARE = tax.prohibitionShareByState;
+
+// ---------------- geography ----------------
+// Post-office class is the best available proxy for how much population a locality
+// serves: head offices sit in town centres, branch offices are village-level.
+const KIND_WEIGHT = { 'H.O': 6, 'G.P.O': 8, 'S.O': 3, 'B.O': 1 };
+
+const DISTRICTS = districtRef
+  .filter((d) => STATE_CAL.has(d.state))
+  .map((d) => {
+    const raw = localityRef[d.code] || [];
+    const locs = raw.map(([name, taluk, pin, lat, lng, kind]) => ({
+      name, taluk: taluk || d.district, pin, lat, lng, w: KIND_WEIGHT[kind] || 1,
+    }));
+    const wTotal = locs.reduce((a, l) => a + l.w, 0);
+    // Police stations are named after the taluks actually present in the district,
+    // which is how station geography works on the ground.
+    const taluks = [...new Set(locs.map((l) => l.taluk))];
+    const stations = new Map();
+    for (const t of taluks) stations.set(t, `${t} PS`);
+    if (taluks.length === 1) {
+      stations.set(taluks[0], `${d.district} Town PS`);
+      stations.set(d.district + ' Rural', `${d.district} Rural PS`);
+    }
+    return {
+      code: d.code, state: d.state, district: d.district, pop: d.pop2011,
+      lat: d.lat, lng: d.lng, demo: d.demo, locs, wTotal, stations,
+    };
+  })
+  .filter((d) => d.locs.length > 0);
+
+// Volume model: the state total is real (NCRB 2023). Within a state, districts get
+// a share of it by population weighted by urban share — urban districts register
+// materially more crime per head, which NCRB's separate metropolitan tables show.
+const stateWeight = new Map();
+for (const d of DISTRICTS) {
+  d.weight = d.pop * (0.75 + 0.6 * Math.min(1, d.demo.urbanShare));
+  stateWeight.set(d.state, (stateWeight.get(d.state) || 0) + d.weight);
+}
+for (const d of DISTRICTS) {
   const cal = STATE_CAL.get(d.state);
-  d.rate = cal.crimeRate;
-  d.intensity = (d.pop / 1e5) * cal.crimeRate; // cases per year at full real scale
-});
+  d.intensity = cal.totalCrimes * (d.weight / stateWeight.get(d.state)); // cases/yr, real scale
+}
 const TOTAL_INTENSITY = DISTRICTS.reduce((a, d) => a + d.intensity, 0);
 
 // ---------------- crime taxonomy ----------------
-// [head, nationalShare, branchingRatio(self-excitation), meanDelayDays, spatialSigmaDeg]
-const HEADS = [
-  ['Property Offences', 0.26, 0.55, 5, 0.010],
-  ['Body Offences', 0.18, 0.42, 9, 0.006],
-  ['Crime Against Women', 0.13, 0.30, 14, 0.004],
-  ['Economic Offences', 0.12, 0.35, 20, 0.020],
-  ['Public Order', 0.11, 0.60, 3, 0.012],
-  ['Traffic & Negligence', 0.08, 0.20, 4, 0.014],
-  ['Cyber Crime', 0.07, 0.25, 12, 0.050],
-  ['Narcotics', 0.05, 0.50, 7, 0.008],
-];
-const SUBHEADS = {
-  'Property Offences': ['Burglary', 'Theft', 'Robbery', 'Dacoity', 'Motor Vehicle Theft', 'Criminal Trespass'],
-  'Body Offences': ['Murder', 'Attempt to Murder', 'Grievous Hurt', 'Kidnapping', 'Culpable Homicide'],
-  'Crime Against Women': ['Dowry Harassment', 'Assault on Woman', 'Domestic Violence', 'Rape', 'Stalking'],
-  'Economic Offences': ['Cheating', 'Criminal Breach of Trust', 'Money Laundering', 'Chit Fund Fraud', 'Forgery'],
-  'Public Order': ['Rioting', 'Unlawful Assembly', 'Public Nuisance', 'Obstruction of Duty'],
-  'Traffic & Negligence': ['Rash Driving', 'Hit and Run', 'Death by Negligence'],
-  'Cyber Crime': ['Online Fraud', 'Identity Theft', 'Ransomware', 'UPI Fraud', 'Social Media Offence'],
-  'Narcotics': ['Possession NDPS', 'Trafficking NDPS', 'Cultivation NDPS'],
-};
-const HEINOUS_SUBS = new Set(['Murder', 'Attempt to Murder', 'Rape', 'Dacoity', 'Robbery', 'Kidnapping', 'Culpable Homicide']);
-const ACTS = {
-  Murder: 'BNS 103 / IPC 302', 'Attempt to Murder': 'BNS 109 / IPC 307', Robbery: 'BNS 309 / IPC 392',
-  Dacoity: 'BNS 310 / IPC 395', Theft: 'BNS 303 / IPC 379', Burglary: 'BNS 305 / IPC 457',
-  'Motor Vehicle Theft': 'BNS 303 / IPC 379', 'Criminal Trespass': 'BNS 329 / IPC 447',
-  Cheating: 'BNS 318 / IPC 420', 'Criminal Breach of Trust': 'BNS 316 / IPC 406',
-  'Money Laundering': 'PMLA 3', 'Chit Fund Fraud': 'BNS 318 / IPC 420', Forgery: 'BNS 336 / IPC 465',
-  'Online Fraud': 'IT Act 66D', 'Identity Theft': 'IT Act 66C', Ransomware: 'IT Act 66',
-  'UPI Fraud': 'IT Act 66D', 'Social Media Offence': 'IT Act 67',
-  'Dowry Harassment': 'BNS 85 / IPC 498A', 'Assault on Woman': 'BNS 74 / IPC 354',
-  'Domestic Violence': 'BNS 85 / IPC 498A', Rape: 'BNS 64 / IPC 376', Stalking: 'BNS 78 / IPC 354D',
-  Rioting: 'BNS 191 / IPC 147', 'Unlawful Assembly': 'BNS 189 / IPC 143',
-  'Public Nuisance': 'BNS 270 / IPC 268', 'Obstruction of Duty': 'BNS 121 / IPC 332',
-  'Rash Driving': 'BNS 281 / IPC 279', 'Hit and Run': 'BNS 106 / IPC 304A',
-  'Death by Negligence': 'BNS 106 / IPC 304A',
-  'Possession NDPS': 'NDPS 20', 'Trafficking NDPS': 'NDPS 21', 'Cultivation NDPS': 'NDPS 18',
-  'Grievous Hurt': 'BNS 117 / IPC 325', Kidnapping: 'BNS 137 / IPC 363',
-  'Culpable Homicide': 'BNS 105 / IPC 304',
-};
+const HEADS = tax.heads.map((h) => {
+  const g = tax.groups[h.group];
+  return {
+    head: h.head, group: h.group, law: h.law, gravity: h.gravity,
+    cases: h.cases2022, dryOnly: !!h.dryStateOnly,
+    rho: g.branching, delay: g.delayDays, sigma: g.sigmaDeg,
+  };
+});
+const HEAD_TOTAL = HEADS.reduce((a, h) => a + h.cases, 0);
+
+
+// Which heads respond to which real per-state rate. Everything else follows the
+// national mix, because NCRB does not publish a state x head table at this depth.
+const lc = (s) => s.toLowerCase();
+function stateTilt(h, cal) {
+  const r = (a, b) => (b > 0 ? Math.min(3, Math.max(0.25, a / b)) : 1);
+  const n = lc(h.head);
+  if (n.includes('murder') || n.includes('culpable homicide')) return r(cal.murder, ncrb.india.murder);
+  if (n.includes('rape')) return r(cal.rape, ncrb.india.rape);
+  if (h.group === 'Kidnapping & Trafficking' || n.startsWith('kidnapping')) return r(cal.kidnapping, ncrb.india.kidnapping);
+  if (n.includes('robbery') || n.includes('dacoity')) return r(cal.robberyDacoity, ncrb.india.robberyDacoity);
+  if (n.includes('extortion')) return r(cal.extortion, ncrb.india.extortion);
+  // Remaining heinous heads move with the state's overall violent rate, damped so
+  // this does not compound with the specific tilts above.
+  if (h.gravity === 'Heinous') return Math.sqrt(r(cal.violentRate, ncrb.india.violentRate));
+  return 1;
+}
 
 // Seasonality: festival (Oct-Dec) and summer (Mar-May) peaks; weekend elevation.
 const MONTH_MULT = [0.90, 0.88, 1.05, 1.12, 1.15, 0.98, 0.95, 0.97, 1.08, 1.28, 1.35, 1.20];
 const DOW_MULT = [0.95, 0.98, 1.00, 1.02, 1.08, 1.20, 1.12];
-
 const DAY = 86400000;
 const END = Date.UTC(2026, 6, 1);
 const START = END - Math.round(YEARS_SPAN * 365.25 * DAY);
@@ -168,120 +187,259 @@ const MAXENV = 1.35 * 1.20 * 1.04;
 module.exports = { DISTRICTS, HEADS };
 
 // ---------------- names (regionally varied) ----------------
-const FIRST_N = ['Amit', 'Rajesh', 'Sunil', 'Vikram', 'Anil', 'Deepak', 'Rohit', 'Sanjay', 'Pooja', 'Neha', 'Kavita', 'Sunita', 'Priya', 'Aarti'];
-const FIRST_S = ['Ravi', 'Suresh', 'Manjunath', 'Prakash', 'Karthik', 'Venkatesh', 'Lakshmi', 'Anitha', 'Divya', 'Meena', 'Shivakumar', 'Nagaraj'];
-const FIRST_E = ['Subrata', 'Debasish', 'Tapan', 'Biswajit', 'Ranjan', 'Sourav', 'Mousumi', 'Sikha', 'Rupali', 'Ananya'];
-const FIRST_W = ['Nitin', 'Mahesh', 'Pravin', 'Sachin', 'Jignesh', 'Bhavesh', 'Snehal', 'Vaishali', 'Trupti', 'Manisha'];
-const LAST_N = ['Sharma', 'Verma', 'Yadav', 'Singh', 'Gupta', 'Mishra', 'Tiwari', 'Chauhan', 'Pandey', 'Rathore'];
-const LAST_S = ['Gowda', 'Shetty', 'Rao', 'Reddy', 'Naidu', 'Iyer', 'Nair', 'Menon', 'Murthy', 'Pillai', 'Hegde'];
-const LAST_E = ['Das', 'Ghosh', 'Banerjee', 'Chatterjee', 'Mondal', 'Sarkar', 'Bose', 'Mahato'];
-const LAST_W = ['Patil', 'Desai', 'Joshi', 'Kulkarni', 'Shah', 'Patel', 'Jadhav', 'More', 'Deshmukh'];
+const FIRST_N = ['Amit', 'Rajesh', 'Sunil', 'Vikram', 'Anil', 'Deepak', 'Rohit', 'Sanjay', 'Pooja', 'Neha', 'Kavita', 'Sunita', 'Priya', 'Aarti', 'Manoj', 'Ashok', 'Rekha', 'Seema'];
+const FIRST_S = ['Ravi', 'Suresh', 'Manjunath', 'Prakash', 'Karthik', 'Venkatesh', 'Lakshmi', 'Anitha', 'Divya', 'Meena', 'Shivakumar', 'Nagaraj', 'Srinivas', 'Padma', 'Vijaya'];
+const FIRST_E = ['Subrata', 'Debasish', 'Tapan', 'Biswajit', 'Ranjan', 'Sourav', 'Mousumi', 'Sikha', 'Rupali', 'Ananya', 'Pradip', 'Jyotsna'];
+const FIRST_W = ['Nitin', 'Mahesh', 'Pravin', 'Sachin', 'Jignesh', 'Bhavesh', 'Snehal', 'Vaishali', 'Trupti', 'Manisha', 'Kiran', 'Nilesh'];
+const FIRST_NE = ['Bikash', 'Lalrin', 'Temjen', 'Neiphiu', 'Thangboi', 'Mary', 'Esther', 'Rinchen', 'Karma', 'Pema'];
+const LAST_N = ['Sharma', 'Verma', 'Yadav', 'Singh', 'Gupta', 'Mishra', 'Tiwari', 'Chauhan', 'Pandey', 'Rathore', 'Saini', 'Kashyap'];
+const LAST_S = ['Gowda', 'Shetty', 'Rao', 'Reddy', 'Naidu', 'Iyer', 'Nair', 'Menon', 'Murthy', 'Pillai', 'Hegde', 'Achari'];
+const LAST_E = ['Das', 'Ghosh', 'Banerjee', 'Chatterjee', 'Mondal', 'Sarkar', 'Bose', 'Mahato', 'Pradhan', 'Nayak'];
+const LAST_W = ['Patil', 'Desai', 'Joshi', 'Kulkarni', 'Shah', 'Patel', 'Jadhav', 'More', 'Deshmukh', 'Chavan'];
+const LAST_NE = ['Hazarika', 'Borah', 'Sangma', 'Marak', 'Ao', 'Konyak', 'Chakma', 'Bhutia', 'Lepcha', 'Ralte'];
+const LAST_MUSLIM = ['Khan', 'Sheikh', 'Ansari', 'Qureshi', 'Siddiqui', 'Pathan', 'Mirza', 'Hussain', 'Rahman', 'Beg'];
+const FIRST_MUSLIM = ['Imran', 'Faisal', 'Aslam', 'Rizwan', 'Sameer', 'Nasir', 'Farhana', 'Ayesha', 'Nazia', 'Shabana'];
+const LAST_CHRISTIAN = ['Fernandes', 'D\'Souza', 'Pereira', 'Thomas', 'Mathew', 'Lobo', 'Rodrigues', 'Gomes'];
+const FIRST_CHRISTIAN = ['Joseph', 'Anthony', 'Rosy', 'Maria', 'Jacob', 'Clara', 'Francis', 'Agnes'];
+const LAST_SIKH = ['Singh', 'Kaur', 'Gill', 'Sandhu', 'Dhillon', 'Bedi', 'Grewal', 'Sidhu'];
+const FIRST_SIKH = ['Gurpreet', 'Harjit', 'Jaswinder', 'Manpreet', 'Simranjit', 'Baljit'];
+
 const NAME_ZONES = {
-  north: [FIRST_N, LAST_N], south: [FIRST_S, LAST_S], east: [FIRST_E, LAST_E], west: [FIRST_W, LAST_W],
+  north: [FIRST_N, LAST_N], south: [FIRST_S, LAST_S], east: [FIRST_E, LAST_E],
+  west: [FIRST_W, LAST_W], northeast: [FIRST_NE, LAST_NE],
 };
 const STATE_ZONE = {
   'Kerala': 'south', 'Tamil Nadu': 'south', 'Karnataka': 'south', 'Andhra Pradesh': 'south',
   'Telangana': 'south', 'Puducherry': 'south', 'Lakshadweep': 'south',
-  'West Bengal': 'east', 'Odisha': 'east', 'Bihar': 'east', 'Jharkhand': 'east', 'Assam': 'east',
-  'Tripura': 'east', 'Meghalaya': 'east', 'Manipur': 'east', 'Mizoram': 'east', 'Nagaland': 'east',
-  'Arunachal Pradesh': 'east', 'Sikkim': 'east', 'Andaman and Nicobar Islands': 'east',
+  'West Bengal': 'east', 'Odisha': 'east', 'Bihar': 'east', 'Jharkhand': 'east',
+  'Andaman and Nicobar Islands': 'east',
+  'Assam': 'northeast', 'Tripura': 'northeast', 'Meghalaya': 'northeast', 'Manipur': 'northeast',
+  'Mizoram': 'northeast', 'Nagaland': 'northeast', 'Arunachal Pradesh': 'northeast', 'Sikkim': 'northeast',
   'Maharashtra': 'west', 'Gujarat': 'west', 'Goa': 'west', 'Rajasthan': 'west',
   'Dadra and Nagar Haveli and Daman and Diu': 'west',
 };
-const nameFor = (state) => {
-  const [F, L] = NAME_ZONES[STATE_ZONE[state] || 'north'];
+/** Name generation follows the district's real religious composition. */
+function nameFor(d, religion) {
+  const rel = religion || weightedKey(d.demo.religion);
+  if (rel === 'Muslim') return pick(FIRST_MUSLIM) + ' ' + pick(LAST_MUSLIM);
+  if (rel === 'Christian') return pick(FIRST_CHRISTIAN) + ' ' + pick(LAST_CHRISTIAN);
+  if (rel === 'Sikh') return pick(FIRST_SIKH) + ' ' + pick(LAST_SIKH);
+  const [F, L] = NAME_ZONES[STATE_ZONE[d.state] || 'north'];
   return pick(F) + ' ' + pick(L);
+}
+
+const OCC_BY_CLASS = {
+  Cultivator: ['Farmer', 'Cultivator', 'Orchard Owner'],
+  'Agricultural Labourer': ['Agricultural Labourer', 'Daily Wage Labourer', 'Farm Hand'],
+  'Household Industry': ['Weaver', 'Potter', 'Artisan', 'Tailor', 'Handloom Worker'],
+  Other: ['Shopkeeper', 'Driver', 'Business', 'Govt Employee', 'IT Professional', 'Teacher',
+    'Factory Worker', 'Construction Worker', 'Security Guard', 'Nurse', 'Mechanic', 'Clerk',
+    'Electrician', 'Delivery Rider', 'Bank Employee', 'Contractor'],
 };
+const CASTE_GENERAL = { General: 0.28, OBC: 0.72 };
+
+/** Draw a person's social attributes from this district's census distributions. */
+function personDemo(d) {
+  const religion = weightedKey(d.demo.religion);
+  const r = rand();
+  let caste;
+  if (r < d.demo.scShare) caste = 'SC';
+  else if (r < d.demo.scShare + d.demo.stShare) caste = 'ST';
+  else caste = weightedKey(CASTE_GENERAL);
+  const occClass = weightedKey(d.demo.occupation);
+  return { religion, caste, occClass };
+}
+/** Adult age drawn from the district's real age bands. */
+function adultAge(d) {
+  const a = d.demo.age;
+  const r = rand() * (a.a0_29 * 0.42 + a.a30_49 + a.a50); // only the adult part of 0-29
+  if (r < a.a0_29 * 0.42) return randint(18, 29);
+  if (r < a.a0_29 * 0.42 + a.a30_49) return randint(30, 49);
+  return randint(50, 82);
+}
 
 const pad = (n, w) => String(n).padStart(w, '0');
 const CAT_CODE = { FIR: 1, UDR: 3, PAR: 4, 'Zero FIR': 8 };
 
-// Police stations per district, scaled by population (metros get more).
-DISTRICTS.forEach((d) => {
-  const n = Math.max(3, Math.min(14, Math.round(Math.log10(Math.max(d.pop, 1e5)) * 2.2)));
-  d.stations = Array.from({ length: n }, (_, i) => `${d.district} PS-${i + 1}`);
-});
+// ---------------- streaming CSV writer ----------------
+// Rows are appended as they are produced so a multi-million-row run never holds a
+// whole table in memory.
+function csvWriter(dir, name, cols) {
+  const file = path.join(dir, name + '.csv');
+  const fd = fs.openSync(file, 'w');
+  fs.writeSync(fd, cols.join(',') + '\n');
+  let buf = '', n = 0;
+  const esc = (v) => {
+    if (v === null || v === undefined) v = '';
+    v = String(v);
+    return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  };
+  return {
+    write(row) {
+      let line = '';
+      for (let i = 0; i < cols.length; i++) line += (i ? ',' : '') + esc(row[cols[i]]);
+      buf += line + '\n'; n++;
+      if (buf.length > 1 << 20) { fs.writeSync(fd, buf); buf = ''; }
+    },
+    close() {
+      if (buf) fs.writeSync(fd, buf);
+      fs.closeSync(fd);
+      console.log(`  ${name}.csv  ->  ${n.toLocaleString('en-IN')} rows`);
+      return n;
+    },
+    get count() { return n; },
+  };
+}
 
 // ---------------- ETAS simulation ----------------
-// Scale real intensity down to the requested target volume. Offspring (near-repeat)
-// cascades multiply the background count, so back it out of the background rate.
-const AVG_BRANCH = HEADS.reduce((a, h) => a + h[1] * h[2], 0);
-const bgTarget = TARGET_CASES / (1 + AVG_BRANCH + AVG_BRANCH * AVG_BRANCH);
-const SCALE = bgTarget / (TOTAL_INTENSITY * YEARS_SPAN);
+// Seeding each head at its target share would overshoot, because the cascade
+// multiplies every head by its own branching factor. The correction is exact rather
+// than approximate. With target shares s, branching rho, and probability RETAIN that
+// an offspring repeats its parent's head (otherwise redrawn from s), the observed
+// counts n satisfy
+//     n_k = f_k + RETAIN * rho_k * n_k + (1 - RETAIN) * s_k * SUM_h(rho_h * n_h)
+// Solving for the background f that yields n proportional to s gives
+//     f_k = s_k * ( 1 - RETAIN * rho_k - (1 - RETAIN) * rhoBar )
+// and the total inflates by 1 / (1 - rhoBar). Deriving it this way is what makes the
+// generated head mix land on the NCRB shares instead of near them; the previous
+// (1 - rho) approximation under-produced high-branching heads such as the
+// Prohibition Act by about a third.
+const RETAIN = 0.85;
+const stateHeadWeights = new Map();
+for (const st of new Set(DISTRICTS.map((d) => d.state))) {
+  const cal = STATE_CAL.get(st);
+  // Target share of each head in this state.
+  const target = HEADS.map((h) => (h.dryOnly ? 0 : (h.cases / HEAD_TOTAL) * stateTilt(h, cal)));
+  // The Prohibition Act is pinned to its real share of the state's caseload rather
+  // than derived from the national mix, because it exists in only six states and is
+  // the largest single head in two of them.
+  const prohibition = PROHIBITION_SHARE[st] || 0;
+  const tTot = target.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < target.length; i++) {
+    target[i] = HEADS[i].dryOnly ? prohibition : (target[i] / tTot) * (1 - prohibition);
+  }
+  const rhoBar = HEADS.reduce((a, h, i) => a + target[i] * h.rho, 0);
+  const bg = HEADS.map((h, i) =>
+    Math.max(0, target[i] * (1 - RETAIN * h.rho - (1 - RETAIN) * rhoBar)));
+  stateHeadWeights.set(st, {
+    bg, bgTot: bg.reduce((a, b) => a + b, 0),
+    target, targetTot: 1, rhoBar,
+  });
+}
+// National expected inflation from background to total.
+const NATIONAL_RHOBAR = (() => {
+  let num = 0, den = 0;
+  for (const d of DISTRICTS) {
+    num += d.intensity * stateHeadWeights.get(d.state).rhoBar;
+    den += d.intensity;
+  }
+  return num / den;
+})();
 
-console.log(`All-India ETAS simulation`);
-console.log(`  districts=${DISTRICTS.length}  states=${new Set(DISTRICTS.map((d) => d.state)).size}`);
+// Background is scaled so that after the cascade inflates it by 1/(1 - rhoBar) the
+// run lands on the requested case count.
+const SCALE = (TARGET_CASES * (1 - NATIONAL_RHOBAR)) / (TOTAL_INTENSITY * YEARS_SPAN);
+
+console.log('All-India ETAS simulation');
+console.log(`  districts=${DISTRICTS.length}  states/UTs=${new Set(DISTRICTS.map((d) => d.state)).size}` +
+  `  localities=${DISTRICTS.reduce((a, d) => a + d.locs.length, 0).toLocaleString('en-IN')}` +
+  `  crime heads=${HEADS.length}`);
 console.log(`  window=${new Date(START).toISOString().slice(0, 10)} .. ${new Date(END).toISOString().slice(0, 10)} (${YEARS_SPAN}y)`);
-console.log(`  real all-India intensity=${Math.round(TOTAL_INTENSITY).toLocaleString('en-IN')} cases/yr -> target=${TARGET_CASES.toLocaleString('en-IN')} (scale=${SCALE.toExponential(2)})`);
+console.log(`  real all-India volume=${Math.round(TOTAL_INTENSITY).toLocaleString('en-IN')} cases/yr` +
+  ` -> target=${TARGET_CASES.toLocaleString('en-IN')} over ${YEARS_SPAN}y (scale=${(SCALE * 100).toFixed(3)}%)`);
+console.log(`  mean branching ratio=${NATIONAL_RHOBAR.toFixed(3)} -> cascade inflation ${(1 / (1 - NATIONAL_RHOBAR)).toFixed(2)}x`);
 
-const headShares = HEADS.map((h) => h[1]);
-const events = [];
-let eid = 0;
+// Events are kept in parallel typed arrays: at multi-million scale an array of
+// objects would cost several GB.
+let cap = Math.max(1 << 16, Math.ceil(TARGET_CASES * 1.4));
+let evT = new Float64Array(cap), evLat = new Float32Array(cap), evLng = new Float32Array(cap);
+let evDi = new Int32Array(cap), evHi = new Int16Array(cap), evLoc = new Int32Array(cap);
+let evN = 0;
+function grow() {
+  const nc = Math.ceil(cap * 1.6);
+  const g = (Old, T) => { const a = new T(nc); a.set(Old); return a; };
+  evT = g(evT, Float64Array); evLat = g(evLat, Float32Array); evLng = g(evLng, Float32Array);
+  evDi = g(evDi, Int32Array); evHi = g(evHi, Int16Array); evLoc = g(evLoc, Int32Array);
+  cap = nc;
+}
+function pushEvent(t, di, hi, lat, lng, loc) {
+  if (evN === cap) grow();
+  evT[evN] = t; evDi[evN] = di; evHi[evN] = hi; evLat[evN] = lat; evLng[evN] = lng; evLoc[evN] = loc;
+  evN++;
+}
 
+// -- background: real localities, so incidents sit where people actually live
 for (let di = 0; di < DISTRICTS.length; di++) {
   const d = DISTRICTS[di];
-  const cal = STATE_CAL.get(d.state);
-  // State severity tilt: states with high violent rates skew toward body offences.
-  const violentTilt = Math.min(2.0, Math.max(0.5, cal.violentRate / ncrb.india.violentRate));
-  // Background shares are de-biased by (1 - rho): heads with strong self-excitation
-  // multiply themselves through the cascade, so seeding them at their target share
-  // would overshoot it. Violent heads are then tilted by the state's real violent
-  // rate; normalisation below absorbs the difference across the remaining heads.
-  const localShares = headShares.map((s, hi) => {
-    const head = HEADS[hi][0];
-    const deBiased = s * (1 - HEADS[hi][2]);
-    if (head === 'Body Offences' || head === 'Crime Against Women') return deBiased * violentTilt;
-    return deBiased;
-  });
-  const expectedTotal = d.intensity * YEARS_SPAN * SCALE;
+  const { bg, bgTot } = stateHeadWeights.get(d.state);
+  const expected = d.intensity * YEARS_SPAN * SCALE;
+  const locW = d.locs.map((l) => l.w);
   for (let hi = 0; hi < HEADS.length; hi++) {
-    const shareSum = localShares.reduce((a, b) => a + b, 0);
-    const n = poisson(expectedTotal * (localShares[hi] / shareSum));
+    if (bg[hi] === 0) continue;
+    const n = poisson(expected * (bg[hi] / bgTot));
     for (let k = 0; k < n; k++) {
       let t;
       do { t = START + rand() * (END - START); } while (rand() > envelope(t) / MAXENV);
-      events.push({
-        id: eid++, t, di, hi,
-        lat: d.lat + gauss(0, d.spread), lng: d.lng + gauss(0, d.spread * 0.9), gen: 0,
-      });
+      const li = weightedIndex(locW, d.wTotal);
+      const loc = d.locs[li];
+      // ~400 m scatter around the locality centre.
+      pushEvent(t, di, hi, loc.lat + gauss(0, 0.004), loc.lng + gauss(0, 0.004), li);
     }
   }
 }
-const bgCount = events.length;
+const bgCount = evN;
 
-// Self-excitation cascade (near-repeat victimisation / retaliation).
-let cursor = 0;
-while (cursor < events.length) {
-  const p = events[cursor++];
-  const [, , rho, meanDelay, sig] = HEADS[p.hi];
-  const kids = poisson(rho);
+// -- self-excitation cascade (near-repeat victimisation and retaliation)
+for (let cursor = 0; cursor < evN; cursor++) {
+  const h = HEADS[evHi[cursor]];
+  const kids = poisson(h.rho);
+  if (!kids) continue;
+  const pt = evT[cursor], pdi = evDi[cursor], plat = evLat[cursor], plng = evLng[cursor], ploc = evLoc[cursor];
+  const { target } = stateHeadWeights.get(DISTRICTS[pdi].state);
   for (let j = 0; j < kids; j++) {
-    const t = p.t - meanDelay * DAY * Math.log(Math.max(rand(), 1e-9));
+    const t = pt - h.delay * DAY * Math.log(Math.max(rand(), 1e-9));
     if (t >= END) continue;
-    const hi = chance(0.85) ? p.hi : Math.floor(rand() * HEADS.length);
-    events.push({
-      id: eid++, t, di: p.di, hi,
-      lat: p.lat + gauss(0, sig), lng: p.lng + gauss(0, sig), gen: p.gen + 1,
-    });
+    // Most offspring repeat the parent offence; the rest are redrawn from the local
+    // target mix, which is the distribution the correction above assumes.
+    const hi = chance(RETAIN) ? evHi[cursor] : weightedIndex(target, 1);
+    pushEvent(t, pdi, hi, plat + gauss(0, h.sigma), plng + gauss(0, h.sigma), ploc);
   }
 }
-events.sort((a, b) => a.t - b.t);
-console.log(`  background=${bgCount.toLocaleString('en-IN')}  total=${events.length.toLocaleString('en-IN')}  near-repeat=${((1 - bgCount / events.length) * 100).toFixed(1)}%`);
+console.log(`  background=${bgCount.toLocaleString('en-IN')}  total=${evN.toLocaleString('en-IN')}` +
+  `  near-repeat=${((1 - bgCount / evN) * 100).toFixed(1)}%`);
 
-// ---------------- offenders & organized rings ----------------
+// Sort by time via an index permutation — sorting 5 parallel arrays directly would
+// need a full custom sort, and the permutation is cheaper and clearer.
+console.log('  sorting events by time…');
+const order = new Int32Array(evN);
+for (let i = 0; i < evN; i++) order[i] = i;
+{
+  const idx = Array.from(order);
+  idx.sort((a, b) => evT[a] - evT[b]);
+  for (let i = 0; i < evN; i++) order[i] = idx[i];
+}
+
+// ---------------- offenders & organised rings ----------------
 // Offender pools are per-state so co-offending networks stay geographically coherent.
 const statesList = [...new Set(DISTRICTS.map((d) => d.state))];
+const stateEventCount = new Map();
+for (let i = 0; i < evN; i++) {
+  const st = DISTRICTS[evDi[i]].state;
+  stateEventCount.set(st, (stateEventCount.get(st) || 0) + 1);
+}
 const offendersByState = {};
 const ringsByState = {};
 let ringSeq = 0;
 for (const st of statesList) {
   const stDistricts = DISTRICTS.filter((d) => d.state === st);
-  const stEvents = events.filter((e) => DISTRICTS[e.di].state === st).length;
+  const stEvents = stateEventCount.get(st) || 0;
   const nOff = Math.max(40, Math.round(stEvents * 0.06));
-  const pool = Array.from({ length: nOff }, () => ({ name: nameFor(st), ring: 0, age: randint(18, 58) }));
+  const pool = Array.from({ length: nOff }, () => {
+    const d = stDistricts[weightedIndex(stDistricts.map((x) => x.weight))];
+    return { name: nameFor(d), ring: 0, age: randint(18, 58), known: true };
+  });
   offendersByState[st] = pool;
-  // Rings scale with state volume: bigger states host more organized groups.
-  const nRings = Math.max(1, Math.min(12, Math.round(stEvents / 4000)));
+  const nRings = Math.max(1, Math.min(24, Math.round(stEvents / 4000)));
   const rings = [];
   for (let r = 0; r < nRings; r++) {
     ringSeq += 1;
@@ -300,273 +458,310 @@ for (const st of statesList) {
 
 // ---------------- assemble records ----------------
 console.log('Assembling case, person, network and risk records…');
-const OCC = ['Farmer', 'Daily Wage', 'Business', 'Student', 'IT Professional', 'Unemployed', 'Govt Employee', 'Driver', 'Shopkeeper', 'Homemaker', 'Factory Worker', 'Teacher'];
-const REL = ['Hindu', 'Muslim', 'Christian', 'Sikh', 'Buddhist', 'Jain', 'Other'];
-const CASTE = ['General', 'OBC', 'SC', 'ST', 'Not Recorded'];
+const wCases = csvWriter(SEED_DIR, 'Cases', ['CaseMasterID', 'CrimeNo', 'CaseNo', 'CrimeRegisteredDate', 'Year',
+  'CrimeMonth', 'IncidentDate', 'StateName', 'DistrictName', 'TalukName', 'LocalityName', 'StationName',
+  'latitude', 'longitude', 'CaseCategory', 'Gravity', 'CrimeHead', 'CrimeSubHead', 'CaseStatus',
+  'CourtName', 'OfficerName', 'ActsSections', 'AccusedCount', 'VictimCount', 'BriefFacts']);
+const wAccused = csvWriter(SEED_DIR, 'Accused', ['AccusedMasterID', 'CaseMasterID', 'CrimeNo', 'AccusedName',
+  'AgeYear', 'Gender', 'PersonID', 'RingID', 'DistrictName', 'CrimeSubHead']);
+const wVictims = csvWriter(SEED_DIR, 'Victims', ['VictimMasterID', 'CaseMasterID', 'VictimName', 'AgeYear',
+  'Gender', 'Caste', 'Religion']);
+const wComplainants = csvWriter(SEED_DIR, 'Complainants', ['ComplainantID', 'CaseMasterID', 'ComplainantName',
+  'AgeYear', 'Gender', 'Occupation', 'Religion', 'Caste']);
+const wArrests = csvWriter(SEED_DIR, 'Arrests', ['ArrestID', 'CaseMasterID', 'AccusedMasterID', 'AccusedName',
+  'ArrestType', 'ArrestDate', 'DistrictName', 'IOName']);
+const wTxns = csvWriter(SEED_DIR, 'FinancialTxns', ['TxnID', 'AccusedMasterID', 'AccusedName', 'Counterparty',
+  'Amount', 'TxnDate', 'AccountRef']);
 
-const Cases = [], Accused = [], Victims = [], Complainants = [], Arrests = [], FinancialTxns = [];
 let aId = 1, vId = 1, cpId = 1, arrId = 1, txnId = 1;
-const serial = {};
-const accusedByCase = new Map();
+const serial = new Map();
 const offenderStats = new Map();
+// Only recurring (pool) offenders enter the co-offending graph. One-off accused
+// produce a pair that never repeats, which is noise in a network view and the
+// dominant memory cost at scale.
+const edges = new Map();
+const headCount = new Int32Array(HEADS.length);
+const stateCount = new Map();
+const statusCount = new Map();
+const yearCount = new Map();
+const stateTried = new Map();
+let heinousCount = 0;
 
-/** Case status drawn from the state's real chargesheet + conviction rates. */
+// Court pendency in India runs around 90%: NCRB 2023 reported 23.0 lakh of 25.4
+// lakh crime-against-women cases still pending trial at year end. Only the small
+// disposed remainder splits by the state's conviction rate.
+const TRIAL_PENDENCY = 0.82;
+/** Case status drawn from the state's real chargesheet and conviction rates. */
 function statusFor(cal, ageDays) {
-  // Young cases are still under investigation; older ones have progressed.
   const matured = Math.min(1, ageDays / 420);
   if (rand() > matured) return 'Under Investigation';
-  const cs = cal.chargesheetRate / 100;
-  if (rand() > cs) return chance(0.6) ? 'Closed - Undetected' : 'Under Investigation';
-  // Chargesheeted -> trial outcomes governed by conviction rate.
-  const cv = cal.convictionRate / 100;
-  const r = rand();
-  if (r < 0.42) return 'Pending Trial';
-  return rand() < cv ? 'Convicted' : 'Acquitted';
+  if (rand() > cal.chargesheetRate / 100) return chance(0.6) ? 'Closed - Undetected' : 'Under Investigation';
+  // Older chargesheeted cases have had more chance to reach a verdict.
+  const pend = TRIAL_PENDENCY - 0.14 * Math.min(1, ageDays / (YEARS_SPAN * 365));
+  if (rand() < pend) return 'Pending Trial';
+  return rand() < cal.convictionRate / 100 ? 'Convicted' : 'Acquitted';
 }
 
-for (let idx = 0; idx < events.length; idx++) {
-  const ev = events[idx];
-  const d = DISTRICTS[ev.di];
+for (let n = 0; n < evN; n++) {
+  const ev = order[n];
+  const d = DISTRICTS[evDi[ev]];
+  const h = HEADS[evHi[ev]];
   const cal = STATE_CAL.get(d.state);
-  const cid = idx + 1;
-  const head = HEADS[ev.hi][0];
-  const dt = new Date(ev.t);
+  const loc = d.locs[evLoc[ev]];
+  const cid = n + 1;
+  const t = evT[ev];
+  const dt = new Date(t);
   const year = dt.getUTCFullYear(), month = dt.getUTCMonth() + 1;
-
-  // Sub-head choice tilted by the state's real head-specific rates.
-  const subs = SUBHEADS[head];
-  let sub;
-  if (head === 'Body Offences') {
-    const w = subs.map((s) => (s === 'Murder' ? cal.murder : s === 'Kidnapping' ? cal.kidnapping : 3));
-    sub = subs[weightedIndex(w)];
-  } else if (head === 'Crime Against Women') {
-    const w = subs.map((s) => (s === 'Rape' ? cal.rape : 4));
-    sub = subs[weightedIndex(w)];
-  } else if (head === 'Property Offences') {
-    const w = subs.map((s) => (s === 'Robbery' || s === 'Dacoity' ? Math.max(0.3, cal.robberyDacoity) : 5));
-    sub = subs[weightedIndex(w)];
-  } else {
-    sub = pick(subs);
-  }
-
-  const gravity = HEINOUS_SUBS.has(sub) ? 'Heinous'
-    : (head === 'Economic Offences' || head === 'Cyber Crime') ? 'Economic' : 'Non-Heinous';
+  const station = d.stations.get(loc.taluk) || `${d.district} PS`;
   const cat = chance(0.84) ? 'FIR' : pick(['UDR', 'PAR', 'Zero FIR']);
-  const station = pick(d.stations);
-  const stationIdx = d.stations.indexOf(station) + 1;
-  const sKey = `${ev.di}-${year}`;
-  serial[sKey] = (serial[sKey] || 0) + 1;
-  const crimeNo = `${CAT_CODE[cat]}${pad((ev.di % 9999) + 1, 4)}${pad(stationIdx, 4)}${year}${pad(serial[sKey], 5)}`;
-  const ageDays = (END - ev.t) / DAY;
+  const sKey = d.code + '-' + year;
+  const sNext = (serial.get(sKey) || 0) + 1;
+  serial.set(sKey, sNext);
+  const crimeNo = `${CAT_CODE[cat]}${pad(d.code, 4)}${pad((evLoc[ev] % 9999) + 1, 4)}${year}${pad(sNext, 5)}`;
+  const ageDays = (END - t) / DAY;
 
-  // ---- accused (organized ring during active bursts, else pool/one-off) ----
+  // ---- accused: organised ring during an active burst, else pool or one-off
   const pool = offendersByState[d.state];
-  const activeRings = (ringsByState[d.state] || []).filter(
-    (rg) => rg.district === d.district && rg.bursts.some(([a, b]) => ev.t >= a && ev.t <= b));
-  const organizedHead = head === 'Property Offences' || head === 'Economic Offences' || head === 'Narcotics';
-  const useRing = activeRings.length > 0 && organizedHead && chance(0.6);
-  const nA = head === 'Public Order' ? randint(2, 6) : head === 'Traffic & Negligence' ? 1 : randint(1, 3);
+  const organised = h.group === 'Property Offences' || h.group === 'Economic Offences'
+    || h.group === 'Narcotics' || h.group === 'Arms & Explosives' || h.group === 'Liquor & Excise';
+  let activeRing = null;
+  if (organised) {
+    const rings = ringsByState[d.state] || [];
+    for (const rg of rings) {
+      if (rg.district !== d.district) continue;
+      for (const [a, b] of rg.bursts) if (t >= a && t <= b) { activeRing = rg; break; }
+      if (activeRing) break;
+    }
+  }
+  const nA = h.group === 'Public Order' ? randint(2, 6)
+    : h.group === 'Traffic & Negligence' ? 1
+      : h.group === 'Regulatory & Local Acts' ? randint(1, 2) : randint(1, 3);
   const caseAcc = [];
+  const recurring = [];
   for (let a = 0; a < nA; a++) {
-    const off = useRing ? pick(pick(activeRings).members)
-      : chance(0.55) ? pick(pool) : { name: nameFor(d.state), ring: 0, age: randint(18, 58) };
-    Accused.push({
+    const off = (activeRing && chance(0.6)) ? pick(activeRing.members)
+      : chance(0.55) ? pick(pool) : { name: nameFor(d), ring: 0, age: randint(18, 58), known: false };
+    wAccused.write({
       AccusedMasterID: aId++, CaseMasterID: cid, CrimeNo: crimeNo, AccusedName: off.name,
       AgeYear: off.age || randint(18, 58), Gender: chance(0.91) ? 'M' : 'F', PersonID: 'A' + (a + 1),
-      RingID: off.ring || 0, DistrictName: d.district, CrimeSubHead: sub,
+      RingID: off.ring || 0, DistrictName: d.district, CrimeSubHead: h.head,
     });
     caseAcc.push(off.name);
+    if (off.known) recurring.push(off.name);
     const st = offenderStats.get(off.name) || { total: 0, violent: 0, ring: 0, state: d.state };
-    st.total++; if (gravity === 'Heinous') st.violent++; if (off.ring) st.ring = off.ring;
+    st.total++; if (h.gravity === 'Heinous') st.violent++; if (off.ring) st.ring = off.ring;
     offenderStats.set(off.name, st);
   }
-  accusedByCase.set(cid, caseAcc);
+  const uniqRec = [...new Set(recurring)];
+  for (let i = 0; i < uniqRec.length; i++) {
+    for (let j = i + 1; j < uniqRec.length; j++) {
+      const k = uniqRec[i] < uniqRec[j] ? uniqRec[i] + '||' + uniqRec[j] : uniqRec[j] + '||' + uniqRec[i];
+      edges.set(k, (edges.get(k) || 0) + 1);
+    }
+  }
 
-  const nV = (head === 'Body Offences' || head === 'Crime Against Women') ? randint(1, 2)
-    : head === 'Traffic & Negligence' ? randint(1, 3) : randint(0, 1);
+  // ---- victims
+  const womanVictim = h.group === 'Crime Against Women';
+  const childVictim = h.group === 'Crime Against Children';
+  const nV = (h.group === 'Body Offences' || womanVictim) ? randint(1, 2)
+    : h.group === 'Traffic & Negligence' ? randint(1, 3)
+      : childVictim ? 1 : randint(0, 1);
   for (let v = 0; v < nV; v++) {
-    Victims.push({
-      VictimMasterID: vId++, CaseMasterID: cid, VictimName: nameFor(d.state),
-      AgeYear: randint(3, 82), Gender: head === 'Crime Against Women' ? 'F' : (chance(0.5) ? 'M' : 'F'),
+    const pd = personDemo(d);
+    wVictims.write({
+      VictimMasterID: vId++, CaseMasterID: cid, VictimName: nameFor(d, pd.religion),
+      AgeYear: childVictim ? randint(3, 17) : adultAge(d),
+      Gender: womanVictim ? 'F' : (chance(0.5) ? 'M' : 'F'),
+      Caste: pd.caste, Religion: pd.religion,
     });
   }
 
-  Complainants.push({
-    ComplainantID: cpId++, CaseMasterID: cid, ComplainantName: nameFor(d.state),
-    AgeYear: randint(18, 74), Gender: chance(0.58) ? 'M' : 'F',
-    Occupation: pick(OCC), Religion: pick(REL), Caste: pick(CASTE),
-  });
+  // ---- complainant
+  {
+    const pd = personDemo(d);
+    wComplainants.write({
+      ComplainantID: cpId++, CaseMasterID: cid, ComplainantName: nameFor(d, pd.religion),
+      AgeYear: adultAge(d), Gender: womanVictim ? (chance(0.82) ? 'F' : 'M') : (chance(0.58) ? 'M' : 'F'),
+      Occupation: pick(OCC_BY_CLASS[pd.occClass]), Religion: pd.religion, Caste: pd.caste,
+    });
+  }
 
-  // Arrest likelihood tracks the state's chargesheet rate.
+  // ---- arrest: likelihood tracks the state's chargesheet rate
   if (rand() < cal.chargesheetRate / 100 * 0.8) {
-    Arrests.push({
+    wArrests.write({
       ArrestID: arrId++, CaseMasterID: cid, AccusedMasterID: 0, AccusedName: pick(caseAcc),
       ArrestType: chance(0.85) ? 'Arrest' : 'Surrender',
-      ArrestDate: new Date(ev.t + randint(0, 30) * DAY).toISOString().slice(0, 10),
-      DistrictName: d.district, IOName: nameFor(d.state),
+      ArrestDate: new Date(t + randint(0, 30) * DAY).toISOString().slice(0, 10),
+      DistrictName: d.district, IOName: nameFor(d),
     });
   }
 
-  if (head === 'Economic Offences' || head === 'Cyber Crime') {
-    for (let t = 0, nT = randint(2, 6); t < nT; t++) {
+  // ---- money trail for economic and cyber offences
+  if (h.gravity === 'Economic' || h.group === 'Cyber Crime') {
+    for (let k = 0, nT = randint(2, 6); k < nT; k++) {
       // Log-uniform amounts: many small frauds, a few very large ones.
       const amount = Math.round(Math.exp(Math.log(3000) + rand() * (Math.log(9e6) - Math.log(3000))));
-      FinancialTxns.push({
+      wTxns.write({
         TxnID: txnId++, AccusedMasterID: 0, AccusedName: pick(caseAcc),
-        Counterparty: nameFor(d.state), Amount: amount,
-        TxnDate: new Date(ev.t + randint(0, 20) * DAY).toISOString().slice(0, 19).replace('T', ' '),
+        Counterparty: nameFor(d), Amount: amount,
+        TxnDate: new Date(t + randint(0, 20) * DAY).toISOString().slice(0, 19).replace('T', ' '),
         AccountRef: 'AC' + randint(10000000, 99999999),
       });
     }
   }
 
-  Cases.push({
-    CaseMasterID: cid, CrimeNo: crimeNo, CaseNo: `${year}${pad(serial[sKey], 5)}`,
+  const status = statusFor(cal, ageDays);
+  wCases.write({
+    CaseMasterID: cid, CrimeNo: crimeNo, CaseNo: `${year}${pad(sNext, 5)}`,
     CrimeRegisteredDate: dt.toISOString().slice(0, 10), Year: year, CrimeMonth: month,
     IncidentDate: dt.toISOString().slice(0, 19).replace('T', ' '),
-    StateName: d.state, DistrictName: d.district, StationName: station,
-    latitude: +ev.lat.toFixed(5), longitude: +ev.lng.toFixed(5),
-    CaseCategory: cat, Gravity: gravity, CrimeHead: head, CrimeSubHead: sub,
-    CaseStatus: statusFor(cal, ageDays),
-    CourtName: `${d.district} District & Sessions Court`, OfficerName: nameFor(d.state),
-    ActsSections: ACTS[sub] || 'BNS 3', AccusedCount: nA, VictimCount: nV,
-    BriefFacts: `A case of ${sub.toLowerCase()} was registered at ${station}, ${d.district} (${d.state}). `
-      + `Investigation initiated under ${ACTS[sub] || 'BNS 3'}; scene examined and evidence collected.`,
-    _t: ev.t,
+    StateName: d.state, DistrictName: d.district, TalukName: loc.taluk, LocalityName: loc.name,
+    StationName: station,
+    latitude: evLat[ev].toFixed(5), longitude: evLng[ev].toFixed(5),
+    CaseCategory: cat, Gravity: h.gravity, CrimeHead: h.group, CrimeSubHead: h.head,
+    CaseStatus: status,
+    CourtName: `${d.district} District & Sessions Court`, OfficerName: nameFor(d),
+    ActsSections: h.law, AccusedCount: nA, VictimCount: nV,
+    BriefFacts: `A case of ${h.head.toLowerCase()} was registered at ${station} on the complaint received `
+      + `from ${loc.name}, ${loc.taluk} taluk, ${d.district} district (${d.state}). Investigation was taken up `
+      + `under ${h.law}; the scene of offence was examined and available evidence collected.`,
   });
+
+  // running tallies for the quality report
+  headCount[evHi[ev]]++;
+  stateCount.set(d.state, (stateCount.get(d.state) || 0) + 1);
+  statusCount.set(status, (statusCount.get(status) || 0) + 1);
+  yearCount.set(year, (yearCount.get(year) || 0) + 1);
+  if (h.gravity === 'Heinous') heinousCount++;
+  if (status === 'Convicted' || status === 'Acquitted') {
+    const s = stateTried.get(d.state) || { tried: 0, conv: 0 };
+    s.tried++; if (status === 'Convicted') s.conv++;
+    stateTried.set(d.state, s);
+  }
+  if (n && n % 500000 === 0) process.stdout.write(`\r  ${(n / 1e6).toFixed(1)}M cases…   `);
 }
-console.log(`  cases=${Cases.length.toLocaleString('en-IN')} accused=${Accused.length.toLocaleString('en-IN')} victims=${Victims.length.toLocaleString('en-IN')} txns=${FinancialTxns.length.toLocaleString('en-IN')}`);
+process.stdout.write('\r');
+
+console.log('\nWriting app tables (datastore/seed):');
+const nCases = wCases.close();
+wAccused.close(); wVictims.close(); wComplainants.close(); wArrests.close(); wTxns.close();
 
 // ---------------- co-accused graph + offender risk ----------------
-const edges = new Map();
-for (const [, names] of accusedByCase) {
-  const uniq = [...new Set(names)];
-  for (let i = 0; i < uniq.length; i++) {
-    for (let j = i + 1; j < uniq.length; j++) {
-      const [x, y] = [uniq[i], uniq[j]].sort();
-      const k = x + '||' + y;
-      const e = edges.get(k) || { AccusedA: x, AccusedB: y, SharedCases: 0 };
-      e.SharedCases++;
-      edges.set(k, e);
-    }
-  }
-}
 const ringByName = new Map();
 for (const st of statesList) for (const o of offendersByState[st]) if (o.ring) ringByName.set(o.name, o.ring);
 
-const CoAccusedLinks = [...edges.values()]
-  .sort((a, b) => b.SharedCases - a.SharedCases)
-  .map((e, i) => ({
-    LinkID: i + 1, AccusedA: e.AccusedA, AccusedB: e.AccusedB, SharedCases: e.SharedCases,
-    RingID: ringByName.get(e.AccusedA) || ringByName.get(e.AccusedB) || 0,
-  }));
-
-const OffenderRisk = [...offenderStats.entries()]
-  .filter(([, s]) => s.total >= 2)
-  .map(([name, s]) => {
-    const score = Math.min(100, Math.round(s.total * 5 + s.violent * 11 + (s.ring ? 18 : 0)));
-    return {
-      OffenderRiskID: 0, AccusedName: name, TotalCases: s.total, ViolentCases: s.violent,
-      RingID: s.ring || 0, RiskScore: score,
-      RiskBand: score >= 70 ? 'High' : score >= 40 ? 'Medium' : 'Low',
-      Factors: `${s.total} cases; ${s.violent} violent${s.ring ? '; organized-ring member' : ''}; ${s.state}`,
-    };
-  })
-  .sort((a, b) => b.RiskScore - a.RiskScore)
-  .map((r, i) => ({ ...r, OffenderRiskID: i + 1 }));
-
-// ---------------- CSV output ----------------
-function writeCsv(dir, name, rows) {
-  const file = path.join(dir, name + '.csv');
-  if (!rows.length) { fs.writeFileSync(file, ''); console.log(`  ${name}.csv  ->  0 rows`); return; }
-  const cols = Object.keys(rows[0]);
-  const esc = (v) => {
-    if (v === null || v === undefined) v = '';
-    v = String(v);
-    return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
-  };
-  // Stream in chunks so multi-hundred-thousand-row tables never build one huge string.
-  const fd = fs.openSync(file, 'w');
-  fs.writeSync(fd, cols.join(',') + '\n');
-  const CHUNK = 5000;
-  for (let i = 0; i < rows.length; i += CHUNK) {
-    let buf = '';
-    for (const r of rows.slice(i, i + CHUNK)) buf += cols.map((c) => esc(r[c])).join(',') + '\n';
-    fs.writeSync(fd, buf);
+const wLinks = csvWriter(SEED_DIR, 'CoAccusedLinks', ['LinkID', 'AccusedA', 'AccusedB', 'SharedCases', 'RingID']);
+{
+  const rows = [];
+  for (const [k, shared] of edges) {
+    const i = k.indexOf('||');
+    rows.push([k.slice(0, i), k.slice(i + 2), shared]);
   }
-  fs.closeSync(fd);
-  console.log(`  ${name}.csv  ->  ${rows.length.toLocaleString('en-IN')} rows`);
+  rows.sort((a, b) => b[2] - a[2]);
+  rows.forEach(([a, b, shared], i) => wLinks.write({
+    LinkID: i + 1, AccusedA: a, AccusedB: b, SharedCases: shared,
+    RingID: ringByName.get(a) || ringByName.get(b) || 0,
+  }));
 }
+wLinks.close();
 
-const casesOut = Cases.map(({ _t, ...rest }) => rest);
-console.log('\nWriting app tables (datastore/seed):');
-writeCsv(SEED_DIR, 'Cases', casesOut);
-writeCsv(SEED_DIR, 'Accused', Accused);
-writeCsv(SEED_DIR, 'Victims', Victims);
-writeCsv(SEED_DIR, 'Complainants', Complainants);
-writeCsv(SEED_DIR, 'Arrests', Arrests);
-writeCsv(SEED_DIR, 'CoAccusedLinks', CoAccusedLinks);
-writeCsv(SEED_DIR, 'OffenderRisk', OffenderRisk);
-writeCsv(SEED_DIR, 'FinancialTxns', FinancialTxns);
+const wRisk = csvWriter(SEED_DIR, 'OffenderRisk', ['OffenderRiskID', 'AccusedName', 'TotalCases', 'ViolentCases',
+  'RingID', 'RiskScore', 'RiskBand', 'Factors']);
+{
+  const rows = [];
+  for (const [name, s] of offenderStats) {
+    if (s.total < 2) continue;
+    const score = Math.min(100, Math.round(s.total * 5 + s.violent * 11 + (s.ring ? 18 : 0)));
+    rows.push({ name, s, score });
+  }
+  rows.sort((a, b) => b.score - a.score);
+  rows.forEach((r, i) => wRisk.write({
+    OffenderRiskID: i + 1, AccusedName: r.name, TotalCases: r.s.total, ViolentCases: r.s.violent,
+    RingID: r.s.ring || 0, RiskScore: r.score,
+    RiskBand: r.score >= 70 ? 'High' : r.score >= 40 ? 'Medium' : 'Low',
+    Factors: `${r.s.total} cases; ${r.s.violent} violent${r.s.ring ? '; organised-ring member' : ''}; ${r.s.state}`,
+  }));
+}
+wRisk.close();
 
-// District reference for the backend (centroids for the all-India hotspot map).
-const districtRef = DISTRICTS.map((d) => ({
-  state: d.state, district: d.district, lat: d.lat, lng: d.lng, population: d.pop, stateCrimeRate: d.rate,
+// District reference for the backend hotspot map.
+const districtOut = DISTRICTS.map((d) => ({
+  state: d.state, district: d.district, lat: d.lat, lng: d.lng,
+  population: d.pop, stateCrimeRate: STATE_CAL.get(d.state).crimeRate,
 }));
-fs.writeFileSync(path.join(REF_DIR, 'india_districts.json'), JSON.stringify(districtRef, null, 0));
-console.log(`  ref/india_districts.json  ->  ${districtRef.length} districts`);
-// The API function needs the same centroids to place districts/states on the map.
+fs.writeFileSync(path.join(REF_DIR, 'india_districts.json'), JSON.stringify(districtOut));
 const apiRef = path.join(__dirname, '..', 'functions', 'api', 'ref');
 fs.mkdirSync(apiRef, { recursive: true });
-fs.writeFileSync(path.join(apiRef, 'india_districts.json'), JSON.stringify(districtRef, null, 0));
-console.log(`  functions/api/ref/india_districts.json  ->  ${districtRef.length} districts`);
+fs.writeFileSync(path.join(apiRef, 'india_districts.json'), JSON.stringify(districtOut));
+console.log(`  ref/india_districts.json + functions/api/ref/  ->  ${districtOut.length} districts`);
 
 // ---------------- quality report ----------------
-const byState = {};
-for (const c of casesOut) byState[c.StateName] = (byState[c.StateName] || 0) + 1;
-const byHead = {};
-for (const c of casesOut) byHead[c.CrimeHead] = (byHead[c.CrimeHead] || 0) + 1;
-const byStatus = {};
-for (const c of casesOut) byStatus[c.CaseStatus] = (byStatus[c.CaseStatus] || 0) + 1;
-const byYear = {};
-for (const c of casesOut) byYear[c.Year] = (byYear[c.Year] || 0) + 1;
-const heinous = casesOut.filter((c) => c.Gravity === 'Heinous').length;
-
+const fmt = (n) => n.toLocaleString('en-IN');
+const pct = (a, b) => (b ? (a / b * 100) : 0);
 console.log('\n──────── CALIBRATION / QUALITY REPORT ────────');
-console.log(`Total cases       : ${casesOut.length.toLocaleString('en-IN')}`);
-console.log(`Near-repeat share : ${((1 - bgCount / events.length) * 100).toFixed(1)}%  (literature: 20-45%)`);
-console.log(`Heinous share     : ${(heinous / casesOut.length * 100).toFixed(1)}%`);
-console.log(`States/UTs covered: ${Object.keys(byState).length}   Districts: ${new Set(casesOut.map((c) => c.DistrictName)).size}`);
+console.log(`Total cases        : ${fmt(nCases)}`);
+console.log(`Near-repeat share  : ${pct(evN - bgCount, evN).toFixed(1)}%  (literature: 20-45%)`);
+console.log(`Heinous share      : ${pct(heinousCount, nCases).toFixed(1)}%`);
+console.log(`States/UTs covered : ${stateCount.size} of ${ncrb.states.length}`);
+console.log(`Districts covered  : ${DISTRICTS.length}   Crime heads used: ${headCount.filter((c) => c > 0).length} of ${HEADS.length}`);
 
-console.log('\nTop 8 states by volume (vs real NCRB 2023 rate/lakh):');
-Object.entries(byState).sort((a, b) => b[1] - a[1]).slice(0, 8).forEach(([s, n]) => {
-  console.log(`  ${s.padEnd(18)} ${String(n).padStart(7)}  (real rate ${STATE_CAL.get(s).crimeRate}/lakh)`);
+console.log('\nState volume fidelity (generated share vs real NCRB 2023 share):');
+const realTotal = [...stateCount.keys()].reduce((a, s) => a + STATE_CAL.get(s).totalCrimes, 0);
+[...stateCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).forEach(([s, n]) => {
+  const real = pct(STATE_CAL.get(s).totalCrimes, realTotal);
+  console.log(`  ${s.padEnd(20)} gen ${pct(n, nCases).toFixed(2)}%  real ${real.toFixed(2)}%  (${fmt(n)} cases)`);
 });
-console.log('\nLowest 5 states by volume:');
-Object.entries(byState).sort((a, b) => a[1] - b[1]).slice(0, 5).forEach(([s, n]) => {
-  console.log(`  ${s.padEnd(18)} ${String(n).padStart(7)}  (real rate ${STATE_CAL.get(s).crimeRate}/lakh)`);
+console.log('  … lowest 5:');
+[...stateCount.entries()].sort((a, b) => a[1] - b[1]).slice(0, 5).forEach(([s, n]) => {
+  console.log(`  ${s.padEnd(20)} gen ${pct(n, nCases).toFixed(3)}%  real ${pct(STATE_CAL.get(s).totalCrimes, realTotal).toFixed(3)}%  (${fmt(n)} cases)`);
 });
 
-console.log('\nCrime-head mix:');
-HEADS.forEach(([h, share]) => {
-  const obs = ((byHead[h] || 0) / casesOut.length * 100).toFixed(1);
-  console.log(`  ${h.padEnd(22)} obs ${obs}%  target ${(share * 100).toFixed(0)}%`);
+console.log('\nCrime-group mix (generated vs NCRB 2022 share):');
+const groupGen = new Map(), groupReal = new Map();
+HEADS.forEach((h, i) => {
+  groupGen.set(h.group, (groupGen.get(h.group) || 0) + headCount[i]);
+  groupReal.set(h.group, (groupReal.get(h.group) || 0) + h.cases);
 });
+[...groupGen.entries()].sort((a, b) => b[1] - a[1]).forEach(([g, n]) => {
+  console.log(`  ${g.padEnd(28)} gen ${pct(n, nCases).toFixed(2)}%  real ${pct(groupReal.get(g), HEAD_TOTAL).toFixed(2)}%`);
+});
+
+console.log('\nTop 12 crime heads:');
+[...HEADS.keys()].sort((a, b) => headCount[b] - headCount[a]).slice(0, 12).forEach((i) => {
+  console.log(`  ${HEADS[i].head.slice(0, 44).padEnd(45)} gen ${pct(headCount[i], nCases).toFixed(2)}%  real ${pct(HEADS[i].cases, HEAD_TOTAL).toFixed(2)}%`);
+});
+
 console.log('\nCase status mix:');
-Object.entries(byStatus).sort((a, b) => b[1] - a[1]).forEach(([s, n]) => {
-  console.log(`  ${s.padEnd(22)} ${(n / casesOut.length * 100).toFixed(1)}%`);
+[...statusCount.entries()].sort((a, b) => b[1] - a[1]).forEach(([s, n]) => {
+  console.log(`  ${s.padEnd(24)} ${pct(n, nCases).toFixed(1)}%`);
 });
 console.log('\nCases per year:');
-Object.keys(byYear).sort().forEach((y) => console.log(`  ${y}: ${byYear[y].toLocaleString('en-IN')}`));
+[...yearCount.keys()].sort().forEach((y) => console.log(`  ${y}: ${fmt(yearCount.get(y))}`));
 
-// Per-state outcome fidelity check: does generated conviction share track NCRB?
-console.log('\nOutcome fidelity (generated vs NCRB conviction rate), sample:');
-['Kerala', 'West Bengal', 'Uttar Pradesh', 'Karnataka', 'Delhi'].forEach((s) => {
-  const rows = casesOut.filter((c) => c.StateName === s);
-  const tried = rows.filter((c) => c.CaseStatus === 'Convicted' || c.CaseStatus === 'Acquitted').length;
-  const conv = rows.filter((c) => c.CaseStatus === 'Convicted').length;
-  if (!tried) return;
-  console.log(`  ${s.padEnd(16)} generated ${(conv / tried * 100).toFixed(0)}%  NCRB ${STATE_CAL.get(s).convictionRate}%`);
+console.log('\nOutcome fidelity (generated conviction rate vs NCRB 2023):');
+['Kerala', 'West Bengal', 'Uttar Pradesh', 'Karnataka', 'Delhi', 'Gujarat', 'Bihar'].forEach((s) => {
+  const t = stateTried.get(s);
+  if (!t || !t.tried) return;
+  console.log(`  ${s.padEnd(16)} generated ${pct(t.conv, t.tried).toFixed(0)}%  NCRB ${STATE_CAL.get(s).convictionRate}%`);
 });
+
+// Prohibition only exists in dry states; a leak into any other state is a bug.
+const prohibitionIdx = HEADS.findIndex((h) => h.dryOnly);
+console.log(`\nProhibition Act: ${fmt(headCount[prohibitionIdx])} cases, confined to ` +
+  `${Object.keys(PROHIBITION_SHARE).length} states with a prohibition law ` +
+  `(${pct(headCount[prohibitionIdx], nCases).toFixed(2)}% of all cases, real ${pct(HEADS[prohibitionIdx].cases, HEAD_TOTAL).toFixed(2)}%)`);
+const unusedHeads = HEADS.filter((h, i) => headCount[i] === 0);
+if (unusedHeads.length) {
+  console.log(`Heads with no case at this scale: ${unusedHeads.length} ` +
+    `(national share below ~1 in ${fmt(Math.round(nCases / 1))}; they appear at larger --cases)`);
+}
+
+const totalRows = nCases + wAccused.count + wVictims.count + wComplainants.count
+  + wArrests.count + wLinks.count + wRisk.count + wTxns.count;
+console.log(`\nTotal rows across 8 tables: ${fmt(totalRows)}`);
+console.log(`Data Store load cost      : ~${fmt(Math.ceil(totalRows / 200))} API calls at 200 rows/batch`);
+if (Math.ceil(totalRows / 200) > 180000) {
+  console.log('  WARNING: this exceeds the 200,000-call development budget. Reduce --cases or use bulk import.');
+}
 console.log('──────────────────────────────────────────────');
 console.log('DONE.  Load with:  node datastore/load.js');
