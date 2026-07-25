@@ -156,17 +156,33 @@ async function pagedQuery(app, base, maxPages = 200) {
  */
 async function fetchPanel(app, { level = 'district', state = null } = {}) {
   const scoped = state ? String(state).replace(/'/g, "''") : null;
-  const byDistrict = level === 'district' || !!scoped;
+  let byDistrict = level === 'district' || !!scoped;
   const where = scoped ? `WHERE StateName='${scoped}'` : '';
   const groupCols = byDistrict ? 'StateName, DistrictName' : 'StateName';
-  const rows = await pagedQuery(app,
-    `SELECT ${groupCols}, Year, CrimeMonth, COUNT(ROWID) FROM Cases ${where} GROUP BY ${groupCols}, Year, CrimeMonth ORDER BY Year, CrimeMonth`);
+
+  // StateName arrives with the all-India dataset. A schema migration and a code deploy cannot
+  // be made atomic, so this tolerates a Cases table that predates the column instead of
+  // failing the endpoint: it retries grouped on DistrictName alone and records that the panel
+  // is unqualified. Without this, deploying before the migration takes the live forecast down,
+  // and deploying after it means the migration has to be done blind.
+  let rows;
+  let stateless = false;
+  try {
+    rows = await pagedQuery(app,
+      `SELECT ${groupCols}, Year, CrimeMonth, COUNT(ROWID) FROM Cases ${where} GROUP BY ${groupCols}, Year, CrimeMonth ORDER BY Year, CrimeMonth`);
+  } catch (e) {
+    if (scoped || !/StateName/i.test(String((e && e.message) || e))) throw e;
+    stateless = true;
+    byDistrict = true;
+    rows = await pagedQuery(app,
+      `SELECT DistrictName, Year, CrimeMonth, COUNT(ROWID) FROM Cases GROUP BY DistrictName, Year, CrimeMonth ORDER BY Year, CrimeMonth`);
+  }
   const panelTruncated = !!rows.truncated;
   // crime-head split (for narrative + per-head early warning)
   let headRows = [];
   try {
     headRows = await pagedQuery(app,
-      `SELECT CrimeHead, Year, CrimeMonth, COUNT(ROWID) FROM Cases ${where} GROUP BY CrimeHead, Year, CrimeMonth ORDER BY Year, CrimeMonth`);
+      `SELECT CrimeHead, Year, CrimeMonth, COUNT(ROWID) FROM Cases ${stateless ? '' : where} GROUP BY CrimeHead, Year, CrimeMonth ORDER BY Year, CrimeMonth`);
   } catch (_) { /* optional */ }
 
   const ymKey = (y, m) => y * 100 + m;
@@ -191,11 +207,15 @@ async function fetchPanel(app, { level = 'district', state = null } = {}) {
     timeline.push({ year: y, month: m, label: `${y}-${String(m).padStart(2, '0')}`, idx });
     idx++; m++; if (m > 12) { m = 1; y++; }
   }
-  const T = timeline.length;
+  let T = timeline.length;
 
   // Unit keys are state-qualified at district level so the six shared district names
   // stay separate series.
-  const keyOf = (r) => (byDistrict ? unitKey(r.StateName, r.DistrictName) : r.StateName);
+  // On a pre-migration table there is no state to qualify with, so the bare district name is
+  // the key. That reintroduces the six duplicate district names, which is unavoidable without
+  // the column and is why `stateless` is reported on the panel.
+  const keyOf = (r) => (stateless ? r.DistrictName
+    : (byDistrict ? unitKey(r.StateName, r.DistrictName) : r.StateName));
   const districts = [...new Set(rows.map(keyOf).filter((k) => k && k !== '|'))];
   const series = {};
   for (const d of districts) series[d] = new Array(T).fill(0);
@@ -207,9 +227,64 @@ async function fetchPanel(app, { level = 'district', state = null } = {}) {
   }
   // Display name / centroid / population per unit, resolved once.
   const meta = {};
+  // On a stateless panel the reference has to be searched by bare district name, since the
+  // state-qualified key cannot be constructed.
+  const byBareName = new Map();
+  if (stateless) for (const m of UNIT_META.values()) if (!byBareName.has(m.district)) byBareName.set(m.district, m);
   for (const k of districts) {
-    const m = metaOf(k);
+    const m = stateless ? (byBareName.get(k) || null) : metaOf(k);
     meta[k] = m || { name: byDistrict ? k.split('|')[1] || k : k, state: k.split('|')[0], district: byDistrict ? k.split('|')[1] : null, lat: null, lng: null, pop: 1e-4 };
+  }
+
+  // Cap the panel to a recent window.
+  //
+  // A handful of records with an implausible Year stretches the timeline far beyond the data:
+  // the live Karnataka table produced 257 months for a dataset covering about three years, so
+  // the model trained on a mostly-empty panel and the calibration window landed in a stretch
+  // with no data at all. Forecasting does not benefit from a 21-year window either way — five
+  // years is four seasonal cycles, which is ample for monthly seasonality.
+  const MAX_PERIODS = Math.max(24, Number(process.env.FORECAST_MAX_PERIODS) || 60);
+  if (timeline.length > MAX_PERIODS) {
+    const drop = timeline.length - MAX_PERIODS;
+    for (const d of districts) series[d] = series[d].slice(drop);
+    const kept = timeline.slice(drop).map((t, i) => ({ ...t, idx: i }));
+    timeline.length = 0;
+    timeline.push(...kept);
+    for (const k of Object.keys(timeIndex)) {
+      const v = timeIndex[k] - drop;
+      if (v < 0) delete timeIndex[k]; else timeIndex[k] = v;
+    }
+    T = timeline.length;
+  }
+
+  // Trim periods with no data at either end of the timeline.
+  //
+  // A month before the dataset begins is not an observation of zero crime, it is the absence of
+  // an observation, and treating it as a zero poisons everything downstream: the calibration
+  // window lands inside the empty stretch, every residual is exactly zero, and the conformal
+  // quantile comes out as 0 — a 90% interval of plus or minus nothing. That is what the live
+  // service was serving. Interior zeros are kept, because a quiet month inside the covered
+  // range is real data.
+  {
+    const total = (ti) => districts.reduce((s, d) => s + series[d][ti], 0);
+    let lo = 0, hi = T - 1;
+    while (lo <= hi && total(lo) === 0) lo++;
+    while (hi >= lo && total(hi) === 0) hi--;
+    if (lo > 0 || hi < T - 1) {
+      if (hi < lo) {
+        return { districts: [], timeline: [], series: {}, headSeries: {}, meta: {}, level, state: scoped, empty: true };
+      }
+      for (const d of districts) series[d] = series[d].slice(lo, hi + 1);
+      const trimmed = timeline.slice(lo, hi + 1).map((t, i) => ({ ...t, idx: i }));
+      timeline.length = 0;
+      timeline.push(...trimmed);
+      for (const k of Object.keys(timeIndex)) {
+        const v = timeIndex[k] - lo;
+        if (v < 0 || v > hi - lo) delete timeIndex[k]; else timeIndex[k] = v;
+      }
+      // The head series below are sized from T, so it has to follow the trim.
+      T = timeline.length;
+    }
   }
 
   // per-head statewide monthly series
@@ -223,7 +298,8 @@ async function fetchPanel(app, { level = 'district', state = null } = {}) {
   }
   return {
     districts, timeline, series, headSeries, meta,
-    level: byDistrict ? 'district' : 'state', state: scoped, truncated: panelTruncated,
+    level: byDistrict ? 'district' : 'state', state: scoped,
+    truncated: panelTruncated, stateless: stateless || undefined,
   };
 }
 

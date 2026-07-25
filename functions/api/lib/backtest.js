@@ -44,20 +44,47 @@ const std = (a) => {
 // served BY this model; falls back to the in-function engine if the service is down.
 const SERVICE_URL = process.env.FORECAST_SERVICE_URL || '';
 
+/**
+ * Forecast via the AppSail engine service.
+ *
+ * This speaks the v3 contract, which is the same ``engine`` package that produced every number
+ * in ml/RESULTS.md: LightGBM-or-sklearn Poisson objective, nine quantile regressors, NNLS
+ * stacking against the police historical-pattern baseline, and Mondrian/CQR conformal intervals
+ * selected on measured width at equal coverage.
+ *
+ * The previous version of this function sent only the raw series. That silently cost the model
+ * its seasonality — the service had to infer a calendar month from the array index — and all of
+ * its spatial features, since without centroids there are no neighbours. Labels, months and
+ * unit metadata are all sent now.
+ */
 async function forecastViaService(panel) {
   if (!SERVICE_URL) return null;
   const { series, timeline, meta = {} } = panel;
   const nt = nextTimeMonth(timeline);
+  const unitMeta = {};
+  for (const [u, m] of Object.entries(meta)) {
+    unitMeta[u] = { lat: m.lat != null ? Number(m.lat) : null, lng: m.lng != null ? Number(m.lng) : null, pop: Number(m.pop) || 0 };
+  }
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), Number(process.env.FORECAST_SVC_TIMEOUT_MS || 25000));
+  // A national 640-district monthly forecast takes the engine ~28s, which is why it runs there
+  // and not here. The caller is responsible for choosing a scope that fits its own ceiling —
+  // /admin/forecast/refresh does that by working one state at a time.
+  const timer = setTimeout(() => ctrl.abort(), Number(process.env.FORECAST_SVC_TIMEOUT_MS || 20000));
   let d;
   try {
     const r = await fetch(SERVICE_URL.replace(/\/$/, '') + '/forecast', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ series, period: 12, horizonLabel: nt.label, budgets: [0.1, 0.2, 0.33] }),
+      body: JSON.stringify({
+        series,
+        labels: timeline.map((t) => t.label),
+        months: timeline.map((t) => t.month),
+        period: 'month',
+        level: panel.level || 'district',
+        unitMeta,
+      }),
       signal: ctrl.signal
     });
-    if (!r.ok) throw new Error('service ' + r.status);
+    if (!r.ok) throw new Error('service ' + r.status + ' ' + (await r.text()).slice(0, 200));
     d = await r.json();
   } finally { clearTimeout(timer); }
   if (!d || d.error || !Array.isArray(d.forecasts)) throw new Error('service bad response');
@@ -67,24 +94,37 @@ async function forecastViaService(panel) {
     const s = series[f.unit] || [];
     const sigma = std(s.slice(-12)) || 1;
     const baseline = f.baseline != null ? f.baseline : F.mean(s.slice(-12));
+    const m = meta[f.unit] || {};
     return {
-      district: (panel.meta[f.unit] || {}).name || f.unit,
-      unit: f.unit, state: (panel.meta[f.unit] || {}).state || null,
-      lat: (panel.meta[f.unit] || {}).lat, lng: (panel.meta[f.unit] || {}).lng,
+      district: m.name || f.name || f.unit,
+      unit: f.unit, state: m.state || f.state || null,
+      lat: m.lat != null ? m.lat : f.lat, lng: m.lng != null ? m.lng : f.lng,
       predicted: round(f.predicted, 1), low: round(Math.max(0, f.low), 1), high: round(f.high, 1),
       baseline: round(baseline, 1), lastMonth: s[T - 1] != null ? s[T - 1] : (f.last || 0),
-      trendPct: round(f.trendPct, 0), z: round((f.predicted - baseline) / sigma, 2), models: {}
+      trendPct: round(f.trendPct, 0), z: round((f.predicted - baseline) / sigma, 2),
+      band: f.band, models: {}
     };
   }).sort((a, b) => b.predicted - a.predicted);
 
   const acc = d.accuracy || {};
-  const ensMase = acc.mase && acc.mase.ensemble && acc.mase.ensemble.mase;
   return {
     horizon: d.horizon || nt.label, generatedAt: new Date().toISOString(),
-    servedBy: 'catalyst-appsail: ' + (d.engine || 'sklearn-HistGBM'),
+    servedBy: 'catalyst-appsail: ' + (d.engine || 'engine/serve') +
+      ' [' + ((d.backends || {}).point || 'unknown') + ']',
     weights: d.weights || {},
-    conformal: { q90: d.conformalQ90 },
-    accuracy: { mae: (ensMase != null && acc.naiveMae) ? round(ensMase * acc.naiveMae, 3) : undefined, mase: ensMase, coverage90: acc.coverage90 },
+    conformal: { method: d.intervalMethod, level: d.intervalLevel, chosen: acc.intervalChosen },
+    // MASE against the police historical-pattern baseline is reported alongside the headline
+    // number, because beating seasonal-naive is not the bar that matters operationally.
+    accuracy: {
+      mae: acc.mae,
+      mase: (acc.mase || {}).ENSEMBLE,
+      policeBaselineMase: (acc.mase || {}).historical_pattern,
+      coverage90: acc.coverage != null ? round(acc.coverage * 100, 1) : undefined,
+      achievability: acc.achievability,
+      spatial: acc.spatial,
+      window: acc.window,
+    },
+    caveat: d.caveat,
     coverageTarget: 90, forecasts,
     statewide: { predicted: round(forecasts.reduce((s, f) => s + f.predicted, 0), 0) }
   };
@@ -191,11 +231,31 @@ function runBacktest(panel, opts = {}) {
   const nfit = fitResid.length || 1;
   const q90 = round(F.quantile(fitResid, Math.min(1, Math.ceil((nfit + 1) * 0.9) / nfit)), 2);
   const qBand = F.stratifiedConformal(residByUnit, (u) => bandOf[u], 0.9);
-  const qFor = (d) => (qBand[bandOf[d]] != null ? qBand[bandOf[d]] : q90);
+
+  /**
+   * A calibration window can be degenerate — too few origins, or every residual exactly zero
+   * because the window sits in a stretch with no data. The quantile is then 0 and the endpoint
+   * reports a 90% interval of plus or minus nothing, which is not a narrow interval but a false
+   * claim of certainty, and it is the worst thing this endpoint can return.
+   *
+   * The floor is the Poisson standard deviation of the forecast itself, scaled to a 90%
+   * two-sided normal interval. For a count process with no other information that is the least
+   * you can honestly claim, and it is labelled as a floor so nobody reads it as measured.
+   */
+  const POISSON_Z90 = 1.645;
+  let degenerate = false;
+  const qFor = (d, predicted = 0) => {
+    const q = qBand[bandOf[d]] != null ? qBand[bandOf[d]] : q90;
+    if (q > 0) return q;
+    degenerate = true;
+    return round(POISSON_Z90 * Math.sqrt(Math.max(predicted, 1)), 2);
+  };
   const conformal = {
     q80: round(F.quantile(fitResid, 0.8), 2), q90, q95: round(F.quantile(fitResid, 0.95), 2),
     byBand: Object.fromEntries(Object.entries(qBand).map(([k, v]) => [k, round(v, 2)])),
+    calibrationPoints: fitResid.length,
     method: 'split-conformal, stratified by unit volume band',
+    get intervalFloorApplied() { return degenerate || undefined; },
   };
 
   // Measure everything on the held-out eval origins.
@@ -228,7 +288,7 @@ function runBacktest(panel, opts = {}) {
       ensAbs.push(Math.abs(e - actual));
       if (actual > 0) ensPct.push(Math.abs(e - actual) / actual);
       // 90% conformal interval coverage on held-out data, using the band-specific width
-      const qd = qFor(d);
+      const qd = qFor(d, e);
       if (actual >= Math.max(0, e - qd) && actual <= e + qd) covHit++;
       covN++;
       swActual += actual; swPred += e;
@@ -297,11 +357,16 @@ function runBacktest(panel, opts = {}) {
 async function computeForecast(app, { level, state } = {}) {
   const panel = await F.fetchPanel(app, { level, state });
   if (!panel.districts.length) return { error: 'no_data' };
-  // Prefer the Catalyst AppSail-hosted Python ML model; fall back to the in-function engine.
+  // Prefer the AppSail-hosted engine — it is the code the published accuracy was measured on.
+  // Falling back to the in-function engine is correct behaviour, but doing it silently is not:
+  // the two produce different numbers, and an operator needs to know which one answered and why.
+  let serviceError;
   try {
     const svc = await forecastViaService(panel);
     if (svc) return svc;
-  } catch (_) { /* fall through to local engine */ }
+  } catch (e) {
+    serviceError = String((e && e.message) || e).slice(0, 300);
+  }
   const bt = runBacktest(panel);
   const { series, timeline, districts, meta } = panel;
   const nt = nextTimeMonth(timeline);
@@ -320,7 +385,10 @@ async function computeForecast(app, { level, state } = {}) {
     const sigma = std(recent) || 1;
     const z = (point - baseline) / sigma;
     const band = F.sizeBand(F.mean(series[d]) || 0);
-    const q = qBand[band] != null ? qBand[band] : qGlobal;
+    // Same floor as the coverage calculation above: a degenerate calibration window must not
+    // produce low == high == predicted, which reads as a certainty the model does not have.
+    const qRaw = qBand[band] != null ? qBand[band] : qGlobal;
+    const q = qRaw > 0 ? qRaw : round(1.645 * Math.sqrt(Math.max(point, 1)), 2);
     const m = meta[d] || {};
     return {
       district: m.name || d, unit: d, state: m.state || null,
@@ -337,8 +405,12 @@ async function computeForecast(app, { level, state } = {}) {
 
   return {
     horizon: nt.label, generatedAt: new Date().toISOString(),
+    servedBy: 'in-function engine',
+    serviceError,
     level: panel.level, state: panel.state, units: districts.length,
     panelTruncated: panel.truncated || false,
+    panelStateless: panel.stateless || undefined,
+    periods: T,
     weights: Object.fromEntries(MODEL_KEYS.map((k) => [k, round(weights[k], 3)])),
     conformal: bt.conformal, accuracy: bt.perModel && bt.perModel.ensemble,
     coverageTarget: 90, forecasts,
