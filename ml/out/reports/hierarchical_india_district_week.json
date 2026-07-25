@@ -1,0 +1,124 @@
+{
+  "aggregate_panel": "india_district_week",
+  "groups": {
+    "arms_explosives": {
+      "units": 313,
+      "mase": 0.7161,
+      "efficiency": 0.8602
+    },
+    "body_offences": {
+      "units": 583,
+      "mase": 0.7213,
+      "efficiency": 0.843
+    },
+    "caste_atrocities": {
+      "units": 52,
+      "mase": 0.7389,
+      "efficiency": 0.9094
+    },
+    "crime_against_children": {
+      "units": 498,
+      "mase": 0.7261,
+      "efficiency": 0.9577
+    },
+    "crime_against_women": {
+      "units": 569,
+      "mase": 0.7298,
+      "efficiency": 0.9226
+    },
+    "cyber_crime": {
+      "units": 172,
+      "mase": 0.7389,
+      "efficiency": 0.9372
+    },
+    "economic_offences": {
+      "units": 542,
+      "mase": 0.7271,
+      "efficiency": 0.9305
+    },
+    "environment_wildlife": {
+      "units": 119,
+      "mase": 0.7362,
+      "efficiency": 0.9096
+    },
+    "kidnapping_trafficking": {
+      "units": 320,
+      "mase": 0.7367,
+      "efficiency": 0.9405
+    },
+    "liquor_excise": {
+      "units": 504,
+      "mase": 0.7176,
+      "efficiency": 0.681
+    },
+    "narcotics": {
+      "units": 494,
+      "mase": 0.7131,
+      "efficiency": 0.8426
+    },
+    "offences_against_the_state": {
+      "units": 2,
+      "mase": 0.8348,
+      "efficiency": 0.9068
+    },
+    "property_offences": {
+      "units": 620,
+      "mase": 0.7064,
+      "efficiency": 0.7294
+    },
+    "public_order": {
+      "units": 535,
+      "mase": 0.698,
+      "efficiency": 0.6797
+    },
+    "regulatory_local_acts": {
+      "units": 516,
+      "mase": 0.7205,
+      "efficiency": 0.8303
+    },
+    "traffic_negligence": {
+      "units": 586,
+      "mase": 0.7427,
+      "efficiency": 0.8496
+    }
+  },
+  "comparison": {
+    "top-down (aggregate)": {
+      "mase": 0.7414501490398598,
+      "mae": 13.0683,
+      "efficiency": 0.677,
+      "headroom_pct": 32.3
+    },
+    "bottom-up (sum of groups)": {
+      "mase": 0.7365237596041381,
+      "mae": 12.9815,
+      "efficiency": 0.6746,
+      "headroom_pct": 32.54
+    },
+    "bottom-up, GBM only": {
+      "mase": 0.735893472409492,
+      "mae": 12.9704,
+      "efficiency": 0.6745,
+      "headroom_pct": 32.55
+    },
+    "police baseline (aggregate)": {
+      "mase": 0.813877522945404,
+      "mae": 14.3449,
+      "efficiency": 0.6201,
+      "headroom_pct": 37.99
+    },
+    "police baseline (bottom-up)": {
+      "mase": 0.8082221423380666,
+      "mae": 14.2452,
+      "efficiency": 0.6174,
+      "headroom_pct": 38.26
+    },
+    "blend (w_bottomup=0.7, in-sample weight)": {
+      "mase": 0.7351025805264854,
+      "mae": 12.9564,
+      "efficiency": 0.6785,
+      "headroom_pct": 32.15,
+      "weight_selected_on_test_window": true
+    }
+  }
+}

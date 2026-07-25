@@ -1,0 +1,221 @@
+{
+  "dataset": "losangeles_taluk_day",
+  "panel": {
+    "units": 1109,
+    "periods": 1461,
+    "period": "day",
+    "season": 365,
+    "events": 874241,
+    "describe": "panel 1109 units x 1461 days (1,620,249 cells, 874,241 events)\n    volume/unit  min 54  p10 219  median 655  max 4654\n    per-period   median 0.4  zero cells 64.2%  bands [1108, 1, 0, 0, 0]",
+    "level": "taluk",
+    "source": "real-open-data-losangeles"
+  },
+  "split": {
+    "train_origins": 658,
+    "stack_origins": 219,
+    "calib_origins": 219,
+    "test_origins": 365
+  },
+  "point": {
+    "seasonal_naive": {
+      "mase": 1.0,
+      "rmsse": 1.0,
+      "mae": 0.719,
+      "bias": 0.007,
+      "weight": 0.0
+    },
+    "persistence": {
+      "mase": 0.9739,
+      "rmsse": 0.9781,
+      "mae": 0.7,
+      "bias": 0.0,
+      "weight": 0.0111
+    },
+    "ma3": {
+      "mase": 0.889,
+      "rmsse": 0.8112,
+      "mae": 0.639,
+      "bias": 0.0,
+      "weight": 0.0
+    },
+    "historical_pattern": {
+      "mase": 0.8336,
+      "rmsse": 0.7216,
+      "mae": 0.599,
+      "bias": -0.037,
+      "weight": 0.1448
+    },
+    "holt": {
+      "mase": 0.9015,
+      "rmsse": 0.8161,
+      "mae": 0.648,
+      "bias": 0.009,
+      "weight": 0.0322
+    },
+    "poisson_gbm": {
+      "mase": 0.8345,
+      "rmsse": 0.7159,
+      "mae": 0.6,
+      "bias": -0.013,
+      "weight": 0.8118
+    },
+    "ENSEMBLE": {
+      "mase": 0.8338,
+      "rmsse": 0.7151,
+      "mae": 0.599,
+      "bias": -0.016,
+      "weight": 1.0
+    }
+  },
+  "distribution": {
+    "crps": 0.3365,
+    "pinball": 0.1682,
+    "pit": [
+      0.0011,
+      0.0085,
+      0.0658,
+      0.0,
+      0.0768,
+      0.5858,
+      0.0,
+      0.1701,
+      0.0,
+      0.092
+    ],
+    "intervals": {
+      "split-conformal (global)": {
+        "coverage": 0.9014,
+        "width": 1.8
+      },
+      "mondrian-conformal (by band)": {
+        "coverage": 0.9014,
+        "width": 1.8
+      },
+      "CQR (adaptive, stratified)": {
+        "coverage": 0.9529,
+        "width": 2.04
+      }
+    }
+  },
+  "spatial": {
+    "0.010": {
+      "budget": 0.01,
+      "hit_rate": 0.0499,
+      "pai": 5.033,
+      "pei": 0.548
+    },
+    "0.050": {
+      "budget": 0.05,
+      "hit_rate": 0.1671,
+      "pai": 3.369,
+      "pei": 0.555
+    },
+    "0.100": {
+      "budget": 0.1,
+      "hit_rate": 0.2804,
+      "pai": 2.802,
+      "pei": 0.583
+    },
+    "0.200": {
+      "budget": 0.2,
+      "hit_rate": 0.4432,
+      "pai": 2.214,
+      "pei": 0.63
+    }
+  },
+  "conformal": {
+    "split": {
+      "method": "split-conformal",
+      "level": 0.9,
+      "q": 1.271
+    },
+    "mondrian": {
+      "method": "mondrian-conformal (stratified by volume band)",
+      "level": 0.9,
+      "q_global": 1.271,
+      "q_by_band": {
+        "0": 1.271
+      }
+    },
+    "cqr": {
+      "method": "conformalized quantile regression (CQR), stratified",
+      "level": 0.9,
+      "e_global": 0.0,
+      "e_by_band": {
+        "0": 0.0
+      }
+    },
+    "coverage_by_band": {
+      "0": {
+        "n": 404785,
+        "split": 0.901,
+        "mondrian": 0.901
+      }
+    }
+  },
+  "weights": {
+    "persistence": 0.0111,
+    "ma3": 0.0,
+    "historical_pattern": 0.1448,
+    "holt": 0.0322,
+    "poisson_gbm": 0.8118
+  },
+  "achievability": {
+    "poisson_floor_mae": 0.5636,
+    "achieved_mae": 0.5994,
+    "efficiency": 0.9402,
+    "headroom_pct": 5.98,
+    "floor_mase": 0.784,
+    "dispersion_bracket": [
+      1.205,
+      1.2492
+    ],
+    "dispersion_floor_mae": [
+      0.6186,
+      0.6299
+    ],
+    "dispersion_efficiency": [
+      1.0,
+      1.0
+    ],
+    "dispersion_headroom_pct": [
+      0.0,
+      0.0
+    ]
+  },
+  "diagnostics": {
+    "gbm_backend": "lightgbm-poisson",
+    "quantile_backend": "lightgbm-quantile",
+    "train_rows_last_fit": 1209919,
+    "retrain_every": 8,
+    "neighbours": 5,
+    "recapture_rate": 0.918,
+    "spatial_baseline_historical_pattern": {
+      "0.010": {
+        "budget": 0.01,
+        "hit_rate": 0.0475,
+        "pai": 4.791,
+        "pei": 0.523
+      },
+      "0.050": {
+        "budget": 0.05,
+        "hit_rate": 0.159,
+        "pai": 3.206,
+        "pei": 0.528
+      },
+      "0.100": {
+        "budget": 0.1,
+        "hit_rate": 0.272,
+        "pai": 2.718,
+        "pei": 0.565
+      },
+      "0.200": {
+        "budget": 0.2,
+        "hit_rate": 0.4375,
+        "pai": 2.186,
+        "pei": 0.622
+      }
+    }
+  },
+  "runtime_s": 5514.3
+}

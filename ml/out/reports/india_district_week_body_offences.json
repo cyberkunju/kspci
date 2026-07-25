@@ -1,0 +1,242 @@
+{
+  "dataset": "india_district_week_body_offences",
+  "panel": {
+    "units": 583,
+    "periods": 262,
+    "period": "week",
+    "season": 52,
+    "events": 3819267,
+    "describe": "panel 583 units x 262 weeks (152,746 cells, 3,819,267 events)\n    volume/unit  min 202  p10 1107  median 4841  max 42854\n    per-period   median 18.5  zero cells 2.0%  bands [38, 201, 298, 46, 0]",
+    "level": "district",
+    "source": "ksp-synthetic-all-india"
+  },
+  "split": {
+    "train_origins": 118,
+    "stack_origins": 39,
+    "calib_origins": 39,
+    "test_origins": 66
+  },
+  "point": {
+    "seasonal_naive": {
+      "mase": 1.0,
+      "rmsse": 1.0,
+      "mae": 5.94,
+      "bias": 0.688,
+      "weight": 0.0
+    },
+    "persistence": {
+      "mase": 0.9163,
+      "rmsse": 0.9276,
+      "mae": 5.443,
+      "bias": 0.268,
+      "weight": 0.042
+    },
+    "ma3": {
+      "mase": 0.8093,
+      "rmsse": 0.8318,
+      "mae": 4.807,
+      "bias": 0.282,
+      "weight": 0.0132
+    },
+    "historical_pattern": {
+      "mase": 0.7564,
+      "rmsse": 0.7722,
+      "mae": 4.493,
+      "bias": 0.977,
+      "weight": 0.317
+    },
+    "holt": {
+      "mase": 0.8271,
+      "rmsse": 0.851,
+      "mae": 4.913,
+      "bias": 0.323,
+      "weight": 0.0568
+    },
+    "poisson_gbm": {
+      "mase": 0.72,
+      "rmsse": 0.7391,
+      "mae": 4.277,
+      "bias": 0.668,
+      "weight": 0.571
+    },
+    "ENSEMBLE": {
+      "mase": 0.7211,
+      "rmsse": 0.7396,
+      "mae": 4.283,
+      "bias": 0.725,
+      "weight": 1.0
+    }
+  },
+  "distribution": {
+    "crps": 2.8474,
+    "pinball": 1.4237,
+    "pit": [
+      0.1275,
+      0.1597,
+      0.1486,
+      0.0,
+      0.0971,
+      0.2378,
+      0.0,
+      0.1355,
+      0.0,
+      0.0938
+    ],
+    "intervals": {
+      "split-conformal (global)": {
+        "coverage": 0.8962,
+        "width": 17.5
+      },
+      "mondrian-conformal (by band)": {
+        "coverage": 0.8957,
+        "width": 17.09
+      },
+      "CQR (adaptive, stratified)": {
+        "coverage": 0.8945,
+        "width": 17.24
+      }
+    }
+  },
+  "spatial": {
+    "0.010": {
+      "budget": 0.01,
+      "hit_rate": 0.0531,
+      "pai": 5.155,
+      "pei": 0.978
+    },
+    "0.050": {
+      "budget": 0.05,
+      "hit_rate": 0.1879,
+      "pai": 3.776,
+      "pei": 0.981
+    },
+    "0.100": {
+      "budget": 0.1,
+      "hit_rate": 0.3079,
+      "pai": 3.095,
+      "pei": 0.981
+    },
+    "0.200": {
+      "budget": 0.2,
+      "hit_rate": 0.4871,
+      "pai": 2.427,
+      "pei": 0.979
+    }
+  },
+  "conformal": {
+    "split": {
+      "method": "split-conformal",
+      "level": 0.9,
+      "q": 9.333
+    },
+    "mondrian": {
+      "method": "mondrian-conformal (stratified by volume band)",
+      "level": 0.9,
+      "q_global": 9.333,
+      "q_by_band": {
+        "0": 2.367,
+        "1": 5.294,
+        "2": 10.169,
+        "3": 17.702
+      }
+    },
+    "cqr": {
+      "method": "conformalized quantile regression (CQR), stratified",
+      "level": 0.9,
+      "e_global": 0.17,
+      "e_by_band": {
+        "0": 0.008,
+        "1": 0.083,
+        "2": 0.287,
+        "3": 1.318
+      }
+    },
+    "coverage_by_band": {
+      "0": {
+        "n": 2640,
+        "split": 1.0,
+        "mondrian": 0.912
+      },
+      "1": {
+        "n": 12870,
+        "split": 0.99,
+        "mondrian": 0.898
+      },
+      "2": {
+        "n": 19866,
+        "split": 0.863,
+        "mondrian": 0.891
+      },
+      "3": {
+        "n": 3102,
+        "split": 0.63,
+        "mondrian": 0.898
+      }
+    }
+  },
+  "weights": {
+    "persistence": 0.042,
+    "ma3": 0.0132,
+    "historical_pattern": 0.317,
+    "holt": 0.0568,
+    "poisson_gbm": 0.571
+  },
+  "achievability": {
+    "poisson_floor_mae": 3.6118,
+    "achieved_mae": 4.2833,
+    "efficiency": 0.8432,
+    "headroom_pct": 15.68,
+    "floor_mase": 0.6081,
+    "dispersion_bracket": [
+      1.0856,
+      1.1265
+    ],
+    "dispersion_floor_mae": [
+      3.7633,
+      3.8335
+    ],
+    "dispersion_efficiency": [
+      0.8786,
+      0.895
+    ],
+    "dispersion_headroom_pct": [
+      10.5,
+      12.14
+    ]
+  },
+  "diagnostics": {
+    "gbm_backend": "lightgbm-poisson",
+    "quantile_backend": "lightgbm-quantile",
+    "train_rows_last_fit": 116600,
+    "retrain_every": 8,
+    "neighbours": 5,
+    "recapture_rate": 0.9692,
+    "spatial_baseline_historical_pattern": {
+      "0.010": {
+        "budget": 0.01,
+        "hit_rate": 0.0531,
+        "pai": 5.157,
+        "pei": 0.978
+      },
+      "0.050": {
+        "budget": 0.05,
+        "hit_rate": 0.1876,
+        "pai": 3.771,
+        "pei": 0.98
+      },
+      "0.100": {
+        "budget": 0.1,
+        "hit_rate": 0.3076,
+        "pai": 3.092,
+        "pei": 0.98
+      },
+      "0.200": {
+        "budget": 0.2,
+        "hit_rate": 0.4858,
+        "pai": 2.42,
+        "pei": 0.977
+      }
+    }
+  },
+  "runtime_s": 281.7
+}

@@ -1,0 +1,57 @@
+{
+  "level": "district",
+  "period": "week",
+  "realisations": 6,
+  "events_per_realisation": [
+    27424968,
+    27437903,
+    27434587,
+    27449645,
+    27434757,
+    27447403
+  ],
+  "units": 640,
+  "periods": 262,
+  "mean_count_per_cell": 163.6344,
+  "variance_per_cell": 279.0238,
+  "dispersion_index": 1.7052,
+  "loo_oracle_mae": 12.5571,
+  "loo_oracle_rmse": 18.2983,
+  "measured_floor_mae": 11.463,
+  "poisson_floor_mae": 8.8649,
+  "poisson_bound_understates_by": 1.2931,
+  "by_volume_band": {
+    "0": {
+      "units": 320,
+      "mean_count": 49.163,
+      "variance": 80.22,
+      "dispersion": 1.632,
+      "measured_floor_mae": 6.433,
+      "poisson_floor_mae": 5.0599
+    },
+    "1": {
+      "units": 192,
+      "mean_count": 172.646,
+      "variance": 287.327,
+      "dispersion": 1.664,
+      "measured_floor_mae": 13.3983,
+      "poisson_floor_mae": 10.3963
+    },
+    "2": {
+      "units": 96,
+      "mean_count": 314.887,
+      "variance": 544.402,
+      "dispersion": 1.729,
+      "measured_floor_mae": 18.4472,
+      "poisson_floor_mae": 14.059
+    },
+    "3": {
+      "units": 32,
+      "mean_count": 800.528,
+      "variance": 1421.112,
+      "dispersion": 1.775,
+      "measured_floor_mae": 29.199,
+      "poisson_floor_mae": 22.1438
+    }
+  }
+}

@@ -1,0 +1,242 @@
+{
+  "dataset": "losangeles_grid_1000m_week",
+  "panel": {
+    "units": 1151,
+    "periods": 209,
+    "period": "week",
+    "season": 52,
+    "events": 873513,
+    "describe": "panel 1151 units x 209 weeks (240,559 cells, 873,513 events)\n    volume/unit  min 30  p10 70  median 447  max 15788\n    per-period   median 2.1  zero cells 26.7%  bands [702, 421, 27, 1, 0]",
+    "level": "grid",
+    "source": "real-open-data-losangeles"
+  },
+  "split": {
+    "train_origins": 95,
+    "stack_origins": 31,
+    "calib_origins": 31,
+    "test_origins": 52
+  },
+  "point": {
+    "seasonal_naive": {
+      "mase": 1.0,
+      "rmsse": 1.0,
+      "mae": 2.13,
+      "bias": 0.06,
+      "weight": 0.0
+    },
+    "persistence": {
+      "mase": 0.941,
+      "rmsse": 0.9215,
+      "mae": 2.005,
+      "bias": 0.01,
+      "weight": 0.0
+    },
+    "ma3": {
+      "mase": 0.7967,
+      "rmsse": 0.7629,
+      "mae": 1.697,
+      "bias": 0.008,
+      "weight": 0.0
+    },
+    "historical_pattern": {
+      "mase": 0.7651,
+      "rmsse": 0.771,
+      "mae": 1.63,
+      "bias": -0.27,
+      "weight": 0.2164
+    },
+    "holt": {
+      "mase": 0.8058,
+      "rmsse": 0.7715,
+      "mae": 1.717,
+      "bias": 0.012,
+      "weight": 0.1663
+    },
+    "poisson_gbm": {
+      "mase": 0.7225,
+      "rmsse": 0.6973,
+      "mae": 1.539,
+      "bias": -0.027,
+      "weight": 0.6172
+    },
+    "ENSEMBLE": {
+      "mase": 0.7218,
+      "rmsse": 0.6964,
+      "mae": 1.537,
+      "bias": -0.073,
+      "weight": 1.0
+    }
+  },
+  "distribution": {
+    "crps": 0.9911,
+    "pinball": 0.4955,
+    "pit": [
+      0.0529,
+      0.1251,
+      0.2515,
+      0.0,
+      0.1106,
+      0.2101,
+      0.0,
+      0.1418,
+      0.0,
+      0.1079
+    ],
+    "intervals": {
+      "split-conformal (global)": {
+        "coverage": 0.9071,
+        "width": 5.87
+      },
+      "mondrian-conformal (by band)": {
+        "coverage": 0.9069,
+        "width": 6.01
+      },
+      "CQR (adaptive, stratified)": {
+        "coverage": 0.9282,
+        "width": 6.32
+      }
+    }
+  },
+  "spatial": {
+    "0.010": {
+      "budget": 0.01,
+      "hit_rate": 0.0997,
+      "pai": 9.563,
+      "pei": 0.937
+    },
+    "0.050": {
+      "budget": 0.05,
+      "hit_rate": 0.2647,
+      "pai": 5.252,
+      "pei": 0.912
+    },
+    "0.100": {
+      "budget": 0.1,
+      "hit_rate": 0.4029,
+      "pai": 4.033,
+      "pei": 0.923
+    },
+    "0.200": {
+      "budget": 0.2,
+      "hit_rate": 0.5943,
+      "pai": 2.974,
+      "pei": 0.934
+    }
+  },
+  "conformal": {
+    "split": {
+      "method": "split-conformal",
+      "level": 0.9,
+      "q": 3.704
+    },
+    "mondrian": {
+      "method": "mondrian-conformal (stratified by volume band)",
+      "level": 0.9,
+      "q_global": 3.704,
+      "q_by_band": {
+        "0": 2.068,
+        "1": 5.267,
+        "2": 10.8,
+        "3": 36.482
+      }
+    },
+    "cqr": {
+      "method": "conformalized quantile regression (CQR), stratified",
+      "level": 0.9,
+      "e_global": 0.0,
+      "e_by_band": {
+        "0": 0.0,
+        "1": 0.244,
+        "2": 0.329,
+        "3": 27.378
+      }
+    },
+    "coverage_by_band": {
+      "0": {
+        "n": 37544,
+        "split": 0.983,
+        "mondrian": 0.903
+      },
+      "1": {
+        "n": 21164,
+        "split": 0.797,
+        "mondrian": 0.913
+      },
+      "2": {
+        "n": 1092,
+        "split": 0.478,
+        "mondrian": 0.907
+      },
+      "3": {
+        "n": 52,
+        "split": 0.269,
+        "mondrian": 1.0
+      }
+    }
+  },
+  "weights": {
+    "persistence": 0.0,
+    "ma3": 0.0,
+    "historical_pattern": 0.2164,
+    "holt": 0.1663,
+    "poisson_gbm": 0.6172
+  },
+  "achievability": {
+    "poisson_floor_mae": 1.3263,
+    "achieved_mae": 1.5374,
+    "efficiency": 0.8627,
+    "headroom_pct": 13.73,
+    "floor_mase": 0.6227,
+    "dispersion_bracket": [
+      1.2945,
+      1.3284
+    ],
+    "dispersion_floor_mae": [
+      1.509,
+      1.5287
+    ],
+    "dispersion_efficiency": [
+      0.9815,
+      0.9943
+    ],
+    "dispersion_headroom_pct": [
+      0.57,
+      1.85
+    ]
+  },
+  "diagnostics": {
+    "gbm_backend": "lightgbm-poisson",
+    "quantile_backend": "lightgbm-quantile",
+    "train_rows_last_fit": 176103,
+    "retrain_every": 8,
+    "neighbours": 5,
+    "recapture_rate": 0.9529,
+    "spatial_baseline_historical_pattern": {
+      "0.010": {
+        "budget": 0.01,
+        "hit_rate": 0.098,
+        "pai": 9.404,
+        "pei": 0.922
+      },
+      "0.050": {
+        "budget": 0.05,
+        "hit_rate": 0.2599,
+        "pai": 5.159,
+        "pei": 0.896
+      },
+      "0.100": {
+        "budget": 0.1,
+        "hit_rate": 0.3958,
+        "pai": 3.962,
+        "pei": 0.907
+      },
+      "0.200": {
+        "budget": 0.2,
+        "hit_rate": 0.5876,
+        "pai": 2.94,
+        "pei": 0.923
+      }
+    }
+  },
+  "runtime_s": 294.7
+}

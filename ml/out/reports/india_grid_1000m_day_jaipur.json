@@ -1,0 +1,228 @@
+{
+  "dataset": "india_grid_1000m_day_jaipur",
+  "panel": {
+    "units": 139,
+    "periods": 1827,
+    "period": "day",
+    "season": 365,
+    "events": 64009,
+    "describe": "panel 139 units x 1827 days (253,953 cells, 64,009 events)\n    volume/unit  min 150  p10 163  median 244  max 8933\n    per-period   median 0.1  zero cells 82.5%  bands [137, 2, 0, 0, 0]",
+    "level": "grid",
+    "source": "ksp-synthetic-all-india"
+  },
+  "split": {
+    "train_origins": 822,
+    "stack_origins": 274,
+    "calib_origins": 274,
+    "test_origins": 457
+  },
+  "point": {
+    "seasonal_naive": {
+      "mase": 1.0,
+      "rmsse": 1.0,
+      "mae": 0.325,
+      "bias": 0.002,
+      "weight": 0.0
+    },
+    "persistence": {
+      "mase": 0.9947,
+      "rmsse": 1.0093,
+      "mae": 0.323,
+      "bias": 0.0,
+      "weight": 0.0
+    },
+    "ma3": {
+      "mase": 0.9458,
+      "rmsse": 0.8265,
+      "mae": 0.307,
+      "bias": 0.0,
+      "weight": 0.0
+    },
+    "historical_pattern": {
+      "mase": 0.9335,
+      "rmsse": 0.7174,
+      "mae": 0.303,
+      "bias": 0.007,
+      "weight": 0.6593
+    },
+    "holt": {
+      "mase": 0.9728,
+      "rmsse": 0.8319,
+      "mae": 0.316,
+      "bias": 0.011,
+      "weight": 0.0308
+    },
+    "poisson_gbm": {
+      "mase": 0.9349,
+      "rmsse": 0.7214,
+      "mae": 0.304,
+      "bias": 0.005,
+      "weight": 0.3099
+    },
+    "ENSEMBLE": {
+      "mase": 0.9338,
+      "rmsse": 0.7171,
+      "mae": 0.303,
+      "bias": 0.006,
+      "weight": 1.0
+    }
+  },
+  "distribution": {
+    "crps": 0.1546,
+    "pinball": 0.0773,
+    "pit": [
+      0.002,
+      0.0064,
+      0.0093,
+      0.0,
+      0.0163,
+      0.1701,
+      0.0,
+      0.6686,
+      0.0,
+      0.1273
+    ],
+    "intervals": {
+      "split-conformal (global)": {
+        "coverage": 0.8976,
+        "width": 1.02
+      },
+      "mondrian-conformal (by band)": {
+        "coverage": 0.898,
+        "width": 1.06
+      },
+      "CQR (adaptive, stratified)": {
+        "coverage": 0.982,
+        "width": 1.19
+      }
+    }
+  },
+  "spatial": {
+    "0.010": {
+      "budget": 0.01,
+      "hit_rate": 0.1404,
+      "pai": 19.511,
+      "pei": 0.864
+    },
+    "0.050": {
+      "budget": 0.05,
+      "hit_rate": 0.3836,
+      "pai": 7.617,
+      "pei": 0.759
+    },
+    "0.100": {
+      "budget": 0.1,
+      "hit_rate": 0.4687,
+      "pai": 4.654,
+      "pei": 0.652
+    },
+    "0.200": {
+      "budget": 0.2,
+      "hit_rate": 0.5817,
+      "pai": 2.888,
+      "pei": 0.59
+    }
+  },
+  "conformal": {
+    "split": {
+      "method": "split-conformal",
+      "level": 0.9,
+      "q": 0.824
+    },
+    "mondrian": {
+      "method": "mondrian-conformal (stratified by volume band)",
+      "level": 0.9,
+      "q_global": 0.824,
+      "q_by_band": {
+        "0": 0.801,
+        "1": 3.125
+      }
+    },
+    "cqr": {
+      "method": "conformalized quantile regression (CQR), stratified",
+      "level": 0.9,
+      "e_global": 0.0,
+      "e_by_band": {
+        "0": 0.0,
+        "1": -0.0
+      }
+    },
+    "coverage_by_band": {
+      "0": {
+        "n": 62609,
+        "split": 0.907,
+        "mondrian": 0.898
+      },
+      "1": {
+        "n": 914,
+        "split": 0.257,
+        "mondrian": 0.875
+      }
+    }
+  },
+  "weights": {
+    "persistence": 0.0,
+    "ma3": 0.0,
+    "historical_pattern": 0.6593,
+    "holt": 0.0308,
+    "poisson_gbm": 0.3099
+  },
+  "achievability": {
+    "poisson_floor_mae": 0.3029,
+    "achieved_mae": 0.3035,
+    "efficiency": 0.9982,
+    "headroom_pct": 0.18,
+    "floor_mase": 0.9321,
+    "dispersion_bracket": [
+      1.0125,
+      1.0557
+    ],
+    "dispersion_floor_mae": [
+      0.3048,
+      0.3113
+    ],
+    "dispersion_efficiency": [
+      1.0,
+      1.0
+    ],
+    "dispersion_headroom_pct": [
+      0.0,
+      0.0
+    ]
+  },
+  "diagnostics": {
+    "gbm_backend": "lightgbm-poisson",
+    "quantile_backend": "lightgbm-quantile",
+    "train_rows_last_fit": 202245,
+    "retrain_every": 8,
+    "neighbours": 5,
+    "recapture_rate": 0.9529,
+    "spatial_baseline_historical_pattern": {
+      "0.010": {
+        "budget": 0.01,
+        "hit_rate": 0.1404,
+        "pai": 19.511,
+        "pei": 0.864
+      },
+      "0.050": {
+        "budget": 0.05,
+        "hit_rate": 0.3835,
+        "pai": 7.614,
+        "pei": 0.758
+      },
+      "0.100": {
+        "budget": 0.1,
+        "hit_rate": 0.4687,
+        "pai": 4.654,
+        "pei": 0.652
+      },
+      "0.200": {
+        "budget": 0.2,
+        "hit_rate": 0.581,
+        "pai": 2.884,
+        "pei": 0.589
+      }
+    }
+  },
+  "runtime_s": 2380.0
+}
