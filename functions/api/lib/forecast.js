@@ -137,13 +137,24 @@ async function pagedQuery(app, base, maxPages = 200) {
 /**
  * Build a dense unit x month panel.
  *
- * Two levels, mirroring the hotspot map. State is the default: pooling 640 districts
- * that span two to twenty-two thousand cases breaks the assumptions both the shared
- * gradient-boosted model and the conformal interval rest on — one absolute residual
- * quantile cannot describe a metro and a Himalayan district at the same time. District
- * level is used when scoped to a single state, where the units are comparable.
+ * Two levels, mirroring the hotspot map. **District is the default.** State was the default
+ * on the argument that pooling 640 districts spanning two to twenty-two thousand cases breaks
+ * the assumptions the shared gradient-boosted model and the conformal interval rest on. Two
+ * things since changed that:
+ *
+ *  - The interval objection was real and is now fixed properly, by stratifying conformal
+ *    calibration by volume band (see stratifiedConformal below). Measured coverage by band
+ *    went from 99.8 / 94.8 / 76.9 / 47.8 per cent against a nominal 90 to
+ *    88.2 / 87.7 / 86.6 / 85.1.
+ *  - Backtested offline on 27.4M incidents, state x month is the one configuration that
+ *    outright fails: MASE 1.083, i.e. worse than repeating last year. 36 units x 36 periods
+ *    is not enough signal. District x month scores 0.787. See ml/RESULTS.md.
+ *
+ * Monthly is itself the weakest temporal resolution measured (efficiency 0.544 against
+ * 0.929 for district x day). Weekly and daily panels need an incident-date-derived column on
+ * Cases; until that exists this reads Year and CrimeMonth, which is what the table has.
  */
-async function fetchPanel(app, { level = 'state', state = null } = {}) {
+async function fetchPanel(app, { level = 'district', state = null } = {}) {
   const scoped = state ? String(state).replace(/'/g, "''") : null;
   const byDistrict = level === 'district' || !!scoped;
   const where = scoped ? `WHERE StateName='${scoped}'` : '';

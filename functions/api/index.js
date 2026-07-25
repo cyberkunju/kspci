@@ -384,11 +384,13 @@ function forecastRoute(fn) {
     try {
       const engine = require('./lib/backtest');
       const adminApp = catalyst.initialize(req, { scope: 'admin' });
-      // level=state|district and state=<name> mirror the hotspot map's drill-down, so
-      // the forecast is computed on units of comparable size.
+      // level=state|district and state=<name> mirror the hotspot map's drill-down. District
+      // is the default because state x month is the one backtested configuration that loses
+      // to seasonal-naive outright (MASE 1.083 against district's 0.787) — 36 units by 36
+      // periods is too little signal. See ml/RESULTS.md.
       const data = await engine[fn](adminApp, {
         ...req.query,
-        level: req.query.level === 'district' ? 'district' : 'state',
+        level: req.query.level === 'state' ? 'state' : 'district',
         state: req.query.state || null,
       });
       res.json(data);
