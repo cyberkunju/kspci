@@ -24,6 +24,8 @@ functions/api/catalyst-config.json
 # Synthetic data (regenerated via script)
 datastore/seed/*.csv
 datastore/train/*.csv
+# Loader resume checkpoint
+datastore/seed/.load-state.json
 
 # Raw open-data inputs for build-geo.js (~57MB; refetch via datastore/fetch-geo.sh)
 datastore/raw/

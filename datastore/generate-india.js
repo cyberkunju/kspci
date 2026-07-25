@@ -187,26 +187,118 @@ const MAXENV = 1.35 * 1.20 * 1.04;
 module.exports = { DISTRICTS, HEADS };
 
 // ---------------- names (regionally varied) ----------------
-const FIRST_N = ['Amit', 'Rajesh', 'Sunil', 'Vikram', 'Anil', 'Deepak', 'Rohit', 'Sanjay', 'Pooja', 'Neha', 'Kavita', 'Sunita', 'Priya', 'Aarti', 'Manoj', 'Ashok', 'Rekha', 'Seema'];
-const FIRST_S = ['Ravi', 'Suresh', 'Manjunath', 'Prakash', 'Karthik', 'Venkatesh', 'Lakshmi', 'Anitha', 'Divya', 'Meena', 'Shivakumar', 'Nagaraj', 'Srinivas', 'Padma', 'Vijaya'];
-const FIRST_E = ['Subrata', 'Debasish', 'Tapan', 'Biswajit', 'Ranjan', 'Sourav', 'Mousumi', 'Sikha', 'Rupali', 'Ananya', 'Pradip', 'Jyotsna'];
-const FIRST_W = ['Nitin', 'Mahesh', 'Pravin', 'Sachin', 'Jignesh', 'Bhavesh', 'Snehal', 'Vaishali', 'Trupti', 'Manisha', 'Kiran', 'Nilesh'];
-const FIRST_NE = ['Bikash', 'Lalrin', 'Temjen', 'Neiphiu', 'Thangboi', 'Mary', 'Esther', 'Rinchen', 'Karma', 'Pema'];
-const LAST_N = ['Sharma', 'Verma', 'Yadav', 'Singh', 'Gupta', 'Mishra', 'Tiwari', 'Chauhan', 'Pandey', 'Rathore', 'Saini', 'Kashyap'];
-const LAST_S = ['Gowda', 'Shetty', 'Rao', 'Reddy', 'Naidu', 'Iyer', 'Nair', 'Menon', 'Murthy', 'Pillai', 'Hegde', 'Achari'];
-const LAST_E = ['Das', 'Ghosh', 'Banerjee', 'Chatterjee', 'Mondal', 'Sarkar', 'Bose', 'Mahato', 'Pradhan', 'Nayak'];
-const LAST_W = ['Patil', 'Desai', 'Joshi', 'Kulkarni', 'Shah', 'Patel', 'Jadhav', 'More', 'Deshmukh', 'Chavan'];
-const LAST_NE = ['Hazarika', 'Borah', 'Sangma', 'Marak', 'Ao', 'Konyak', 'Chakma', 'Bhutia', 'Lepcha', 'Ralte'];
-const LAST_MUSLIM = ['Khan', 'Sheikh', 'Ansari', 'Qureshi', 'Siddiqui', 'Pathan', 'Mirza', 'Hussain', 'Rahman', 'Beg'];
-const FIRST_MUSLIM = ['Imran', 'Faisal', 'Aslam', 'Rizwan', 'Sameer', 'Nasir', 'Farhana', 'Ayesha', 'Nazia', 'Shabana'];
-const LAST_CHRISTIAN = ['Fernandes', 'D\'Souza', 'Pereira', 'Thomas', 'Mathew', 'Lobo', 'Rodrigues', 'Gomes'];
-const FIRST_CHRISTIAN = ['Joseph', 'Anthony', 'Rosy', 'Maria', 'Jacob', 'Clara', 'Francis', 'Agnes'];
-const LAST_SIKH = ['Singh', 'Kaur', 'Gill', 'Sandhu', 'Dhillon', 'Bedi', 'Grewal', 'Sidhu'];
-const FIRST_SIKH = ['Gurpreet', 'Harjit', 'Jaswinder', 'Manpreet', 'Simranjit', 'Baljit'];
+// List sizes matter, not just their contents: the pool of distinct offenders in a
+// large state runs to five figures, and given x father x surname must exceed that or
+// separate offenders merge into one identity. Roughly 45 given names and 30 surnames
+// per region yields around 60,000 combinations, which clears the requirement.
+const FIRST_N = ['Amit', 'Rajesh', 'Sunil', 'Vikram', 'Anil', 'Deepak', 'Rohit', 'Sanjay', 'Pooja',
+  'Neha', 'Kavita', 'Sunita', 'Priya', 'Aarti', 'Manoj', 'Ashok', 'Rekha', 'Seema', 'Ramesh',
+  'Dinesh', 'Mukesh', 'Rakesh', 'Naresh', 'Shyam', 'Mohan', 'Gopal', 'Devendra', 'Jitendra',
+  'Satyendra', 'Brijesh', 'Kamlesh', 'Umesh', 'Yogesh', 'Pankaj', 'Vinod', 'Arun', 'Ravindra',
+  'Shivam', 'Abhishek', 'Saurabh', 'Nitesh', 'Bhupendra', 'Meena', 'Anjali', 'Sarita', 'Usha',
+  'Poonam', 'Kiran', 'Lalita', 'Shanti'];
+const FIRST_S = ['Ravi', 'Suresh', 'Manjunath', 'Prakash', 'Karthik', 'Venkatesh', 'Lakshmi',
+  'Anitha', 'Divya', 'Meena', 'Shivakumar', 'Nagaraj', 'Srinivas', 'Padma', 'Vijaya', 'Basavaraj',
+  'Mallikarjun', 'Chandrashekar', 'Krishnappa', 'Rangaswamy', 'Govindaraju', 'Thimmaiah',
+  'Siddappa', 'Nanjundaswamy', 'Ramachandra', 'Subramani', 'Murugan', 'Selvam', 'Arumugam',
+  'Perumal', 'Rajendran', 'Balakrishnan', 'Sundaram', 'Ganesan', 'Vasanth', 'Hariprasad',
+  'Sathish', 'Dhanalakshmi', 'Kalpana', 'Saraswathi', 'Bhavani', 'Geetha', 'Radha', 'Shobha',
+  'Mangala', 'Yashoda', 'Sridevi', 'Kavitha'];
+const FIRST_E = ['Subrata', 'Debasish', 'Tapan', 'Biswajit', 'Ranjan', 'Sourav', 'Mousumi', 'Sikha',
+  'Rupali', 'Ananya', 'Pradip', 'Jyotsna', 'Sanjib', 'Ashis', 'Prasenjit', 'Sukumar', 'Nirmal',
+  'Gautam', 'Bikash', 'Chandan', 'Dipankar', 'Kartik', 'Manas', 'Nabin', 'Palash', 'Rabindra',
+  'Sailen', 'Tarun', 'Uttam', 'Bimal', 'Jagannath', 'Sitaram', 'Bhagirathi', 'Rasmita',
+  'Sasmita', 'Puspanjali', 'Sabita', 'Namita', 'Aparna', 'Chaitali', 'Debjani', 'Kakoli',
+  'Moumita', 'Piyali', 'Sanjukta', 'Tapasi'];
+const FIRST_W = ['Nitin', 'Mahesh', 'Pravin', 'Sachin', 'Jignesh', 'Bhavesh', 'Snehal', 'Vaishali',
+  'Trupti', 'Manisha', 'Kiran', 'Nilesh', 'Sandip', 'Sunil', 'Prashant', 'Amol', 'Yogesh',
+  'Nandkumar', 'Bhaskar', 'Dattatray', 'Ganpat', 'Hemant', 'Kishor', 'Laxman', 'Madhukar',
+  'Namdev', 'Pandurang', 'Ramdas', 'Shankar', 'Tukaram', 'Vasant', 'Vithal', 'Dilip', 'Hitesh',
+  'Ketan', 'Paresh', 'Rakeshbhai', 'Chetna', 'Jyoti', 'Kalpesh', 'Nirmala', 'Rohini', 'Sangita',
+  'Shubhangi', 'Smita', 'Ujwala', 'Varsha'];
+const FIRST_NE = ['Bikash', 'Lalrin', 'Temjen', 'Neiphiu', 'Thangboi', 'Mary', 'Esther', 'Rinchen',
+  'Karma', 'Pema', 'Dhruba', 'Jiten', 'Nabakumar', 'Ibomcha', 'Tomba', 'Chaoba', 'Lalthanzara',
+  'Zoramthanga', 'Vanlalruata', 'Imkong', 'Along', 'Kevi', 'Vikho', 'Wangsu', 'Tashi', 'Sonam',
+  'Dorjee', 'Nima', 'Bipul', 'Dhiren', 'Hemanta', 'Jogen', 'Kamal', 'Nripen', 'Pranab', 'Rupam',
+  'Sanjib', 'Utpal', 'Anima', 'Binita', 'Deepali', 'Junu', 'Momi', 'Purnima', 'Rekha', 'Tarali'];
+const LAST_N = ['Sharma', 'Verma', 'Yadav', 'Singh', 'Gupta', 'Mishra', 'Tiwari', 'Chauhan',
+  'Pandey', 'Rathore', 'Saini', 'Kashyap', 'Dubey', 'Shukla', 'Trivedi', 'Bhardwaj', 'Agarwal',
+  'Goel', 'Jaiswal', 'Kushwaha', 'Maurya', 'Nishad', 'Prajapati', 'Rajput', 'Sahu', 'Solanki',
+  'Thakur', 'Tomar', 'Chaudhary', 'Dhaka', 'Meena', 'Bairwa', 'Jat', 'Gurjar', 'Sisodia'];
+const LAST_S = ['Gowda', 'Shetty', 'Rao', 'Reddy', 'Naidu', 'Iyer', 'Nair', 'Menon', 'Murthy',
+  'Pillai', 'Hegde', 'Achari', 'Kulkarni', 'Patil', 'Bhat', 'Rai', 'Poojary', 'Devadiga',
+  'Nayak', 'Shastri', 'Varma', 'Chetty', 'Mudaliar', 'Pandian', 'Thevar', 'Gounder', 'Nadar',
+  'Kurup', 'Panicker', 'Namboothiri', 'Warrier', 'Sharma', 'Prabhu', 'Kamath', 'Pai'];
+const LAST_E = ['Das', 'Ghosh', 'Banerjee', 'Chatterjee', 'Mondal', 'Sarkar', 'Bose', 'Mahato',
+  'Pradhan', 'Nayak', 'Mohanty', 'Patra', 'Behera', 'Jena', 'Rout', 'Swain', 'Panda', 'Mishra',
+  'Dutta', 'Roy', 'Sen', 'Biswas', 'Halder', 'Pal', 'Bhowmik', 'Kumar', 'Prasad', 'Singh',
+  'Ram', 'Paswan', 'Manjhi', 'Oraon', 'Munda', 'Soren', 'Tudu'];
+const LAST_W = ['Patil', 'Desai', 'Joshi', 'Kulkarni', 'Shah', 'Patel', 'Jadhav', 'More',
+  'Deshmukh', 'Chavan', 'Pawar', 'Shinde', 'Gaikwad', 'Kadam', 'Sawant', 'Bhosale', 'Salunkhe',
+  'Thorat', 'Wagh', 'Mane', 'Solanki', 'Vaghela', 'Chaudhari', 'Rathod', 'Parmar', 'Makwana',
+  'Trivedi', 'Mehta', 'Modi', 'Bhatt', 'Sharma', 'Jain', 'Soni', 'Panchal', 'Prajapati'];
+const LAST_NE = ['Hazarika', 'Borah', 'Sangma', 'Marak', 'Ao', 'Konyak', 'Chakma', 'Bhutia',
+  'Lepcha', 'Ralte', 'Saikia', 'Bora', 'Das', 'Deka', 'Kalita', 'Nath', 'Gogoi', 'Dutta',
+  'Baruah', 'Bezbaruah', 'Sharma', 'Rabha', 'Boro', 'Basumatary', 'Brahma', 'Narzary', 'Syiem',
+  'Lyngdoh', 'Kharkongor', 'Singh', 'Devi', 'Meitei', 'Zoliana', 'Hmar', 'Tamang'];
+const LAST_MUSLIM = ['Khan', 'Sheikh', 'Ansari', 'Qureshi', 'Siddiqui', 'Pathan', 'Mirza',
+  'Hussain', 'Rahman', 'Beg', 'Ahmed', 'Ali', 'Alam', 'Farooqui', 'Hashmi', 'Idrisi', 'Jafri',
+  'Khatun', 'Malik', 'Mansuri', 'Momin', 'Nadvi', 'Rizvi', 'Saifi', 'Shaikh', 'Syed', 'Usmani',
+  'Zaidi', 'Chishti', 'Deshmukh', 'Kazi', 'Memon', 'Patel', 'Sayyed', 'Tamboli'];
+const FIRST_MUSLIM = ['Imran', 'Faisal', 'Aslam', 'Rizwan', 'Sameer', 'Nasir', 'Farhana', 'Ayesha',
+  'Nazia', 'Shabana', 'Abdul', 'Mohammed', 'Iqbal', 'Javed', 'Kamruddin', 'Mustafa', 'Naeem',
+  'Parvez', 'Rafiq', 'Salim', 'Shahid', 'Tariq', 'Wasim', 'Yusuf', 'Zahir', 'Anwar', 'Bashir',
+  'Firoz', 'Hamid', 'Irfan', 'Junaid', 'Khalid', 'Lateef', 'Nadeem', 'Rehana', 'Sabina',
+  'Tabassum', 'Zainab', 'Fatima', 'Hasina', 'Noorjahan', 'Ruksana', 'Shaheen', 'Yasmin'];
+const LAST_CHRISTIAN = ['Fernandes', 'D\'Souza', 'Pereira', 'Thomas', 'Mathew', 'Lobo',
+  'Rodrigues', 'Gomes', 'Dias', 'Pinto', 'Correa', 'Menezes', 'Nazareth', 'Sequeira', 'Vaz',
+  'Abraham', 'Chacko', 'George', 'Jacob', 'John', 'Joseph', 'Kurien', 'Philip', 'Samuel',
+  'Varghese', 'Zachariah', 'Massey', 'Peter', 'Paul', 'Michael', 'Francis', 'Anthony',
+  'Baptista', 'Coelho', 'Monteiro'];
+const FIRST_CHRISTIAN = ['Joseph', 'Anthony', 'Rosy', 'Maria', 'Jacob', 'Clara', 'Francis',
+  'Agnes', 'Albert', 'Benny', 'Cyril', 'Daniel', 'Edwin', 'Felix', 'Gregory', 'Henry', 'Ivan',
+  'James', 'Kevin', 'Lawrence', 'Martin', 'Nelson', 'Oliver', 'Patrick', 'Robert', 'Stephen',
+  'Thomas', 'Vincent', 'Wilson', 'Xavier', 'Alice', 'Beena', 'Celine', 'Dolly', 'Elizabeth',
+  'Flora', 'Gracy', 'Helen', 'Irene', 'Jessy', 'Lilly', 'Molly', 'Nancy', 'Reena', 'Sheela'];
+const LAST_SIKH = ['Singh', 'Kaur', 'Gill', 'Sandhu', 'Dhillon', 'Bedi', 'Grewal', 'Sidhu',
+  'Bajwa', 'Brar', 'Chahal', 'Dhaliwal', 'Gandhi', 'Hundal', 'Kalsi', 'Khera', 'Lally', 'Mann',
+  'Nagra', 'Randhawa', 'Sahota', 'Sekhon', 'Sohal', 'Toor', 'Virk', 'Aujla', 'Bhullar', 'Cheema',
+  'Deol', 'Ghuman', 'Kang', 'Lubana', 'Nijjar', 'Panesar', 'Rai'];
+const FIRST_SIKH = ['Gurpreet', 'Harjit', 'Jaswinder', 'Manpreet', 'Simranjit', 'Baljit',
+  'Amarjit', 'Balwinder', 'Charanjit', 'Darshan', 'Gurdeep', 'Harbhajan', 'Inderjit', 'Jagtar',
+  'Kulwant', 'Lakhwinder', 'Mohinder', 'Narinder', 'Paramjit', 'Rajinder', 'Sukhwinder',
+  'Tarlochan', 'Avtar', 'Bhupinder', 'Davinder', 'Gurmeet', 'Hardeep', 'Jasbir', 'Kuldeep',
+  'Malkiat', 'Navjot', 'Pargat', 'Ranjit', 'Satnam', 'Surinder', 'Tejinder', 'Amandeep',
+  'Harpreet', 'Jaspreet', 'Kirandeep', 'Manjit', 'Rupinder', 'Sarbjit', 'Veerpal'];
 
+// The lists above are mixed-gender. Splitting them matters twice over: a female
+// victim named Rajesh is an obvious defect, and the father's-name slot must be male
+// or records read as nonsense ("Shivam Seema Nishad").
+const FEMALE_NAMES = new Set(['Pooja', 'Neha', 'Kavita', 'Sunita', 'Priya', 'Aarti', 'Rekha', 'Seema',
+  'Meena', 'Anjali', 'Sarita', 'Usha', 'Poonam', 'Kiran', 'Lalita', 'Shanti', 'Lakshmi', 'Anitha',
+  'Divya', 'Padma', 'Vijaya', 'Dhanalakshmi', 'Kalpana', 'Saraswathi', 'Bhavani', 'Geetha', 'Radha',
+  'Shobha', 'Mangala', 'Yashoda', 'Sridevi', 'Kavitha', 'Mousumi', 'Sikha', 'Rupali', 'Ananya',
+  'Jyotsna', 'Bhagirathi', 'Rasmita', 'Sasmita', 'Puspanjali', 'Sabita', 'Namita', 'Aparna',
+  'Chaitali', 'Debjani', 'Kakoli', 'Moumita', 'Piyali', 'Sanjukta', 'Tapasi', 'Snehal', 'Vaishali',
+  'Trupti', 'Manisha', 'Chetna', 'Jyoti', 'Nirmala', 'Rohini', 'Sangita', 'Shubhangi', 'Smita',
+  'Ujwala', 'Varsha', 'Mary', 'Esther', 'Anima', 'Binita', 'Deepali', 'Junu', 'Momi', 'Purnima',
+  'Tarali', 'Farhana', 'Ayesha', 'Nazia', 'Shabana', 'Rehana', 'Sabina', 'Tabassum', 'Zainab',
+  'Fatima', 'Hasina', 'Noorjahan', 'Ruksana', 'Shaheen', 'Yasmin', 'Rosy', 'Maria', 'Clara',
+  'Agnes', 'Alice', 'Beena', 'Celine', 'Dolly', 'Elizabeth', 'Flora', 'Gracy', 'Helen', 'Irene',
+  'Jessy', 'Lilly', 'Molly', 'Nancy', 'Reena', 'Sheela', 'Amandeep', 'Harpreet', 'Jaspreet',
+  'Kirandeep', 'Rupinder', 'Sarbjit', 'Veerpal', 'Simranjit']);
+const males = (a) => a.filter((n) => !FEMALE_NAMES.has(n));
+const females = (a) => a.filter((n) => FEMALE_NAMES.has(n));
+/** [maleGiven, femaleGiven, surname] — the father's name is always drawn from maleGiven. */
+const zone = (first, last) => [males(first), females(first), last];
 const NAME_ZONES = {
-  north: [FIRST_N, LAST_N], south: [FIRST_S, LAST_S], east: [FIRST_E, LAST_E],
-  west: [FIRST_W, LAST_W], northeast: [FIRST_NE, LAST_NE],
+  north: zone(FIRST_N, LAST_N), south: zone(FIRST_S, LAST_S), east: zone(FIRST_E, LAST_E),
+  west: zone(FIRST_W, LAST_W), northeast: zone(FIRST_NE, LAST_NE),
+};
+const NAME_RELIGION = {
+  Muslim: zone(FIRST_MUSLIM, LAST_MUSLIM),
+  Christian: zone(FIRST_CHRISTIAN, LAST_CHRISTIAN),
+  Sikh: zone(FIRST_SIKH, LAST_SIKH),
 };
 const STATE_ZONE = {
   'Kerala': 'south', 'Tamil Nadu': 'south', 'Karnataka': 'south', 'Andhra Pradesh': 'south',
@@ -218,14 +310,21 @@ const STATE_ZONE = {
   'Maharashtra': 'west', 'Gujarat': 'west', 'Goa': 'west', 'Rajasthan': 'west',
   'Dadra and Nagar Haveli and Daman and Diu': 'west',
 };
-/** Name generation follows the district's real religious composition. */
-function nameFor(d, religion) {
+/**
+ * Name generation follows the district's real religious composition.
+ *
+ * The middle element is the father's given name, which is how a large part of India
+ * actually names people and, incidentally, is what makes the name space big enough
+ * to be useful here: given x father x surname yields tens of thousands of distinct
+ * identities per region. With only given x surname, a hundred thousand simulated
+ * offenders collapsed onto a few hundred names, which left the offender-risk table
+ * and the co-offending graph meaningless.
+ */
+function nameFor(d, religion, gender) {
   const rel = religion || weightedKey(d.demo.religion);
-  if (rel === 'Muslim') return pick(FIRST_MUSLIM) + ' ' + pick(LAST_MUSLIM);
-  if (rel === 'Christian') return pick(FIRST_CHRISTIAN) + ' ' + pick(LAST_CHRISTIAN);
-  if (rel === 'Sikh') return pick(FIRST_SIKH) + ' ' + pick(LAST_SIKH);
-  const [F, L] = NAME_ZONES[STATE_ZONE[d.state] || 'north'];
-  return pick(F) + ' ' + pick(L);
+  const [M, F, L] = NAME_RELIGION[rel] || NAME_ZONES[STATE_ZONE[d.state] || 'north'];
+  const given = (gender === 'F' && F.length) ? pick(F) : pick(M);
+  return given + ' ' + pick(M) + ' ' + pick(L);
 }
 
 const OCC_BY_CLASS = {
@@ -420,6 +519,11 @@ for (let i = 0; i < evN; i++) order[i] = i;
 }
 
 // ---------------- offenders & organised rings ----------------
+// Share of accused slots filled from the known-offender pool rather than by a person
+// appearing for the first time. NCRB puts recidivism among arrested persons in the
+// high single digits; drawing from a Zipf-weighted pool at this rate reproduces a
+// comparable repeat-offender profile without flattening it.
+const REPEAT_SHARE = 0.30;
 // Offender pools are per-state so co-offending networks stay geographically coherent.
 const statesList = [...new Set(DISTRICTS.map((d) => d.state))];
 const stateEventCount = new Map();
@@ -428,24 +532,46 @@ for (let i = 0; i < evN; i++) {
   stateEventCount.set(st, (stateEventCount.get(st) || 0) + 1);
 }
 const offendersByState = {};
+const poolWeightByState = {};
 const ringsByState = {};
 let ringSeq = 0;
 for (const st of statesList) {
   const stDistricts = DISTRICTS.filter((d) => d.state === st);
   const stEvents = stateEventCount.get(st) || 0;
-  const nOff = Math.max(40, Math.round(stEvents * 0.06));
-  const pool = Array.from({ length: nOff }, () => {
-    const d = stDistricts[weightedIndex(stDistricts.map((x) => x.weight))];
-    return { name: nameFor(d), ring: 0, age: randint(18, 58), known: true };
-  });
+  const nOff = Math.max(40, Math.round(stEvents * 0.09));
+  // Distinct identities are enforced rather than hoped for: a duplicate in the pool
+  // would silently merge two offenders' histories in the risk table and graph.
+  const distWeights = stDistricts.map((x) => x.weight);
+  const seen = new Set();
+  const pool = [];
+  const poolW = [];
+  for (let guard = 0; pool.length < nOff && guard < nOff * 12; guard++) {
+    const d = stDistricts[weightedIndex(distWeights)];
+    const gender = chance(0.91) ? 'M' : 'F';
+    const name = nameFor(d, null, gender);
+    if (seen.has(name)) continue;
+    seen.add(name);
+    pool.push({ name, ring: 0, age: randint(18, 58), gender, known: true });
+    // Log-normal activity weight. Drawing uniformly gave every repeat offender
+    // roughly the same case count, which is not how offending is distributed. A Zipf
+    // weight overcorrected hard — rank-one offenders took several per cent of a whole
+    // state's draws and ended up with thousands of cases. Log-normal gives most
+    // offenders a similar load with a plausible tail of a few times the median.
+    poolW.push(Math.exp(gauss(0, 0.55)));
+  }
   offendersByState[st] = pool;
+  poolWeightByState[st] = { w: poolW, tot: poolW.reduce((a, b) => a + b, 0) };
   const nRings = Math.max(1, Math.min(24, Math.round(stEvents / 4000)));
   const rings = [];
   for (let r = 0; r < nRings; r++) {
     ringSeq += 1;
-    const members = [];
+    // Distinct members: allowing repeats meant a person listed twice in the array was
+    // drawn twice as often, which pushed a handful of offenders past 250 cases.
+    const memberSet = new Set();
     const size = randint(6, 18);
-    for (let m = 0; m < size; m++) { const o = pick(pool); o.ring = ringSeq; members.push(o); }
+    for (let m = 0; m < size * 3 && memberSet.size < size; m++) memberSet.add(pick(pool));
+    const members = [...memberSet];
+    for (const o of members) o.ring = ringSeq;
     const bursts = [];
     for (let b = 0; b < randint(1, 3); b++) {
       const s = START + rand() * (END - START - 60 * DAY);
@@ -538,16 +664,29 @@ for (let n = 0; n < evN; n++) {
       : h.group === 'Regulatory & Local Acts' ? randint(1, 2) : randint(1, 3);
   const caseAcc = [];
   const recurring = [];
+  const pw = poolWeightByState[d.state];
   for (let a = 0; a < nA; a++) {
-    const off = (activeRing && chance(0.6)) ? pick(activeRing.members)
-      : chance(0.55) ? pick(pool) : { name: nameFor(d), ring: 0, age: randint(18, 58), known: false };
+    let off;
+    if (activeRing && chance(0.6)) off = pick(activeRing.members);
+    else if (chance(REPEAT_SHARE)) off = pool[weightedIndex(pw.w, pw.tot)];
+    else {
+      const g = chance(0.91) ? 'M' : 'F';
+      off = { name: nameFor(d, null, g), ring: 0, age: randint(18, 58), gender: g, known: false };
+    }
     wAccused.write({
       AccusedMasterID: aId++, CaseMasterID: cid, CrimeNo: crimeNo, AccusedName: off.name,
-      AgeYear: off.age || randint(18, 58), Gender: chance(0.91) ? 'M' : 'F', PersonID: 'A' + (a + 1),
+      AgeYear: off.age || randint(18, 58), Gender: off.gender || 'M', PersonID: 'A' + (a + 1),
       RingID: off.ring || 0, DistrictName: d.district, CrimeSubHead: h.head,
     });
     caseAcc.push(off.name);
-    if (off.known) recurring.push(off.name);
+    // Only pool offenders are tracked for risk profiling and the co-offending graph.
+    // Names are not unique keys — in India, as in the real records, distinct people
+    // share a name — so counting every accused record by name would fold thousands of
+    // unrelated first-time accused into one apparent career criminal. Pool identities
+    // are constructed distinct, so the derived tables describe genuinely identified
+    // repeat offenders.
+    if (!off.known) continue;
+    recurring.push(off.name);
     const st = offenderStats.get(off.name) || { total: 0, violent: 0, ring: 0, state: d.state };
     st.total++; if (h.gravity === 'Heinous') st.violent++; if (off.ring) st.ring = off.ring;
     offenderStats.set(off.name, st);
@@ -568,10 +707,10 @@ for (let n = 0; n < evN; n++) {
       : childVictim ? 1 : randint(0, 1);
   for (let v = 0; v < nV; v++) {
     const pd = personDemo(d);
+    const g = womanVictim ? 'F' : (chance(0.5) ? 'M' : 'F');
     wVictims.write({
-      VictimMasterID: vId++, CaseMasterID: cid, VictimName: nameFor(d, pd.religion),
-      AgeYear: childVictim ? randint(3, 17) : adultAge(d),
-      Gender: womanVictim ? 'F' : (chance(0.5) ? 'M' : 'F'),
+      VictimMasterID: vId++, CaseMasterID: cid, VictimName: nameFor(d, pd.religion, g),
+      AgeYear: childVictim ? randint(3, 17) : adultAge(d), Gender: g,
       Caste: pd.caste, Religion: pd.religion,
     });
   }
@@ -579,9 +718,10 @@ for (let n = 0; n < evN; n++) {
   // ---- complainant
   {
     const pd = personDemo(d);
+    const g = womanVictim ? (chance(0.82) ? 'F' : 'M') : (chance(0.58) ? 'M' : 'F');
     wComplainants.write({
-      ComplainantID: cpId++, CaseMasterID: cid, ComplainantName: nameFor(d, pd.religion),
-      AgeYear: adultAge(d), Gender: womanVictim ? (chance(0.82) ? 'F' : 'M') : (chance(0.58) ? 'M' : 'F'),
+      ComplainantID: cpId++, CaseMasterID: cid, ComplainantName: nameFor(d, pd.religion, g),
+      AgeYear: adultAge(d), Gender: g,
       Occupation: pick(OCC_BY_CLASS[pd.occClass]), Religion: pd.religion, Caste: pd.caste,
     });
   }
@@ -671,14 +811,18 @@ const wRisk = csvWriter(SEED_DIR, 'OffenderRisk', ['OffenderRiskID', 'AccusedNam
   const rows = [];
   for (const [name, s] of offenderStats) {
     if (s.total < 2) continue;
-    const score = Math.min(100, Math.round(s.total * 5 + s.violent * 11 + (s.ring ? 18 : 0)));
+    // Smooth saturation rather than a hard cap. The previous linear score hit 100 at
+    // about fifteen cases, which put a quarter of all offenders in the High band and
+    // made the band useless for prioritisation.
+    const load = 0.055 * s.total + 0.16 * s.violent + (s.ring ? 0.45 : 0);
+    const score = Math.round(100 * (1 - Math.exp(-load)));
     rows.push({ name, s, score });
   }
   rows.sort((a, b) => b.score - a.score);
   rows.forEach((r, i) => wRisk.write({
     OffenderRiskID: i + 1, AccusedName: r.name, TotalCases: r.s.total, ViolentCases: r.s.violent,
     RingID: r.s.ring || 0, RiskScore: r.score,
-    RiskBand: r.score >= 70 ? 'High' : r.score >= 40 ? 'Medium' : 'Low',
+    RiskBand: r.score >= 75 ? 'High' : r.score >= 45 ? 'Medium' : 'Low',
     Factors: `${r.s.total} cases; ${r.s.violent} violent${r.s.ring ? '; organised-ring member' : ''}; ${r.s.state}`,
   }));
 }
