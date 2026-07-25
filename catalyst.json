@@ -11,5 +11,14 @@
   "client": {
     "source": "client/dist",
     "ignore": []
-  }
+  },
+  "appsail": [
+    {
+      "source": "docker://localhost/ksp-research:latest",
+      "name": "research",
+      "port": {
+        "http": 9000
+      }
+    }
+  ]
 }
