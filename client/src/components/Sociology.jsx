@@ -5,6 +5,7 @@ Chart.register(...registerables);
 
 import { PALETTE as PAL, GRID, TICK, SURFACE, ACCENT } from '../lib/chartTheme';
 import { Grid, Stack, Text } from '../ui';
+import ChartLegend from './ChartLegend';
 import { ViewError, VizCard } from './Cards';
 
 function C({ type, data, options, height = 230 }) {
@@ -15,9 +16,12 @@ function C({ type, data, options, height = 230 }) {
       type, data,
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { labels: { color: TICK, font: { size: 10 } }, display: type === 'doughnut' } },
-        scales: type === 'doughnut' ? {} : { x: { grid: { color: GRID }, ticks: { color: TICK, font: { size: 10 } } }, y: { grid: { color: GRID }, ticks: { color: TICK, font: { size: 10 } }, beginAtZero: true } },
-        ...options
+        // Doughnuts use <ChartLegend> below the chart; bars are self-labelling.
+        scales: type === 'doughnut' ? {} : {
+          x: { grid: { display: false }, ticks: { color: TICK, font: { size: 10 } } },
+          y: { grid: { color: GRID }, ticks: { color: TICK, font: { size: 10 } }, beginAtZero: true },
+        },
+        ...options,
       }
     });
     return () => ch.current && ch.current.destroy();
@@ -50,15 +54,22 @@ export default function Sociology({ role }) {
       <VizCard title="Complainant occupation (socio-economic)">
         <C type="bar" data={{ labels: occ.labels, datasets: [{ label: 'Complaints', data: occ.data, backgroundColor: PAL }] }} options={{ indexAxis: 'y', plugins: { legend: { display: false } } }} height={260} />
       </VizCard>
-      <VizCard title="Accused gender">
-        <C type="doughnut" data={{ labels: cat(d.accusedGender).labels, datasets: [{ data: cat(d.accusedGender).data, backgroundColor: PAL, borderColor: SURFACE, borderWidth: 2 }] }} />
-      </VizCard>
-      <VizCard title="Community — religion">
-        <C type="doughnut" data={{ labels: cat(d.religion).labels, datasets: [{ data: cat(d.religion).data, backgroundColor: PAL, borderColor: SURFACE, borderWidth: 2 }] }} />
-      </VizCard>
-      <VizCard title="Social category">
-        <C type="doughnut" data={{ labels: cat(d.caste).labels, datasets: [{ data: cat(d.caste).data, backgroundColor: PAL, borderColor: SURFACE, borderWidth: 2 }] }} />
-      </VizCard>
+      {[
+        { title: 'Accused gender', rows: d.accusedGender },
+        { title: 'Community — religion', rows: d.religion },
+        { title: 'Social category', rows: d.caste },
+      ].map(({ title, rows }) => (
+        <VizCard title={title} key={title}>
+          <Stack gap={3}>
+            <C
+              type="doughnut" height={170}
+              data={{ labels: cat(rows).labels, datasets: [{ data: cat(rows).data, backgroundColor: PAL, borderColor: SURFACE, borderWidth: 3 }] }}
+              options={{ cutout: '68%', plugins: { doughnutCenter: { enabled: true, label: 'records' } } }}
+            />
+            <ChartLegend items={rows || []} colors={PAL} />
+          </Stack>
+        </VizCard>
+      ))}
       <VizCard title="Crime type × accused gender (behavioural pattern)" note={d.note} full>
         <C type="bar" height={280} data={{
           labels: (d.crimeByGender || []).map((x) => x.sub),
@@ -66,7 +77,10 @@ export default function Sociology({ role }) {
             { label: 'Male', data: (d.crimeByGender || []).map((x) => x.male), backgroundColor: ACCENT },
             { label: 'Female', data: (d.crimeByGender || []).map((x) => x.female), backgroundColor: '#f472b6' }
           ]
-        }} options={{ plugins: { legend: { display: true } }, scales: { x: { stacked: true, grid: { color: GRID }, ticks: { color: TICK, font: { size: 9 } } }, y: { stacked: true, grid: { color: GRID }, ticks: { color: TICK } } } }} />
+        }} options={{
+          plugins: { legend: { display: true, position: 'bottom', labels: { color: TICK, font: { size: 11 } } } },
+          scales: { x: { stacked: true, grid: { display: false }, ticks: { color: TICK, font: { size: 9 } } }, y: { stacked: true, grid: { color: GRID }, ticks: { color: TICK } } },
+        }} />
       </VizCard>
     </Grid>
   );

@@ -7,7 +7,7 @@ import {
   Grid, Stack, Text, Badge, Button, Card, Table, Banner, StatusDot,
   Spinner, Icon, Collapsible, Markdown, proportional, pixel, Sparkles, ArrowUp, ArrowDown, Server,
 } from '../ui';
-import { Kpi, MetricSkeletons, PageHeader, ViewError, VizCard } from './Cards';
+import { BarCell, Kpi, MetricSkeletons, PageHeader, ViewError, VizCard } from './Cards';
 Chart.register(...registerables);
 
 const GRID = 'rgba(255,255,255,0.06)';
@@ -260,11 +260,11 @@ export default function EarlyWarning({ role, language }) {
           <Table
             data={wl || []} density="compact" dividers="rows" hasHover
             columns={[
-              { key: 'name', header: 'Offender', width: proportional(1.4, 130) },
-              { key: 'riskScore', header: 'Risk', width: pixel(64), align: 'end', renderCell: (o) => <Text type="body" weight="semibold" hasTabularNumbers>{o.riskScore}</Text> },
-              { key: 'band', header: 'Band', width: pixel(90), renderCell: (o) => <Badge variant={{ high: 'error', medium: 'warning', low: 'success' }[(o.band || '').toLowerCase()] || 'neutral'} label={o.band} /> },
-              { key: 'reoffendProb', header: 'Reoffend P', width: pixel(96), align: 'end', renderCell: (o) => Math.round(o.reoffendProb * 100) + '%' },
-              { key: 'ring', header: 'Ring', width: pixel(64), renderCell: (o) => o.ring || '—' },
+              { key: 'name', header: 'Offender', width: proportional(1.3, 130) },
+              { key: 'riskScore', header: 'Risk score', width: proportional(1, 105), renderCell: (o) => <BarCell value={o.riskScore} max={100} tone={(o.band || '').toLowerCase() === 'high' ? 'error' : 'warning'} /> },
+              { key: 'band', header: 'Band', width: pixel(86), renderCell: (o) => <Badge variant={{ high: 'error', medium: 'warning', low: 'success' }[(o.band || '').toLowerCase()] || 'neutral'} label={o.band} /> },
+              { key: 'reoffendProb', header: 'Reoffend', width: proportional(1, 100), renderCell: (o) => <BarCell value={Math.round(o.reoffendProb * 100)} max={100} display={Math.round(o.reoffendProb * 100) + '%'} tone="warning" /> },
+              { key: 'ring', header: 'Ring', width: pixel(60), renderCell: (o) => (o.ring ? <Badge variant="neutral" label={String(o.ring)} /> : <Text color="tertiary">—</Text>) },
             ]}
           />
         </VizCard>

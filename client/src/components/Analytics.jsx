@@ -10,7 +10,8 @@ import {
   TabList, Tab, Grid, Stack, Text, Badge, Table, Selector,
   EmptyState, proportional, pixel,
 } from '../ui';
-import { Kpi, MetricSkeletons, PageHeader, ViewError, VizCard } from './Cards';
+import { BarCell, Kpi, MetricSkeletons, PageHeader, ViewError, VizCard } from './Cards';
+import { fmtInt, fmtRupees } from '../lib/chartTheme';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -80,7 +81,8 @@ export default function Analytics({ role }) {
       .then(setNet).catch((error) => setErr(error)).finally(() => setTabLoading(false));
   };
 
-  const fmtAmt = (n) => '₹' + Number(n).toLocaleString('en-IN');
+  // Column maxima drive the in-cell magnitude bars.
+  const maxTxn = Math.max(1, ...(financial || []).map((t) => Number(t.amount) || 0));
 
   return (
     <div className="view">
@@ -99,12 +101,12 @@ export default function Analytics({ role }) {
 
       {loading ? <MetricSkeletons /> : overview && (
         <Grid columns={{ minWidth: 150, max: 6 }} gap={3}>
-          <Kpi label="Total FIRs / Cases" value={overview.totalCases.toLocaleString('en-IN')} />
-          <Kpi label="Accused persons" value={overview.totalAccused.toLocaleString('en-IN')} />
-          <Kpi label="Heinous crimes" value={overview.heinous} sub={`${overview.heinousPct}% of cases`} tone="error" />
-          <Kpi label="Chargesheeted" value={`${overview.chargesheetRate}%`} sub={`${overview.chargesheeted} cases`} tone="success" />
-          <Kpi label="High-risk offenders" value={overview.highRiskOffenders} tone="warning" />
-          <Kpi label="Districts covered" value={overview.districts} />
+          <Kpi label="Total FIRs / Cases" value={fmtInt(overview.totalCases)} />
+          <Kpi label="Accused persons" value={fmtInt(overview.totalAccused)} sub={`≈${(overview.totalAccused / Math.max(1, overview.totalCases)).toFixed(1)} per case`} />
+          <Kpi label="Heinous crimes" value={fmtInt(overview.heinous)} sub={`${overview.heinousPct}% of all cases`} tone="error" share={overview.heinousPct} />
+          <Kpi label="Chargesheeted" value={`${overview.chargesheetRate}%`} sub={`${fmtInt(overview.chargesheeted)} cases filed`} tone="success" share={overview.chargesheetRate} />
+          <Kpi label="High-risk offenders" value={fmtInt(overview.highRiskOffenders)} sub="risk band: high" tone="warning" />
+          <Kpi label="Districts covered" value={overview.districts} sub="across Karnataka" />
         </Grid>
       )}
 
@@ -144,12 +146,12 @@ export default function Analytics({ role }) {
                 data={offenders || []} density="compact" dividers="rows" hasHover
                 emptyState={<EmptyState title="No offenders match this view" description="Try another access context or refresh the data." />}
                 columns={[
-                  { key: 'name', header: 'Offender', width: proportional(1.4, 130) },
-                  { key: 'riskScore', header: 'Risk', width: pixel(64), align: 'end', renderCell: (o) => <Text type="body" weight="semibold" hasTabularNumbers>{o.riskScore}</Text> },
-                  { key: 'riskBand', header: 'Band', width: pixel(90), renderCell: (o) => <Badge variant={BAND_VARIANT[(o.riskBand || '').toLowerCase()] || 'neutral'} label={o.riskBand} /> },
-                  { key: 'totalCases', header: 'Cases', width: pixel(64), align: 'end' },
-                  { key: 'violentCases', header: 'Violent', width: pixel(70), align: 'end' },
-                  { key: 'ring', header: 'Ring', width: pixel(64), renderCell: (o) => o.ring || '—' },
+                  { key: 'name', header: 'Offender', width: proportional(1.3, 130) },
+                  { key: 'riskScore', header: 'Risk score', width: proportional(1, 110), renderCell: (o) => <BarCell value={o.riskScore} max={100} tone={(o.riskBand || '').toLowerCase() === 'high' ? 'error' : 'warning'} /> },
+                  { key: 'riskBand', header: 'Band', width: pixel(88), renderCell: (o) => <Badge variant={BAND_VARIANT[(o.riskBand || '').toLowerCase()] || 'neutral'} label={o.riskBand} /> },
+                  { key: 'totalCases', header: 'Cases', width: pixel(64), align: 'end', renderCell: (o) => <Text type="body" hasTabularNumbers>{fmtInt(o.totalCases)}</Text> },
+                  { key: 'violentCases', header: 'Violent', width: pixel(72), align: 'end', renderCell: (o) => <Text type="body" color={o.violentCases > 0 ? 'error' : 'tertiary'} hasTabularNumbers>{fmtInt(o.violentCases)}</Text> },
+                  { key: 'ring', header: 'Ring', width: pixel(60), renderCell: (o) => (o.ring ? <Badge variant="neutral" label={String(o.ring)} /> : <Text color="tertiary">—</Text>) },
                 ]}
               />
             </VizCard>
@@ -158,10 +160,13 @@ export default function Analytics({ role }) {
                 data={financial || []} density="compact" dividers="rows" hasHover
                 emptyState={<EmptyState title="No transactions in this view" description="No suspicious transactions were returned." />}
                 columns={[
-                  { key: 'accused', header: 'Accused', width: proportional(1, 120) },
-                  { key: 'counterparty', header: 'Counterparty', width: proportional(1, 120) },
-                  { key: 'amount', header: 'Amount', width: pixel(120), align: 'end', renderCell: (t) => <Text type="code" size="small" color="success">{fmtAmt(t.amount)}</Text> },
-                  { key: 'date', header: 'Date', width: pixel(96), renderCell: (t) => (t.date || '').slice(0, 10) },
+                  { key: 'accused', header: 'Accused', width: proportional(1, 110) },
+                  { key: 'counterparty', header: 'Counterparty', width: proportional(1, 110) },
+                  {
+                    key: 'amount', header: 'Amount', width: proportional(1.2, 140),
+                    renderCell: (t) => <BarCell value={t.amount} max={maxTxn} display={fmtRupees(t.amount)} tone="success" />,
+                  },
+                  { key: 'date', header: 'Date', width: pixel(92), renderCell: (t) => <Text type="supporting" color="tertiary">{(t.date || '').slice(0, 10)}</Text> },
                 ]}
               />
             </VizCard>

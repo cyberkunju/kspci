@@ -62,15 +62,36 @@ export function MetricSkeletons({ count = 6 }) {
   );
 }
 
-export function Kpi({ label, value, sub, tone }) {
+export function Kpi({ label, value, sub, tone, share }) {
   return (
     <Card padding={4}>
       <Stack gap={0.5}>
         <Heading level={2} type="display-3" color={tone || 'primary'}>{value}</Heading>
         <Text type="supporting" color="secondary">{label}</Text>
+        {/* Optional proportion bar: turns a bare percentage into something you
+            can read at a glance without parsing the number. */}
+        {share != null && (
+          <div className="kpi-share" role="presentation">
+            <span style={{ width: `${Math.max(0, Math.min(100, share))}%` }} data-tone={tone || 'primary'} />
+          </div>
+        )}
         {sub && <Text type="supporting" color="tertiary">{sub}</Text>}
       </Stack>
     </Card>
+  );
+}
+
+/**
+ * Table cell that shows a number *and* its magnitude relative to the column
+ * max, so ranked tables can be scanned without comparing digits.
+ */
+export function BarCell({ value, max, display, tone = 'accent' }) {
+  const w = max > 0 ? Math.max(2, Math.round((value / max) * 100)) : 0;
+  return (
+    <div className="bar-cell">
+      <span className="bar-cell-track"><i style={{ width: `${w}%` }} data-tone={tone} /></span>
+      <b>{display ?? value}</b>
+    </div>
   );
 }
 

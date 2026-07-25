@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import NetworkGraph from './NetworkGraph';
-import { Grid, Stack, Text, Table, Icon, proportional, pixel, CircleDot } from '../ui';
-import { ViewError, VizCard } from './Cards';
-
-const fmtAmt = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
+import { Grid, Stack, Text, Table, Badge, Icon, proportional, pixel, CircleDot } from '../ui';
+import { BarCell, ViewError, VizCard } from './Cards';
+import { fmtRupees } from '../lib/chartTheme';
 
 export default function MoneyTrail({ role }) {
   const [d, setD] = useState(null); const [err, setErr] = useState(null);
@@ -18,6 +17,10 @@ export default function MoneyTrail({ role }) {
   }, [role]);
   if (err) return <ViewError err={err} />;
   if (!d) return <Stack hAlign="center" padding={8}><Text color="tertiary">Tracing money flows…</Text></Stack>;
+
+  // Column maxima drive the in-cell magnitude bars.
+  const maxLinked = Math.max(1, ...(d.hubs || []).map((h) => Number(h.linkedAccused) || 0));
+  const maxFlow = Math.max(1, ...(d.hubs || []).map((h) => Number(h.totalAmount) || 0));
 
   // adapt to the D3 graph: accused = ring 1 (blue), counterparty = ring 2 (amber)
   const graph = {
@@ -41,13 +44,26 @@ export default function MoneyTrail({ role }) {
       >
         <NetworkGraph data={graph} kind="money" />
       </VizCard>
-      <VizCard title="Suspicious hubs (money-mule / layering signals)">
+      <VizCard
+        title="Suspicious hubs (money-mule / layering signals)"
+        note="Counterparties linked to 4 or more distinct accused are flagged for review."
+      >
         <Table
           data={d.hubs || []} density="compact" dividers="rows" hasHover
           columns={[
-            { key: 'counterparty', header: 'Counterparty / Account', width: proportional(1.4, 160) },
-            { key: 'linkedAccused', header: 'Linked accused', width: pixel(130), align: 'end', renderCell: (h) => <Text type="body" weight="semibold" color={h.linkedAccused >= 4 ? 'error' : 'warning'} hasTabularNumbers>{h.linkedAccused}</Text> },
-            { key: 'totalAmount', header: 'Total flow', width: pixel(140), align: 'end', renderCell: (h) => <Text type="code" size="small" color="success">{fmtAmt(h.totalAmount)}</Text> },
+            { key: 'counterparty', header: 'Counterparty / Account', width: proportional(1.4, 150) },
+            {
+              key: 'linkedAccused', header: 'Linked accused', width: proportional(1, 130),
+              renderCell: (h) => <BarCell value={h.linkedAccused} max={maxLinked} tone={h.linkedAccused >= 4 ? 'error' : 'warning'} />,
+            },
+            {
+              key: 'totalAmount', header: 'Total flow', width: proportional(1.1, 140),
+              renderCell: (h) => <BarCell value={h.totalAmount} max={maxFlow} display={fmtRupees(h.totalAmount)} tone="success" />,
+            },
+            {
+              key: 'flag', header: '', width: pixel(84),
+              renderCell: (h) => (h.linkedAccused >= 4 ? <Badge variant="error" label="Review" /> : null),
+            },
           ]}
         />
       </VizCard>

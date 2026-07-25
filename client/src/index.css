@@ -260,6 +260,45 @@ body {
 .ng-detail-hint { margin: 10px 0 0; font-size: 11px; color: var(--muted-2); line-height: 1.4; }
 
 .viz-empty { color: var(--muted-2); text-align: center; padding: 40px; font-size: 13px; }
+.chart-box { position: relative; min-width: 0; }
+
+/* ---- readable chart legend (label · value · share) ---- */
+.chart-legend { margin: 0; display: flex; flex-direction: column; }
+.chart-legend-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 7px 0; border-bottom: 1px solid var(--line);
+}
+.chart-legend-row:last-child { border-bottom: 0; }
+.chart-legend dt { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.chart-legend dt i { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.chart-legend dt span {
+  font-size: 12.5px; color: var(--muted); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.chart-legend dd { margin: 0; display: flex; align-items: baseline; gap: 8px; flex: none; }
+.chart-legend dd b { font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+.chart-legend dd em {
+  font-style: normal; font-size: 11px; color: var(--muted-2);
+  font-variant-numeric: tabular-nums; min-width: 30px; text-align: right;
+}
+
+/* ---- magnitude bar inside table cells / KPI share ---- */
+.bar-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.bar-cell-track {
+  flex: 1 1 auto; min-width: 28px; height: 6px; border-radius: 99px;
+  background: color-mix(in srgb, var(--line-2) 55%, transparent); overflow: hidden;
+}
+.bar-cell-track i { display: block; height: 100%; border-radius: 99px; background: var(--accent); }
+.bar-cell b { font-size: 12.5px; color: var(--text); font-variant-numeric: tabular-nums; flex: none; }
+.kpi-share {
+  height: 5px; border-radius: 99px; margin: 4px 0 2px;
+  background: color-mix(in srgb, var(--line-2) 55%, transparent); overflow: hidden;
+}
+.kpi-share span { display: block; height: 100%; border-radius: 99px; background: var(--accent); }
+[data-tone="error"] { background: var(--bad) !important; }
+[data-tone="warning"] { background: var(--warn) !important; }
+[data-tone="success"] { background: var(--good) !important; }
+[data-tone="accent"] { background: var(--accent) !important; }
 
 /* ---- investigator brief prose ---- */
 .brief-body { font-size: 14px; line-height: 1.65; color: var(--text); max-height: 360px; overflow-y: auto; }
