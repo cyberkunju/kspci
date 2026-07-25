@@ -32,7 +32,13 @@ const dtNow = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
 const genId = (p) => p + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
+// Meta signs the WhatsApp webhook over the RAW request bytes, so keep a copy
+// before parsing — re-serializing the parsed object changes whitespace and key
+// order and the HMAC no longer matches.
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, _res, buf) => { req.rawBody = buf; }
+}));
 
 const SEED_DIR = path.join(__dirname, 'seed');
 const SEED_TABLES = [
