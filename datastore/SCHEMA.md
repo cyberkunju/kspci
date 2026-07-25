@@ -177,3 +177,47 @@ backoff.
 > per call, 9.1M rows costs ~45,700 calls — comfortable. Full real scale would cost
 > ~575,000 calls and is not loadable here; the generator warns when a run exceeds the
 > budget.
+
+---
+
+## Forecast snapshot tables (batch scoring)
+
+Two tables that hold **derived** data, not case records. They exist because the forecast
+routes previously fitted a model inside the HTTP request — roughly seventy paged ZCQL queries
+plus a gradient-boosted fit inside a Catalyst Function's 25-second ceiling. That does not
+survive national scale, and it is also wasted work: the answer is identical for every caller
+and changes only when new cases land.
+
+`POST /server/api/admin/forecast/refresh` computes a snapshot and writes it here;
+`GET /analytics/forecast` and `/analytics/earlywarning` serve it with a single indexed query.
+When the tables are absent or the snapshot is older than `maxAgeHours` (default 168), the
+routes fall back to live computation, so creating these tables is optional and additive.
+
+```
+Forecasts(Scope, Level, StateName, DistrictName, UnitName, Horizon,
+          Predicted, Baseline, TrendPct, Low, High, Band,
+          Latitude, Longitude, ComputedAt)
+```
+- `Scope` — TEXT, `route|level|state`, e.g. `forecast|district|ALL`. **Index this**; every
+  read and every scope-clear filters on it.
+- `Level` — TEXT, `district` or `state`. `Horizon`, `Band`, `UnitName` — TEXT.
+- `Predicted`, `Baseline`, `TrendPct`, `Low`, `High`, `Latitude`, `Longitude` — NUMBER.
+- `ComputedAt` — TEXT, ISO-8601.
+
+```
+ForecastMetrics(Scope, Level, StateName, Payload, UnitCount, ComputedAt)
+```
+- One row per scope. `Payload` is TEXT holding the snapshot's scalar context — model weights,
+  ensemble accuracy, horizon — as JSON, so a read reconstructs the exact payload shape the
+  client already expects. It is stored once rather than repeated across 640 unit rows.
+- `UnitCount` — NUMBER.
+
+Not added to the text-to-ZCQL schema prompt in `functions/api/lib/schema.js`: these are model
+outputs, and grounding the assistant on them would let it answer questions about recorded
+crime with predictions.
+
+> **Why not Cache.** A national district-level payload is ~300 KB. A single Catalyst cache
+> item is capped at 16,000 characters, so it would have to be split across ~25 keys and
+> reassembled non-atomically on every read — a partial write would serve a half-updated
+> forecast undetectably. See the Catalyst
+> [cache implementation limits](https://docs.catalyst.zoho.com/en/cloud-scale/help/cache/implementation).

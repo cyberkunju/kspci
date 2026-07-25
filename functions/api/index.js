@@ -379,6 +379,10 @@ app.get('/investigator/case', requireRole(), async (req, res) => {
 });
 
 // ============================ Predictive / Early-warning engine (feature #7) ============================
+// Routes that have a batch-scored snapshot. The others stay live: watchlist and backtest are
+// cheap enough, and a snapshot for them would be cache for its own sake.
+const SNAPSHOT_ROUTES = { computeForecast: 'forecast', computeEarlyWarning: 'earlywarning' };
+
 function forecastRoute(fn) {
   return async (req, res) => {
     try {
@@ -388,12 +392,26 @@ function forecastRoute(fn) {
       // is the default because state x month is the one backtested configuration that loses
       // to seasonal-naive outright (MASE 1.083 against district's 0.787) — 36 units by 36
       // periods is too little signal. See ml/RESULTS.md.
-      const data = await engine[fn](adminApp, {
+      const opts = {
         ...req.query,
         level: req.query.level === 'state' ? 'state' : 'district',
         state: req.query.state || null,
-      });
-      res.json(data);
+      };
+
+      // Serve the batch-scored snapshot when one exists. These routes otherwise fit a model
+      // inside the request, which does not survive national scale inside a 25-second ceiling.
+      // A missing or stale snapshot falls through to live computation, so this is additive:
+      // `?fresh=1` forces the live path for debugging and for verifying a refresh.
+      const snapRoute = SNAPSHOT_ROUTES[fn];
+      if (snapRoute && req.query.fresh !== '1') {
+        const store = require('./lib/forecastStore');
+        const snap = await store.readSnapshot(adminApp, snapRoute, opts,
+          { maxAgeHours: Number(req.query.maxAgeHours) || 168 });
+        if (snap) return res.json(snap);
+      }
+
+      const data = await engine[fn](adminApp, opts);
+      res.json({ ...data, cached: false });
     } catch (e) {
       res.status(500).json({ error: fn + '_failed', message: String((e && e.message) || e) });
     }
@@ -404,6 +422,40 @@ app.get('/analytics/forecast', requireRole(), forecastRoute('computeForecast'));
 app.get('/analytics/earlywarning', requireRole(), forecastRoute('computeEarlyWarning'));
 app.get('/analytics/backtest', requireRole('analyst', 'supervisor', 'policymaker', 'admin'), forecastRoute('computeBacktest'));
 app.get('/analytics/watchlist', requireRole('analyst', 'supervisor', 'policymaker', 'admin'), forecastRoute('computeWatchlist'));
+
+/**
+ * Recompute the forecast snapshots that the read routes serve.
+ *
+ * Admin-only and intentionally manual: the forecast changes when new cases are loaded, not on a
+ * clock, so tying it to a schedule would either recompute identical answers or serve stale ones
+ * between runs. Call it after a load. Each scope is written independently and failures are
+ * reported per scope rather than aborting the run, because a national refresh that dies on one
+ * state should still leave the other scopes correct.
+ */
+app.post('/admin/forecast/refresh', adminGuard, async (req, res) => {
+  const started = Date.now();
+  try {
+    const engine = require('./lib/backtest');
+    const store = require('./lib/forecastStore');
+    const adminApp = catalyst.initialize(req, { scope: 'admin' });
+    const level = req.body && req.body.level === 'state' ? 'state' : 'district';
+    const state = (req.body && req.body.state) || null;
+    const opts = { level, state };
+
+    const results = {};
+    for (const [fn, route] of Object.entries(SNAPSHOT_ROUTES)) {
+      try {
+        const payload = await engine[fn](adminApp, opts);
+        results[route] = await store.writeSnapshot(adminApp, route, opts, payload);
+      } catch (e) {
+        results[route] = { error: String((e && e.message) || e) };
+      }
+    }
+    res.json({ level, state, results, elapsedMs: Date.now() - started });
+  } catch (e) {
+    res.status(500).json({ error: 'refresh_failed', message: String((e && e.message) || e), elapsedMs: Date.now() - started });
+  }
+});
 
 // LLM analyst brief — narrates the forecast + early-warning into an actionable brief.
 app.get('/analytics/brief', requireRole(), async (req, res) => {
