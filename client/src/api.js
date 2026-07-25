@@ -47,6 +47,14 @@ export const api = {
     req('/ingest/ocr', { method: 'POST', role, body: { fileBase64, filename, language } }),
   confirmIngest: ({ structured, text, role }) =>
     req('/ingest/confirm', { method: 'POST', role, body: { structured, text } }),
+
+  // Open-source research. A run outlives a single request, so it is started and
+  // polled; the function proxies to the AppSail engine and supplies the anchors.
+  researchHealth: (role) => req('/research/health', { role }),
+  researchStart: ({ subject, kind, purpose, question, mode, crimeNo, role, userId }) =>
+    req('/research', { method: 'POST', role, userId, body: { subject, kind, purpose, question, mode, crimeNo } }),
+  researchPoll: (id, role) => req(`/research/${encodeURIComponent(id)}`, { role }),
+  researchCancel: (id, role) => req(`/research/${encodeURIComponent(id)}`, { method: 'DELETE', role }),
 };
 
 export const ROLES = ['investigator', 'analyst', 'supervisor', 'policymaker', 'admin'];
