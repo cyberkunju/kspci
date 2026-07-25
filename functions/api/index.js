@@ -80,31 +80,21 @@ app.post('/warmup', async (req, res) => {
   }
 });
 
-// ---- Voice: Sarvam AI STT + TTS ----
+// ---- Voice: Sarvam AI STT + TTS (lib/voice.js) ----
 // Catalyst/Zia has no speech model, so voice uses Sarvam (saarika STT + bulbul TTS),
 // the one justified third-party (LLM = Zoho GLM, OCR = Zia are fully native).
-const SARVAM = 'https://api.sarvam.ai';
-const sarvamLang = (l) => (l === 'kn' ? 'kn-IN' : 'en-IN');
-
+// The WhatsApp channel transcribes voice notes through the same module.
 app.post('/voice/stt', requireRole(), async (req, res) => {
   try {
     const { audio, mime = 'audio/webm', language } = req.body || {};
     if (!audio) return res.status(400).json({ error: 'audio (base64) required' });
-    const buf = Buffer.from(audio, 'base64');
-    const form = new FormData();
-    form.append('model', process.env.SARVAM_STT_MODEL || 'saarika:v2.5');
-    form.append('language_code', language ? sarvamLang(language) : 'unknown');
-    form.append('file', new Blob([buf], { type: mime }), 'audio.webm');
-    const r = await fetch(`${SARVAM}/speech-to-text`, {
-      method: 'POST',
-      headers: { 'api-subscription-key': process.env.SARVAM_API_KEY || '' },
-      body: form
-    });
-    const j = await r.json();
-    if (!r.ok) return res.status(502).json({ error: 'stt_failed', detail: j });
-    res.json({ text: j.transcript || '', language: j.language_code || null });
+    const { speechToText } = require('./lib/voice');
+    const out = await speechToText({ buffer: Buffer.from(audio, 'base64'), mime, language });
+    res.json(out);
   } catch (e) {
-    res.status(500).json({ error: 'stt_error', message: String((e && e.message) || e) });
+    res.status(e && e.status === 400 ? 400 : 502).json({
+      error: 'stt_failed', message: String((e && e.message) || e), detail: e && e.detail
+    });
   }
 });
 
@@ -112,23 +102,10 @@ app.post('/voice/tts', requireRole(), async (req, res) => {
   try {
     const { text, language } = req.body || {};
     if (!text || !text.trim()) return res.status(400).json({ error: 'text required' });
-    const r = await fetch(`${SARVAM}/text-to-speech`, {
-      method: 'POST',
-      headers: { 'api-subscription-key': process.env.SARVAM_API_KEY || '', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text: text.slice(0, 2500),
-        target_language_code: sarvamLang(language),
-        speaker: process.env.SARVAM_TTS_SPEAKER || 'ritu',
-        model: process.env.SARVAM_TTS_MODEL || 'bulbul:v3',
-        output_audio_codec: 'mp3'
-      })
-    });
-    const j = await r.json();
-    const audios = j && j.audios;
-    if (!r.ok || !Array.isArray(audios) || !audios[0]) return res.status(502).json({ error: 'tts_failed', detail: j });
-    res.json({ audio: audios[0], mime: 'audio/mpeg' });
+    const { textToSpeech } = require('./lib/voice');
+    res.json(await textToSpeech({ text, language }));
   } catch (e) {
-    res.status(500).json({ error: 'tts_error', message: String((e && e.message) || e) });
+    res.status(502).json({ error: 'tts_failed', message: String((e && e.message) || e), detail: e && e.detail });
   }
 });
 
