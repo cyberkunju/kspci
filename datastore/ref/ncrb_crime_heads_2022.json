@@ -81,8 +81,7 @@
     { "head": "Offence under the Indecent Representation of Women Act", "group": "Crime Against Women", "cases2022": 28, "law": "Indecent Representation of Women (Prohibition) Act 1986", "gravity": "Non-Heinous" },
 
     { "head": "Missing Child Deemed as Kidnapped", "group": "Crime Against Children", "cases2022": 33053, "law": "BNS 137 / IPC 363", "gravity": "Heinous" },
-    { "head": "Penetrative Sexual Assault on Child (POCSO)", "group": "Crime Against Children", "cases2022": 38048, "law": "POCSO Act 2012 s.4/6 r/w BNS 65", "gravity": "Heinous" },
-    { "head": "Sexual Assault and Harassment of Child (POCSO)", "group": "Crime Against Children", "cases2022": 25366, "law": "POCSO Act 2012 s.8/10/12", "gravity": "Heinous" },
+    { "head": "Offence under the POCSO Act", "group": "Crime Against Children", "cases2022": 63414, "law": "POCSO Act 2012 s.4/6/8/10/12 r/w BNS 65", "gravity": "Heinous" },
     { "head": "Offence under the Juvenile Justice Act", "group": "Crime Against Children", "cases2022": 1830, "law": "Juvenile Justice (Care and Protection of Children) Act 2015", "gravity": "Non-Heinous" },
     { "head": "Offence under the Prohibition of Child Marriage Act", "group": "Crime Against Children", "cases2022": 1002, "law": "Prohibition of Child Marriage Act 2006", "gravity": "Non-Heinous" },
     { "head": "Offence under the Child Labour Act", "group": "Crime Against Children", "cases2022": 751, "law": "Child Labour (Prohibition and Regulation) Act 1986", "gravity": "Non-Heinous" },

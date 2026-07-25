@@ -48,9 +48,21 @@ const RAW = path.join(__dirname, 'raw');
 fs.mkdirSync(REF, { recursive: true });
 
 const norm = (s) => String(s || '').trim().toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '');
-const titleCase = (s) => String(s || '').trim().toLowerCase()
+/**
+ * Title-case a place name. Lowercasing of joining words is deliberately restricted to
+ * mid-string: applying it everywhere turned census names into "the Nilgiris" and
+ * "the Dangs". Runs of whitespace are collapsed because the census file contains
+ * "North  District".
+ */
+const titleCase = (s) => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase()
   .replace(/\b([a-z])/g, (m) => m.toUpperCase())
-  .replace(/\b(Of|And|The)\b/g, (m) => m.toLowerCase());
+  .replace(/(?!^)\b(Of|And|The)\b/g, (m) => m.toLowerCase());
+/** Postal fields use these to mean "not recorded"; taken literally they become places. */
+const PLACEHOLDER = /^(na|n\.a\.?|null|nil|none|-|--|not available)$/i;
+const realOrNull = (s) => {
+  const v = String(s || '').trim();
+  return v && !PLACEHOLDER.test(v) ? v : null;
+};
 
 // ---------------------------------------------------------------- CSV reading
 function readCsv(file, delim = ',') {
@@ -275,7 +287,10 @@ for (const r of poRows) {
   const c = coordByKey.get(norm(r.officename) + '|' + String(r.pincode).trim());
   localities.push({
     name,
-    taluk: titleCase(r.Taluk) || null,
+    // 98,686 post offices carry "NA" here. Passing it through created a taluk called
+    // "Na" spanning ~350 districts, which silently merged unrelated areas in any
+    // rollup. Unrecorded taluks fall back to the district in the generator.
+    taluk: titleCase(realOrNull(r.Taluk)) || null,
     pin: String(r.pincode).trim(),
     lat: c ? c[0] : null,
     lng: c ? c[1] : null,

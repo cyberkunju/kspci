@@ -96,8 +96,9 @@ if (!fs.existsSync(localityPath)) {
 }
 const localityRef = JSON.parse(fs.readFileSync(localityPath, 'utf8'));
 
+const stateHeadsRef = JSON.parse(fs.readFileSync(path.join(REF_DIR, 'ncrb_state_heads_2022.json'), 'utf8'));
+const STATE_HEADS = stateHeadsRef.states;
 const STATE_CAL = new Map(ncrb.states.map((s) => [s.state, s]));
-const PROHIBITION_SHARE = tax.prohibitionShareByState;
 
 // ---------------- geography ----------------
 // Post-office class is the best available proxy for how much population a locality
@@ -112,33 +113,59 @@ const DISTRICTS = districtRef
       name, taluk: taluk || d.district, pin, lat, lng, w: KIND_WEIGHT[kind] || 1,
     }));
     const wTotal = locs.reduce((a, l) => a + l.w, 0);
-    // Police stations are named after the taluks actually present in the district,
-    // which is how station geography works on the ground.
     const taluks = [...new Set(locs.map((l) => l.taluk))];
-    const stations = new Map();
-    for (const t of taluks) stations.set(t, `${t} PS`);
-    if (taluks.length === 1) {
-      stations.set(taluks[0], `${d.district} Town PS`);
-      stations.set(d.district + ' Rural', `${d.district} Rural PS`);
-    }
     return {
       code: d.code, state: d.state, district: d.district, pop: d.pop2011,
-      lat: d.lat, lng: d.lng, demo: d.demo, locs, wTotal, stations,
+      lat: d.lat, lng: d.lng, bbox: d.bbox, demo: d.demo, locs, wTotal, taluks,
     };
   })
   .filter((d) => d.locs.length > 0);
 
-// Volume model: the state total is real (NCRB 2023). Within a state, districts get
-// a share of it by population weighted by urban share — urban districts register
+// Police stations are named after the taluks actually present in the district, which
+// is how station geography works on the ground. Taluk names repeat across districts —
+// there are Lalganj taluks in a dozen Uttar Pradesh districts — so the station name
+// carries the district wherever the taluk alone would be ambiguous nationally. Without
+// this, 2,808 station names spanned more than one district and any grouping by station
+// silently merged unrelated stations.
+{
+  const talukDistricts = new Map();
+  const districtStates = new Map();
+  for (const d of DISTRICTS) {
+    if (!districtStates.has(d.district)) districtStates.set(d.district, new Set());
+    districtStates.get(d.district).add(d.state);
+    for (const t of d.taluks) {
+      if (!talukDistricts.has(t)) talukDistricts.set(t, new Set());
+      talukDistricts.get(t).add(d.district + '|' + d.state);
+    }
+  }
+  for (const d of DISTRICTS) {
+    d.stations = new Map();
+    // Six district names are themselves shared across states — Aurangabad, Bilaspur,
+    // Hamirpur, Pratapgarh, Raigarh, Bijapur — so qualifying by district alone is not
+    // always enough.
+    const qualifier = districtStates.get(d.district).size > 1
+      ? `${d.district}, ${d.state}` : d.district;
+    for (const t of d.taluks) {
+      const ambiguous = talukDistricts.get(t).size > 1 || t === d.district;
+      d.stations.set(t, ambiguous ? `${t} PS, ${qualifier}` : `${t} PS`);
+    }
+  }
+}
+
+// Volume model: a state's total is the sum of its own real per-head case counts, so
+// volume and crime mix come from the same reconciled table rather than one from the
+// 2023 summary and the other from the 2022 head tables. Within a state, districts split
+// that total by population weighted by urban share — urban districts register
 // materially more crime per head, which NCRB's separate metropolitan tables show.
+const STATE_VOLUME = new Map(Object.entries(STATE_HEADS)
+  .map(([st, heads]) => [st, Object.values(heads).reduce((a, b) => a + b, 0)]));
 const stateWeight = new Map();
 for (const d of DISTRICTS) {
   d.weight = d.pop * (0.75 + 0.6 * Math.min(1, d.demo.urbanShare));
   stateWeight.set(d.state, (stateWeight.get(d.state) || 0) + d.weight);
 }
 for (const d of DISTRICTS) {
-  const cal = STATE_CAL.get(d.state);
-  d.intensity = cal.totalCrimes * (d.weight / stateWeight.get(d.state)); // cases/yr, real scale
+  d.intensity = (STATE_VOLUME.get(d.state) || 0) * (d.weight / stateWeight.get(d.state));
 }
 const TOTAL_INTENSITY = DISTRICTS.reduce((a, d) => a + d.intensity, 0);
 
@@ -152,24 +179,29 @@ const HEADS = tax.heads.map((h) => {
   };
 });
 const HEAD_TOTAL = HEADS.reduce((a, h) => a + h.cases, 0);
-
-
-// Which heads respond to which real per-state rate. Everything else follows the
-// national mix, because NCRB does not publish a state x head table at this depth.
-const lc = (s) => s.toLowerCase();
-function stateTilt(h, cal) {
-  const r = (a, b) => (b > 0 ? Math.min(3, Math.max(0.25, a / b)) : 1);
-  const n = lc(h.head);
-  if (n.includes('murder') || n.includes('culpable homicide')) return r(cal.murder, ncrb.india.murder);
-  if (n.includes('rape')) return r(cal.rape, ncrb.india.rape);
-  if (h.group === 'Kidnapping & Trafficking' || n.startsWith('kidnapping')) return r(cal.kidnapping, ncrb.india.kidnapping);
-  if (n.includes('robbery') || n.includes('dacoity')) return r(cal.robberyDacoity, ncrb.india.robberyDacoity);
-  if (n.includes('extortion')) return r(cal.extortion, ncrb.india.extortion);
-  // Remaining heinous heads move with the state's overall violent rate, damped so
-  // this does not compound with the specific tilts above.
-  if (h.gravity === 'Heinous') return Math.sqrt(r(cal.violentRate, ncrb.india.violentRate));
-  return 1;
-}
+// Detection varies enormously by offence — a murder is almost always traced, a
+// street theft usually is not — and the state chargesheet rate is a single average.
+// These multipliers redistribute detection across groups; they are renormalised per
+// state below so each state's aggregate chargesheet rate still matches NCRB exactly.
+// Without this, "which crimes go unsolved" is a flat line, which is plainly wrong.
+const DETECTION_MULTIPLIER = {
+  'Body Offences': 1.20,
+  'Crime Against Women': 1.15,
+  'Crime Against Children': 1.10,
+  'Kidnapping & Trafficking': 0.95,
+  'Property Offences': 0.55,
+  'Economic Offences': 0.70,
+  'Cyber Crime': 0.45,
+  'Narcotics': 1.30,
+  'Liquor & Excise': 1.35,
+  'Public Order': 1.10,
+  'Traffic & Negligence': 1.05,
+  'Caste Atrocities': 1.00,
+  'Arms & Explosives': 1.30,
+  'Offences Against the State': 1.00,
+  'Environment & Wildlife': 1.25,
+  'Regulatory & Local Acts': 1.30,
+};
 
 // Seasonality: festival (Oct-Dec) and summer (Mar-May) peaks; weekend elevation.
 const MONTH_MULT = [0.90, 0.88, 1.05, 1.12, 1.15, 0.98, 0.95, 0.97, 1.08, 1.28, 1.35, 1.20];
@@ -327,23 +359,43 @@ function nameFor(d, religion, gender) {
   return given + ' ' + pick(M) + ' ' + pick(L);
 }
 
+// Weighted, not uniform: an even draw inside the cultivator bucket made orchard owners
+// as common as farmers, and the non-worker occupations were missing entirely, so every
+// complainant in the data was employed. Census worker share is around 40%, so most
+// adults are homemakers, students, retired or unemployed.
 const OCC_BY_CLASS = {
-  Cultivator: ['Farmer', 'Cultivator', 'Orchard Owner'],
-  'Agricultural Labourer': ['Agricultural Labourer', 'Daily Wage Labourer', 'Farm Hand'],
-  'Household Industry': ['Weaver', 'Potter', 'Artisan', 'Tailor', 'Handloom Worker'],
-  Other: ['Shopkeeper', 'Driver', 'Business', 'Govt Employee', 'IT Professional', 'Teacher',
-    'Factory Worker', 'Construction Worker', 'Security Guard', 'Nurse', 'Mechanic', 'Clerk',
-    'Electrician', 'Delivery Rider', 'Bank Employee', 'Contractor'],
+  Cultivator: { Farmer: 0.62, Cultivator: 0.33, 'Orchard Owner': 0.05 },
+  'Agricultural Labourer': { 'Agricultural Labourer': 0.5, 'Daily Wage Labourer': 0.38, 'Farm Hand': 0.12 },
+  'Household Industry': { Tailor: 0.3, Weaver: 0.22, Artisan: 0.2, Potter: 0.14, 'Handloom Worker': 0.14 },
+  Other: {
+    Business: 0.13, Shopkeeper: 0.12, Driver: 0.11, 'Construction Worker': 0.11,
+    'Factory Worker': 0.10, 'Govt Employee': 0.07, Teacher: 0.06, Mechanic: 0.05,
+    'Security Guard': 0.05, Clerk: 0.04, Electrician: 0.04, 'Delivery Rider': 0.04,
+    Contractor: 0.03, 'IT Professional': 0.03, Nurse: 0.01, 'Bank Employee': 0.01,
+  },
 };
+const NON_WORKER = { Homemaker: 0.46, Student: 0.24, Unemployed: 0.18, Retired: 0.12 };
+const NON_WORKER_FEMALE = { Homemaker: 0.72, Student: 0.15, Unemployed: 0.08, Retired: 0.05 };
+// Groups with no individual victim: liquor and excise, drug possession, gambling and
+// most regulatory offences are enforcement actions, not offences against a person.
+const VICTIMLESS = new Set(['Liquor & Excise', 'Narcotics', 'Regulatory & Local Acts',
+  'Environment & Wildlife', 'Arms & Explosives', 'Offences Against the State']);
 const CASTE_GENERAL = { General: 0.28, OBC: 0.72 };
+// Scheduled Caste status is confined by Presidential Order to Hindus, Sikhs and
+// Buddhists; Scheduled Tribe status is not religion-restricted. Drawing caste
+// independently of religion produced 51,722 complainants recorded as Muslim SC,
+// Christian SC and Jain SC — combinations that cannot legally exist.
+const SC_ELIGIBLE = new Set(['Hindu', 'Sikh', 'Buddhist']);
 
 /** Draw a person's social attributes from this district's census distributions. */
 function personDemo(d) {
   const religion = weightedKey(d.demo.religion);
-  const r = rand();
+  const scOk = SC_ELIGIBLE.has(religion);
+  const sc = scOk ? d.demo.scShare : 0;
+  const r = rand() * (sc + d.demo.stShare + (1 - d.demo.scShare - d.demo.stShare));
   let caste;
-  if (r < d.demo.scShare) caste = 'SC';
-  else if (r < d.demo.scShare + d.demo.stShare) caste = 'ST';
+  if (r < sc) caste = 'SC';
+  else if (r < sc + d.demo.stShare) caste = 'ST';
   else caste = weightedKey(CASTE_GENERAL);
   const occClass = weightedKey(d.demo.occupation);
   return { religion, caste, occClass };
@@ -355,6 +407,36 @@ function adultAge(d) {
   if (r < a.a0_29 * 0.42) return randint(18, 29);
   if (r < a.a0_29 * 0.42 + a.a30_49) return randint(30, 49);
   return randint(50, 82);
+}
+/**
+ * Occupation consistent with the district's worker share and the person's gender.
+ * Census worker share counts workers against the whole population, children included,
+ * and hides an enormous gender gap: male work participation runs around 80% of adults,
+ * female around 30-35%. Applying the headline share to both sexes left homemakers at
+ * 5% of complainants when they should be closer to a fifth.
+ */
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+function occupationFor(d, gender, age) {
+  if (age >= 62 && chance(0.45)) return 'Retired';
+  const pWorker = gender === 'F'
+    ? clamp(d.demo.workerShare * 0.95, 0.15, 0.55)
+    : clamp(d.demo.workerShare * 2.0, 0.60, 0.95);
+  if (rand() > pWorker) return weightedKey(gender === 'F' ? NON_WORKER_FEMALE : NON_WORKER);
+  return weightedKey(OCC_BY_CLASS[weightedKey(d.demo.occupation)]);
+}
+/**
+ * Accused age. A flat 18-58 draw misrepresented offending, which concentrates in the
+ * late teens to early thirties, and excluded juveniles entirely even though the data
+ * carries Juvenile Justice Act cases.
+ */
+function accusedAge() {
+  const r = rand();
+  if (r < 0.03) return randint(14, 17);
+  if (r < 0.27) return randint(18, 24);
+  if (r < 0.58) return randint(25, 34);
+  if (r < 0.80) return randint(35, 44);
+  if (r < 0.95) return randint(45, 59);
+  return randint(60, 76);
 }
 
 const pad = (n, w) => String(n).padStart(w, '0');
@@ -407,23 +489,21 @@ const RETAIN = 0.85;
 const stateHeadWeights = new Map();
 for (const st of new Set(DISTRICTS.map((d) => d.state))) {
   const cal = STATE_CAL.get(st);
-  // Target share of each head in this state.
-  const target = HEADS.map((h) => (h.dryOnly ? 0 : (h.cases / HEAD_TOTAL) * stateTilt(h, cal)));
-  // The Prohibition Act is pinned to its real share of the state's caseload rather
-  // than derived from the national mix, because it exists in only six states and is
-  // the largest single head in two of them.
-  const prohibition = PROHIBITION_SHARE[st] || 0;
-  const tTot = target.reduce((a, b) => a + b, 0);
-  for (let i = 0; i < target.length; i++) {
-    target[i] = HEADS[i].dryOnly ? prohibition : (target[i] / tTot) * (1 - prohibition);
-  }
+  const real = STATE_HEADS[st] || {};
+  const vol = STATE_VOLUME.get(st) || 1;
+  // Each head's target share in this state is that state's own published count.
+  // Nothing is modelled: no national mix, no per-rate tilt, no hand-allocated
+  // prohibition. A head the state did not register gets zero.
+  const target = HEADS.map((h) => (real[h.head] || 0) / vol);
   const rhoBar = HEADS.reduce((a, h, i) => a + target[i] * h.rho, 0);
   const bg = HEADS.map((h, i) =>
     Math.max(0, target[i] * (1 - RETAIN * h.rho - (1 - RETAIN) * rhoBar)));
-  stateHeadWeights.set(st, {
-    bg, bgTot: bg.reduce((a, b) => a + b, 0),
-    target, targetTot: 1, rhoBar,
-  });
+  // Per-group detection probability, rescaled so this state's aggregate still equals
+  // its real chargesheet rate.
+  const meanMult = HEADS.reduce((a, h, i) => a + target[i] * (DETECTION_MULTIPLIER[h.group] || 1), 0) || 1;
+  const detect = HEADS.map((h) =>
+    Math.min(0.99, (cal.chargesheetRate / 100) * (DETECTION_MULTIPLIER[h.group] || 1) / meanMult));
+  stateHeadWeights.set(st, { bg, bgTot: bg.reduce((a, b) => a + b, 0), target, rhoBar, detect });
 }
 // National expected inflation from background to total.
 const NATIONAL_RHOBAR = (() => {
@@ -582,6 +662,27 @@ for (const st of statesList) {
   ringsByState[st] = rings;
 }
 
+// ---------------- investigating officers ----------------
+// Officers belong to a station. Drawing a fresh random name per case produced 216,096
+// distinct officers across 1.5M cases, which makes any workload or performance view
+// meaningless — every officer had a handful of cases and nobody had a caseload.
+const officersByStation = new Map();
+for (const d of DISTRICTS) {
+  for (const [taluk, station] of d.stations) {
+    const size = randint(6, 16);
+    const roster = [];
+    const seen = new Set();
+    for (let i = 0; i < size * 3 && roster.length < size; i++) {
+      const rank = weightedKey({ 'SI': 0.46, 'PSI': 0.24, 'ASI': 0.18, 'Insp': 0.09, 'DySP': 0.03 });
+      const name = `${rank} ${nameFor(d, null, chance(0.9) ? 'M' : 'F')}`;
+      if (seen.has(name)) continue;
+      seen.add(name); roster.push(name);
+    }
+    officersByStation.set(station, roster);
+  }
+}
+console.log(`  investigating officers: ${[...officersByStation.values()].reduce((a, r) => a + r.length, 0).toLocaleString('en-IN')} across ${officersByStation.size.toLocaleString('en-IN')} stations`);
+
 // ---------------- assemble records ----------------
 console.log('Assembling case, person, network and risk records…');
 const wCases = csvWriter(SEED_DIR, 'Cases', ['CaseMasterID', 'CrimeNo', 'CaseNo', 'CrimeRegisteredDate', 'Year',
@@ -600,7 +701,8 @@ const wTxns = csvWriter(SEED_DIR, 'FinancialTxns', ['TxnID', 'AccusedMasterID', 
   'Amount', 'TxnDate', 'AccountRef']);
 
 let aId = 1, vId = 1, cpId = 1, arrId = 1, txnId = 1;
-const serial = new Map();
+const serial = new Map();          // FIR serial per station per year -> CaseNo
+const districtSerial = new Map();  // serial per district per year -> CrimeNo
 const offenderStats = new Map();
 // Only recurring (pool) offenders enter the co-offending graph. One-off accused
 // produce a pair that never repeats, which is noise in a network view and the
@@ -611,21 +713,31 @@ const stateCount = new Map();
 const statusCount = new Map();
 const yearCount = new Map();
 const stateTried = new Map();
+const stateHeadTop = new Map();
+const detectionByGroup = new Map();
 let heinousCount = 0;
 
 // Court pendency in India runs around 90%: NCRB 2023 reported 23.0 lakh of 25.4
 // lakh crime-against-women cases still pending trial at year end. Only the small
 // disposed remainder splits by the state's conviction rate.
 const TRIAL_PENDENCY = 0.82;
-/** Case status drawn from the state's real chargesheet and conviction rates. */
-function statusFor(cal, ageDays) {
+/**
+ * Decides detection and status together, because they are not independent and treating
+ * them as such produced records that contradict themselves: over half of the cases
+ * filed as "Closed - Undetected" carried a named accused and an arrest, and a third of
+ * convictions had no arrest at all. An undetected case is one where no offender was
+ * identified, so it gets no accused and no arrest; a conviction always has both.
+ */
+function outcomeFor(cal, detectP, ageDays) {
   const matured = Math.min(1, ageDays / 420);
-  if (rand() > matured) return 'Under Investigation';
-  if (rand() > cal.chargesheetRate / 100) return chance(0.6) ? 'Closed - Undetected' : 'Under Investigation';
-  // Older chargesheeted cases have had more chance to reach a verdict.
+  if (rand() > detectP) {
+    // Untraced. Young cases are still open; older ones are filed as undetected.
+    return { detected: false, status: rand() < matured * 0.7 ? 'Closed - Undetected' : 'Under Investigation' };
+  }
+  if (rand() > matured) return { detected: true, status: 'Under Investigation' };
   const pend = TRIAL_PENDENCY - 0.14 * Math.min(1, ageDays / (YEARS_SPAN * 365));
-  if (rand() < pend) return 'Pending Trial';
-  return rand() < cal.convictionRate / 100 ? 'Convicted' : 'Acquitted';
+  if (rand() < pend) return { detected: true, status: 'Pending Trial' };
+  return { detected: true, status: rand() < cal.convictionRate / 100 ? 'Convicted' : 'Acquitted' };
 }
 
 for (let n = 0; n < evN; n++) {
@@ -640,11 +752,20 @@ for (let n = 0; n < evN; n++) {
   const year = dt.getUTCFullYear(), month = dt.getUTCMonth() + 1;
   const station = d.stations.get(loc.taluk) || `${d.district} PS`;
   const cat = chance(0.84) ? 'FIR' : pick(['UDR', 'PAR', 'Zero FIR']);
-  const sKey = d.code + '-' + year;
+  // FIR numbering is per station per year, which is how it works in practice, so
+  // CaseNo reads as "123/2026". CrimeNo stays the globally unique record identifier.
+  const sKey = station + '|' + year;
   const sNext = (serial.get(sKey) || 0) + 1;
   serial.set(sKey, sNext);
-  const crimeNo = `${CAT_CODE[cat]}${pad(d.code, 4)}${pad((evLoc[ev] % 9999) + 1, 4)}${year}${pad(sNext, 5)}`;
+  // CrimeNo is the globally unique record identifier, so its serial runs per district
+  // per year. A previous version folded the row id modulo 100,000 into it, which wrapped
+  // and produced 45 duplicate CrimeNos in a 1.5M-case run.
+  const dKey = d.code + '|' + year;
+  const dNext = (districtSerial.get(dKey) || 0) + 1;
+  districtSerial.set(dKey, dNext);
+  const crimeNo = `${CAT_CODE[cat]}${pad(d.code, 4)}${pad((evLoc[ev] % 9999) + 1, 4)}${year}${pad(dNext, 6)}`;
   const ageDays = (END - t) / DAY;
+  const { detected, status } = outcomeFor(cal, stateHeadWeights.get(d.state).detect[evHi[ev]], ageDays);
 
   // ---- accused: organised ring during an active burst, else pool or one-off
   const pool = offendersByState[d.state];
@@ -659,9 +780,11 @@ for (let n = 0; n < evN; n++) {
       if (activeRing) break;
     }
   }
-  const nA = h.group === 'Public Order' ? randint(2, 6)
-    : h.group === 'Traffic & Negligence' ? 1
-      : h.group === 'Regulatory & Local Acts' ? randint(1, 2) : randint(1, 3);
+  // An undetected case has no identified offender, so it carries no accused record.
+  const nA = !detected ? 0
+    : h.group === 'Public Order' ? randint(2, 6)
+      : h.group === 'Traffic & Negligence' ? 1
+        : h.group === 'Regulatory & Local Acts' ? randint(1, 2) : randint(1, 3);
   const caseAcc = [];
   const recurring = [];
   const pw = poolWeightByState[d.state];
@@ -671,11 +794,11 @@ for (let n = 0; n < evN; n++) {
     else if (chance(REPEAT_SHARE)) off = pool[weightedIndex(pw.w, pw.tot)];
     else {
       const g = chance(0.91) ? 'M' : 'F';
-      off = { name: nameFor(d, null, g), ring: 0, age: randint(18, 58), gender: g, known: false };
+      off = { name: nameFor(d, null, g), ring: 0, age: accusedAge(), gender: g, known: false };
     }
     wAccused.write({
       AccusedMasterID: aId++, CaseMasterID: cid, CrimeNo: crimeNo, AccusedName: off.name,
-      AgeYear: off.age || randint(18, 58), Gender: off.gender || 'M', PersonID: 'A' + (a + 1),
+      AgeYear: off.age || accusedAge(), Gender: off.gender || 'M', PersonID: 'A' + (a + 1),
       RingID: off.ring || 0, DistrictName: d.district, CrimeSubHead: h.head,
     });
     caseAcc.push(off.name);
@@ -700,18 +823,28 @@ for (let n = 0; n < evN; n++) {
   }
 
   // ---- victims
+  // Victim counts follow the offence. Excise, gambling, arms possession and most
+  // regulatory offences have no individual victim; theft and fraud always have one.
+  // The previous blanket randint(0,1) gave victimless offences victims half the time
+  // and left property crimes without one, which also skewed the victim table female,
+  // since crimes against women were the only group guaranteed a victim record.
   const womanVictim = h.group === 'Crime Against Women';
   const childVictim = h.group === 'Crime Against Children';
-  const nV = (h.group === 'Body Offences' || womanVictim) ? randint(1, 2)
+  const nV = VICTIMLESS.has(h.group) ? 0
     : h.group === 'Traffic & Negligence' ? randint(1, 3)
-      : childVictim ? 1 : randint(0, 1);
+      : h.group === 'Body Offences' ? randint(1, 2)
+        : (womanVictim || childVictim) ? 1
+          : h.group === 'Public Order' ? randint(0, 2)
+            : 1;
   for (let v = 0; v < nV; v++) {
     const pd = personDemo(d);
-    const g = womanVictim ? 'F' : (chance(0.5) ? 'M' : 'F');
+    const g = womanVictim ? 'F' : childVictim ? (chance(0.72) ? 'F' : 'M') : (chance(0.55) ? 'M' : 'F');
     wVictims.write({
       VictimMasterID: vId++, CaseMasterID: cid, VictimName: nameFor(d, pd.religion, g),
-      AgeYear: childVictim ? randint(3, 17) : adultAge(d), Gender: g,
-      Caste: pd.caste, Religion: pd.religion,
+      // Minors are victims of far more than the offences filed under crimes against
+      // children — road accidents and assault included.
+      AgeYear: childVictim ? randint(3, 17) : (chance(0.07) ? randint(4, 17) : adultAge(d)),
+      Gender: g, Caste: pd.caste, Religion: pd.religion,
     });
   }
 
@@ -719,48 +852,57 @@ for (let n = 0; n < evN; n++) {
   {
     const pd = personDemo(d);
     const g = womanVictim ? (chance(0.82) ? 'F' : 'M') : (chance(0.58) ? 'M' : 'F');
+    const age = adultAge(d);
     wComplainants.write({
       ComplainantID: cpId++, CaseMasterID: cid, ComplainantName: nameFor(d, pd.religion, g),
-      AgeYear: adultAge(d), Gender: g,
-      Occupation: pick(OCC_BY_CLASS[pd.occClass]), Religion: pd.religion, Caste: pd.caste,
+      AgeYear: age, Gender: g,
+      Occupation: occupationFor(d, g, age), Religion: pd.religion, Caste: pd.caste,
     });
   }
 
-  // ---- arrest: likelihood tracks the state's chargesheet rate
-  if (rand() < cal.chargesheetRate / 100 * 0.8) {
+  // ---- arrest: only possible once an offender has been identified, and effectively
+  // certain for any case that reached court.
+  const inCourt = status === 'Pending Trial' || status === 'Convicted' || status === 'Acquitted';
+  if (detected && caseAcc.length && (inCourt ? chance(0.985) : chance(0.55))) {
     wArrests.write({
       ArrestID: arrId++, CaseMasterID: cid, AccusedMasterID: 0, AccusedName: pick(caseAcc),
       ArrestType: chance(0.85) ? 'Arrest' : 'Surrender',
-      ArrestDate: new Date(t + randint(0, 30) * DAY).toISOString().slice(0, 10),
-      DistrictName: d.district, IOName: nameFor(d),
+      ArrestDate: new Date(Math.min(END - DAY, t + randint(0, 30) * DAY)).toISOString().slice(0, 10),
+      DistrictName: d.district, IOName: pick(officersByStation.get(station) || [nameFor(d)]),
     });
   }
 
   // ---- money trail for economic and cyber offences
-  if (h.gravity === 'Economic' || h.group === 'Cyber Crime') {
+  if (caseAcc.length && (h.gravity === 'Economic' || h.group === 'Cyber Crime')) {
     for (let k = 0, nT = randint(2, 6); k < nT; k++) {
       // Log-uniform amounts: many small frauds, a few very large ones.
       const amount = Math.round(Math.exp(Math.log(3000) + rand() * (Math.log(9e6) - Math.log(3000))));
       wTxns.write({
         TxnID: txnId++, AccusedMasterID: 0, AccusedName: pick(caseAcc),
         Counterparty: nameFor(d), Amount: amount,
-        TxnDate: new Date(t + randint(0, 20) * DAY).toISOString().slice(0, 19).replace('T', ' '),
+        TxnDate: new Date(Math.min(END - DAY, t + randint(0, 20) * DAY)).toISOString().slice(0, 19).replace('T', ' '),
         AccountRef: 'AC' + randint(10000000, 99999999),
       });
     }
   }
 
-  const status = statusFor(cal, ageDays);
+  // Cascade jitter can carry an incident across a district line, leaving a point
+  // plotted in one district while the record names another. Clamp to the district's own
+  // bounding box so the map and the label always agree.
+  const bb = d.bbox;
+  const lat = Math.min(bb[3], Math.max(bb[1], evLat[ev]));
+  const lng = Math.min(bb[2], Math.max(bb[0], evLng[ev]));
   wCases.write({
-    CaseMasterID: cid, CrimeNo: crimeNo, CaseNo: `${year}${pad(sNext, 5)}`,
+    CaseMasterID: cid, CrimeNo: crimeNo, CaseNo: `${sNext}/${year}`,
     CrimeRegisteredDate: dt.toISOString().slice(0, 10), Year: year, CrimeMonth: month,
     IncidentDate: dt.toISOString().slice(0, 19).replace('T', ' '),
     StateName: d.state, DistrictName: d.district, TalukName: loc.taluk, LocalityName: loc.name,
     StationName: station,
-    latitude: evLat[ev].toFixed(5), longitude: evLng[ev].toFixed(5),
+    latitude: lat.toFixed(5), longitude: lng.toFixed(5),
     CaseCategory: cat, Gravity: h.gravity, CrimeHead: h.group, CrimeSubHead: h.head,
     CaseStatus: status,
-    CourtName: `${d.district} District & Sessions Court`, OfficerName: nameFor(d),
+    CourtName: `${d.district} District & Sessions Court`,
+    OfficerName: pick(officersByStation.get(station) || [nameFor(d)]),
     ActsSections: h.law, AccusedCount: nA, VictimCount: nV,
     BriefFacts: `A case of ${h.head.toLowerCase()} was registered at ${station} on the complaint received `
       + `from ${loc.name}, ${loc.taluk} taluk, ${d.district} district (${d.state}). Investigation was taken up `
@@ -769,6 +911,12 @@ for (let n = 0; n < evN; n++) {
 
   // running tallies for the quality report
   headCount[evHi[ev]]++;
+  if (!stateHeadTop.has(d.state)) stateHeadTop.set(d.state, new Map());
+  const shm = stateHeadTop.get(d.state);
+  shm.set(h.head, (shm.get(h.head) || 0) + 1);
+  const dg = detectionByGroup.get(h.group) || { n: 0, det: 0 };
+  dg.n++; if (detected) dg.det++;
+  detectionByGroup.set(h.group, dg);
   stateCount.set(d.state, (stateCount.get(d.state) || 0) + 1);
   statusCount.set(status, (statusCount.get(status) || 0) + 1);
   yearCount.set(year, (yearCount.get(year) || 0) + 1);
@@ -882,6 +1030,10 @@ console.log('\nCase status mix:');
 console.log('\nCases per year:');
 [...yearCount.keys()].sort().forEach((y) => console.log(`  ${y}: ${fmt(yearCount.get(y))}`));
 
+console.log('\nDetection rate by crime group (offender identified):');
+[...detectionByGroup.entries()].sort((a, b) => b[1].det / b[1].n - a[1].det / a[1].n)
+  .forEach(([g, v]) => console.log(`  ${g.padEnd(28)} ${pct(v.det, v.n).toFixed(1)}%`));
+
 console.log('\nOutcome fidelity (generated conviction rate vs NCRB 2023):');
 ['Kerala', 'West Bengal', 'Uttar Pradesh', 'Karnataka', 'Delhi', 'Gujarat', 'Bihar'].forEach((s) => {
   const t = stateTried.get(s);
@@ -889,11 +1041,19 @@ console.log('\nOutcome fidelity (generated conviction rate vs NCRB 2023):');
   console.log(`  ${s.padEnd(16)} generated ${pct(t.conv, t.tried).toFixed(0)}%  NCRB ${STATE_CAL.get(s).convictionRate}%`);
 });
 
-// Prohibition only exists in dry states; a leak into any other state is a bug.
-const prohibitionIdx = HEADS.findIndex((h) => h.dryOnly);
-console.log(`\nProhibition Act: ${fmt(headCount[prohibitionIdx])} cases, confined to ` +
-  `${Object.keys(PROHIBITION_SHARE).length} states with a prohibition law ` +
-  `(${pct(headCount[prohibitionIdx], nCases).toFixed(2)}% of all cases, real ${pct(HEADS[prohibitionIdx].cases, HEAD_TOTAL).toFixed(2)}%)`);
+// State head mix is taken straight from NCRB, so the check is that a state's generated
+// mix tracks its own published mix — not the national one.
+console.log('\nPer-state head-mix fidelity (largest head in each of six states):');
+['Gujarat', 'Tamil Nadu', 'Kerala', 'Bihar', 'Uttar Pradesh', 'Maharashtra'].forEach((st) => {
+  const real = STATE_HEADS[st]; if (!real) return;
+  const vol = STATE_VOLUME.get(st);
+  const topHead = Object.entries(real).sort((a, b) => b[1] - a[1])[0][0];
+  const hi = HEADS.findIndex((h) => h.head === topHead);
+  const genState = stateHeadTop.get(st) || new Map();
+  const genTot = stateCount.get(st) || 1;
+  console.log(`  ${st.padEnd(16)} ${topHead.slice(0, 40).padEnd(41)} gen ` +
+    `${pct(genState.get(topHead) || 0, genTot).toFixed(1)}%  real ${pct(real[topHead], vol).toFixed(1)}%`);
+});
 const unusedHeads = HEADS.filter((h, i) => headCount[i] === 0);
 if (unusedHeads.length) {
   console.log(`Heads with no case at this scale: ${unusedHeads.length} ` +

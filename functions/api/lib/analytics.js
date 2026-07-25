@@ -13,8 +13,21 @@ try {
 
 const DISTRICT_CENTROIDS = new Map();
 const STATE_CENTROIDS = new Map();
+// Six district names exist in two states each (Aurangabad, Bilaspur, Hamirpur,
+// Pratapgarh, Raigarh, Bijapur), so a name-only key silently collapses two real
+// districts onto one point. Keys are 'state|district'; the bare name is kept as a
+// fallback only where it is unambiguous.
+const ambiguousNames = new Set();
+{
+  const seen = new Set();
+  for (const d of DISTRICT_REF) {
+    if (seen.has(d.district)) ambiguousNames.add(d.district);
+    seen.add(d.district);
+  }
+}
 for (const d of DISTRICT_REF) {
-  DISTRICT_CENTROIDS.set(d.district, [d.lat, d.lng]);
+  DISTRICT_CENTROIDS.set(d.state + '|' + d.district, [d.lat, d.lng]);
+  if (!ambiguousNames.has(d.district)) DISTRICT_CENTROIDS.set(d.district, [d.lat, d.lng]);
   const s = STATE_CENTROIDS.get(d.state) || { lat: 0, lng: 0, w: 0 };
   const w = Number(d.population) || 1;
   s.lat += d.lat * w; s.lng += d.lng * w; s.w += w;
@@ -42,14 +55,17 @@ async function q(app, query) {
 
 async function overview(app) {
   const one = async (query) => { const r = await q(app, query); return r.length ? countOf(r[0]) : 0; };
-  const [cases, accused, heinous, chargesheeted, highRisk, districtRows, stateRows] = await Promise.all([
+  const [cases, accused, heinous, chargesheeted, highRisk, , stateRows] = await Promise.all([
     one('SELECT COUNT(ROWID) FROM Cases'),
     one('SELECT COUNT(ROWID) FROM Accused'),
     one("SELECT COUNT(ROWID) FROM Cases WHERE Gravity='Heinous'"),
     // Anything past investigation has been chargesheeted at some point.
     one("SELECT COUNT(ROWID) FROM Cases WHERE CaseStatus IN ('Chargesheet Filed','Pending Trial','Convicted','Acquitted')"),
     one("SELECT COUNT(ROWID) FROM OffenderRisk WHERE RiskBand='High'"),
-    q(app, 'SELECT DistrictName, COUNT(ROWID) FROM Cases GROUP BY DistrictName LIMIT 300'),
+    // ZCQL caps LIMIT at 300 and the data covers ~640 districts, so counting the rows
+    // returned here would report 300 and understate coverage. The district universe is
+    // a property of the reference data, not of a paged query.
+    Promise.resolve(null),
     q(app, 'SELECT StateName, COUNT(ROWID) FROM Cases GROUP BY StateName LIMIT 300'),
   ]);
   return {
@@ -57,7 +73,7 @@ async function overview(app) {
     heinousPct: cases ? Math.round((heinous / cases) * 100) : 0,
     chargesheeted, chargesheetRate: cases ? Math.round((chargesheeted / cases) * 100) : 0,
     highRiskOffenders: highRisk,
-    districts: districtRows.length,
+    districts: DISTRICT_REF.length,
     states: stateRows.filter((r) => r.StateName).length,
   };
 }
@@ -75,10 +91,18 @@ async function hotspots(app, { level = 'state', state, limit = 300 } = {}) {
   let states = [];
   if (level === 'district' || safeState) {
     const where = safeState ? `WHERE StateName='${safeState}'` : '';
-    const rows = await q(app, `SELECT DistrictName, COUNT(ROWID) FROM Cases ${where} GROUP BY DistrictName ORDER BY COUNT(ROWID) DESC LIMIT ${lim}`);
+    // Grouping by StateName as well keeps the six duplicated district names apart, and
+    // gives the centroid lookup the state it needs to resolve them.
+    const rows = await q(app, `SELECT StateName, DistrictName, COUNT(ROWID) FROM Cases ${where} GROUP BY StateName, DistrictName ORDER BY COUNT(ROWID) DESC LIMIT ${lim}`);
     districts = rows.map((r) => {
-      const c = DISTRICT_CENTROIDS.get(r.DistrictName) || [null, null];
-      return { name: r.DistrictName, district: r.DistrictName, count: countOf(r), lat: c[0], lng: c[1] };
+      const c = DISTRICT_CENTROIDS.get(r.StateName + '|' + r.DistrictName)
+        || DISTRICT_CENTROIDS.get(r.DistrictName) || [null, null];
+      const ambiguous = ambiguousNames.has(r.DistrictName);
+      return {
+        name: ambiguous ? `${r.DistrictName} (${r.StateName})` : r.DistrictName,
+        district: r.DistrictName, state: r.StateName,
+        count: countOf(r), lat: c[0], lng: c[1],
+      };
     }).filter((d) => d.lat != null);
   }
   if (level !== 'district') {

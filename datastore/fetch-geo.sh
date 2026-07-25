@@ -15,4 +15,18 @@ get postoffices.csv \
   "https://raw.githubusercontent.com/avinashcelestine/pincodes-data/master/postofficeswithpins.csv"
 get postoffice_latlng.txt \
   "https://raw.githubusercontent.com/avinashcelestine/pincodes-data/master/pincodes_lat_lng.txt"
-echo "Done. Next: node datastore/build-geo.js"
+
+echo "Fetching NCRB Crime in India 2022 crime-head tables…"
+get ncrb_ipc_heads_2022.xlsx \
+  "https://www.ncrb.gov.in/uploads/nationalcrimerecordsbureau/custom/1701859959TABLE12.xlsx"
+get ncrb_sll_heads_2022.xlsx \
+  "https://www.ncrb.gov.in/uploads/nationalcrimerecordsbureau/custom/1701860030TABLE13.xlsx"
+get ncrb_ipc_state_heads_2022.xlsx \
+  "https://www.ncrb.gov.in/uploads/nationalcrimerecordsbureau/custom/1701860903TABLE1A4.xlsx"
+get ncrb_sll_state_heads_2022.xlsx \
+  "https://www.ncrb.gov.in/uploads/nationalcrimerecordsbureau/custom/1701860990TABLE1A5.xlsx"
+
+echo "Done. Next:"
+echo "  node datastore/build-geo.js"
+echo "  python3 datastore/tools/parse_ncrb_state_heads.py   # needs openpyxl"
+echo "  node datastore/build-state-heads.js"
