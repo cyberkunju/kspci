@@ -206,3 +206,52 @@ node --check functions/api/index.js
   real project. Confirm the exact command before running; avoid destructive ops.
 - **Commits:** don't create commits unless explicitly asked.
 - **Node runtime:** keep function code Node 18-compatible.
+
+---
+
+## 9. AppSail forecast engine
+
+The forecast is served by `ml/service`, which runs the `ml/engine` package — the same code
+every number in `ml/RESULTS.md` was measured on. Deploy:
+
+```bash
+./ml/service/deploy.sh            # syncs ml/engine, vendors wheels, catalyst deploy --only appsail
+curl -s https://kspforecast-50044266480.development.catalystappsail.in/health
+```
+
+`deploy.sh` copies `ml/engine` into the service directory because a build cannot reach outside
+its context, and vendors the dependencies because the managed Python runtime does **not** install
+`requirements.txt`. Re-vendoring is ~200 MB and is keyed on the requirements hash, so a redeploy
+that only changes `app.py` skips it. Both generated directories are gitignored — `ml/engine` is
+the single source of truth, and a served model that differs from the backtested one invalidates
+the accuracy claims.
+
+### Traps, all of which cost real time
+
+- **The runtime has `python3`, not `python`.** A wrong startup command surfaces only as
+  `Execution failed. Please check the startup command or port.`
+- **There are no CLI logs for AppSail** and no `appsail:list`. When a container will not start,
+  deploy a stdlib-only probe that reports `sys.path`, `os.listdir` and per-module import errors
+  over HTTP — it cannot fail for the reasons the real app can, so whatever it says is the truth.
+  That is how the `python3` problem was found after several blind redeploys.
+- **`appsail:add` only accepts managed stacks for a source directory.** A custom Docker runtime
+  needs a registry image URL, so a `Dockerfile` in the source is ignored.
+- **LightGBM is deliberately not a dependency.** scikit-learn's `HistGradientBoostingRegressor`
+  provides `loss="poisson"` and `loss="quantile"` natively, which is what the engine needs, and
+  avoids vendoring a binary wheel plus libgomp. The engine prefers LightGBM when present
+  (offline, and on Modal) and records the backend in every result, so numbers are never compared
+  across backends by accident. Live is `sklearn-histgb-poisson` at MASE 0.820 against LightGBM's
+  0.799 on the national monthly panel.
+- **`--timeout-keep-alive`** matters: a national 640-district forecast takes ~28 s.
+
+### Refreshing the served snapshot
+
+```bash
+ADMIN_KEY=... node datastore/refresh-forecast.js          # all states
+ADMIN_KEY=... node datastore/refresh-forecast.js --states Karnataka
+```
+
+One state per request, because 28 s does not fit a Function's 25 s ceiling. Each call replaces
+only its own rows inside the shared national scope. Requires the `Forecasts` and
+`ForecastMetrics` tables (schema in `datastore/SCHEMA.md`); without them the read routes fall
+back to live computation, so this is optional and additive.
