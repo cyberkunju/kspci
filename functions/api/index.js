@@ -17,6 +17,13 @@
  *   GET  /offender/:id/risk      AutoML risk score + factors                          [Phase 2/3]
  *   POST /ingest/ocr             scanned FIR OCR ingestion (Zia OCR)                   [Phase 3]
  *
+ *   OSINT research engine (lib/research.js -> AppSail service in research/):
+ *   POST   /research             start a run (anchored from our own records)
+ *   POST   /research/sync        quick run, completed inside the request
+ *   GET    /research/:id         poll state, and the result once finished
+ *   DELETE /research/:id         cancel a running job
+ *   GET    /research/health      engine reachability + which source tiers are live
+ *
  *   WhatsApp field-officer channel (lib/wa/*):
  *   GET  /whatsapp/webhook           Meta subscription handshake
  *   POST /whatsapp/webhook           inbound messages (HMAC-verified, fast ack)
@@ -421,6 +428,63 @@ app.get('/analytics/brief', requireRole(), async (req, res) => {
     res.status(500).json({ error: 'brief_failed', message: String((e && e.message) || e) });
   }
 });
+
+// ============================ OSINT research engine ============================
+// Open-source research on a person, crime, event or organisation. The engine itself
+// runs on Catalyst AppSail (research/) because a run takes 40-300 seconds and an
+// Advanced I/O function is killed at 30. These routes start runs, poll them, and —
+// critically — supply the anchors from our own records that make attribution possible.
+// See lib/research.js and documentation/16-research-engine.md.
+//
+// Authorization is deliberately NOT duplicated here. requireRole() checks the header
+// is a real role; the engine's governance module owns the rules about which role may
+// research what, and which subjects it refuses outright. Two copies of that rule would
+// drift, and the copy that drifts loose is the one that matters.
+function researchRoute(handler) {
+  return async (req, res) => {
+    try {
+      res.json(await handler(req, require('./lib/research')));
+    } catch (e) {
+      res.status((e && e.status) || 500).json({
+        error: (e && e.code) || 'research_failed',
+        message: String((e && e.message) || e)
+      });
+    }
+  };
+}
+
+app.get('/research/health', requireRole(), researchRoute(async (_req, research) => (
+  research.configured() ? await research.health() : { ok: false, configured: false }
+)));
+
+app.post('/research', requireRole(), researchRoute(async (req, research) => {
+  const { subject, kind, purpose, question, mode, crimeNo } = req.body || {};
+  if (!subject || !String(subject).trim()) {
+    const e = new Error('subject required'); e.status = 400; e.code = 'no_subject'; throw e;
+  }
+  const adminApp = catalyst.initialize(req, { scope: 'admin' });
+  return research.start(adminApp, {
+    subject, kind, purpose, question, mode, crimeNo,
+    role: req.userRole, officer: req.headers['x-user-id'] || 'demo-user'
+  });
+}));
+
+// Quick mode, run inside this request. For callers that cannot poll — the WhatsApp
+// channel and the voice assistant. Capped below the function's own 30s ceiling.
+app.post('/research/sync', requireRole(), researchRoute(async (req, research) => {
+  const { subject, kind, purpose, question, crimeNo } = req.body || {};
+  if (!subject || !String(subject).trim()) {
+    const e = new Error('subject required'); e.status = 400; e.code = 'no_subject'; throw e;
+  }
+  const adminApp = catalyst.initialize(req, { scope: 'admin' });
+  return research.sync(adminApp, {
+    subject, kind, purpose, question, crimeNo,
+    role: req.userRole, officer: req.headers['x-user-id'] || 'demo-user'
+  });
+}));
+
+app.get('/research/:id', requireRole(), researchRoute((req, research) => research.poll(req.params.id)));
+app.delete('/research/:id', requireRole(), researchRoute((req, research) => research.cancel(req.params.id)));
 
 // ============================ WhatsApp field-officer channel ============================
 // Meta WhatsApp Cloud API webhook + the internal endpoints its async processing and
