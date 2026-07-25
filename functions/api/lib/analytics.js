@@ -264,8 +264,33 @@ async function moneytrail(app, { limit = 300 } = {}) {
 // call sites keep working now that coverage is all-India, not just Karnataka.
 const CENTROIDS = Object.fromEntries([...DISTRICT_CENTROIDS.entries()]);
 
+/**
+ * Nearest district to a coordinate, by great-circle distance to the district
+ * centroid. Used when a field officer shares their WhatsApp location: it turns a
+ * lat/lng into the district name the rest of the system speaks in.
+ *
+ * ponytail: centroid distance, not a point-in-polygon test, so near a district
+ * boundary it can name the neighbour. Callers must present the result as
+ * "nearest district", which is honest and sufficient for choosing an area to
+ * query. Swap in the Census boundaries used by datastore/build-geo.js if exact
+ * containment ever matters.
+ */
+function nearestDistrict(lat, lng) {
+  const la = Number(lat), ln = Number(lng);
+  if (!Number.isFinite(la) || !Number.isFinite(ln) || !DISTRICT_REF.length) return null;
+  const rad = Math.PI / 180;
+  let best = null, bestKm = Infinity;
+  for (const d of DISTRICT_REF) {
+    const dLat = (d.lat - la) * rad;
+    const dLng = (d.lng - ln) * rad * Math.cos((la + d.lat) / 2 * rad);
+    const km = Math.sqrt(dLat * dLat + dLng * dLng) * 6371;
+    if (km < bestKm) { bestKm = km; best = d; }
+  }
+  return best ? { district: best.district, state: best.state, km: Math.round(bestKm) } : null;
+}
+
 module.exports = {
   overview, hotspots, trends, network, offenders, financial, sociology, moneytrail,
-  DISTRICT_CENTROIDS, STATE_CENTROIDS, CENTROIDS,
+  DISTRICT_CENTROIDS, STATE_CENTROIDS, CENTROIDS, nearestDistrict,
   KARNATAKA_CENTROIDS: CENTROIDS,
 };
