@@ -45,17 +45,26 @@ async function insertChunked(app, table, rows, chunk = 200) {
   return rows.length;
 }
 
-/** Delete every row of a scope before rewriting it, so a snapshot is never half-old. */
-async function clearScope(app, table, scope) {
+/**
+ * Delete rows of a scope before rewriting them, so a snapshot is never half-old.
+ *
+ * ``onlyState`` narrows the delete to one state's rows. That is what makes a national snapshot
+ * buildable from a Catalyst Function at all: a 640-district forecast takes the engine ~28s,
+ * past the 25s request ceiling, so the refresh runs one state per call and each call replaces
+ * only its own slice of the shared national scope.
+ */
+async function clearScope(app, table, scope, onlyState = null) {
   const zcql = app.zcql();
   const esc = scope.replace(/'/g, "''");
+  const stateFilter = onlyState
+    ? ` AND StateName='${String(onlyState).replace(/'/g, "''")}'` : '';
   const t = app.datastore().table(table);
   // ZCQL caps LIMIT at 300, so this pages. The loop is bounded rather than `while (true)`:
   // an unbounded delete loop inside a request that can time out mid-way is how you get a
   // partially cleared scope and no record of where it stopped.
   for (let page = 0; page < 400; page++) {
     const res = await zcql.executeZCQLQuery(
-      `SELECT ROWID FROM ${table} WHERE Scope='${esc}' LIMIT 0, 300`);
+      `SELECT ROWID FROM ${table} WHERE Scope='${esc}'${stateFilter} LIMIT 0, 300`);
     const ids = (res || []).map((r) => (r[table] || {}).ROWID).filter(Boolean);
     if (!ids.length) return page;
     await t.deleteRows(ids);
@@ -70,12 +79,17 @@ async function clearScope(app, table, scope) {
  * weights, accuracy, horizon) goes to ForecastMetrics as one JSON row, because it is metadata
  * about the snapshot rather than per-unit data and duplicating it 640 times would be silly.
  */
-async function writeSnapshot(app, route, opts, payload) {
-  const scope = scopeKey(route, opts);
+async function writeSnapshot(app, route, opts, payload, { partialState = null } = {}) {
+  // A partial refresh contributes one state's rows to the shared national scope rather than
+  // creating a scope of its own, so the national read still returns every district.
+  const scope = scopeKey(route, partialState ? { ...opts, state: null } : opts);
   const computedAt = new Date().toISOString();
   const units = Array.isArray(payload && payload.forecasts) ? payload.forecasts : [];
 
-  const cleared = await clearScope(app, TABLE, scope);
+  const cleared = await clearScope(app, TABLE, scope, partialState);
+  // Exactly one metadata row per scope, always. A partial refresh rewrites it rather than
+  // adding one, otherwise 36 per-state calls would leave 36 rows and the read would pick an
+  // arbitrary one.
   await clearScope(app, META_TABLE, scope);
 
   const rows = units.map((f) => ({
@@ -98,19 +112,32 @@ async function writeSnapshot(app, route, opts, payload) {
 
   const inserted = rows.length ? await insertChunked(app, TABLE, rows) : 0;
 
+  // For a partial refresh the metadata must describe the whole scope, not the slice just
+  // written, so the count comes from the table rather than from this call.
+  let total = inserted;
+  if (partialState) {
+    try {
+      const c = await app.zcql().executeZCQLQuery(
+        `SELECT COUNT(ROWID) FROM ${TABLE} WHERE Scope='${scope.replace(/'/g, "''")}'`);
+      const obj = c && c[0] && c[0][TABLE];
+      if (obj) total = Number(Object.values(obj)[0]) || inserted;
+    } catch (_) { /* count is informational; a failure must not lose the snapshot */ }
+  }
+
   // Everything except the per-unit array, so a read can reconstruct the exact payload.
   const context = { ...payload };
   delete context.forecasts;
   await insertChunked(app, META_TABLE, [{
     Scope: scope,
     Level: opts.level || 'district',
-    StateName: opts.state || null,
+    StateName: partialState ? null : (opts.state || null),
     Payload: JSON.stringify(context),
-    UnitCount: inserted,
+    UnitCount: total,
     ComputedAt: computedAt,
   }]);
 
-  return { scope, inserted, computedAt, clearedPages: cleared };
+  return { scope, inserted, totalInScope: total, computedAt, clearedPages: cleared,
+    partialState: partialState || undefined };
 }
 
 /**

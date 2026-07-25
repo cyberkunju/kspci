@@ -440,18 +440,24 @@ app.post('/admin/forecast/refresh', adminGuard, async (req, res) => {
     const adminApp = catalyst.initialize(req, { scope: 'admin' });
     const level = req.body && req.body.level === 'state' ? 'state' : 'district';
     const state = (req.body && req.body.state) || null;
+    // A national district forecast takes the engine ~28s, past this function's 25s ceiling. So
+    // when a state is given, the run computes that state and writes its slice into the shared
+    // national scope. Loop the 36 states (datastore/refresh-forecast.js does) to build the
+    // national snapshot without any single call approaching the limit.
+    const partial = state && req.body && req.body.partial !== false ? state : null;
     const opts = { level, state };
 
     const results = {};
     for (const [fn, route] of Object.entries(SNAPSHOT_ROUTES)) {
       try {
         const payload = await engine[fn](adminApp, opts);
-        results[route] = await store.writeSnapshot(adminApp, route, opts, payload);
+        results[route] = await store.writeSnapshot(adminApp, route, opts, payload, { partialState: partial });
       } catch (e) {
+        // Per-route, so a failure in early-warning still leaves a correct forecast snapshot.
         results[route] = { error: String((e && e.message) || e) };
       }
     }
-    res.json({ level, state, results, elapsedMs: Date.now() - started });
+    res.json({ level, state, partial: !!partial, results, elapsedMs: Date.now() - started });
   } catch (e) {
     res.status(500).json({ error: 'refresh_failed', message: String((e && e.message) || e), elapsedMs: Date.now() - started });
   }
