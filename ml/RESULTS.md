@@ -6,7 +6,7 @@ separately:
 
 | Corpus | What it is | What it can prove |
 |---|---|---|
-| **Real open data** — 6.37M incidents, 5 US cities, 27 panels | Chicago, New York, Los Angeles, San Francisco, Seattle open-data portals, 2018–2023, incident-level and geocoded | that the method and its conclusions hold on real recording practice |
+| **Real open data** — 6.37M incidents, 5 US cities, 28 panels | Chicago, New York, Los Angeles, San Francisco, Seattle open-data portals, 2018–2023, incident-level and geocoded | that the method and its conclusions hold on real recording practice |
 | **Synthetic all-India** — 27.4M incidents, 640 districts, 56 panels | NCRB-calibrated ETAS simulation, 2021–2026 | resolution and decomposition experiments at Indian scale, and a **measured** noise floor, which real data cannot give |
 
 The synthetic corpus cannot validate accuracy — scoring on it partly measures how well the
@@ -80,7 +80,7 @@ every headroom figure.
 
 ---
 
-## Real open data — five cities, 6.37M incidents, 27 panels
+## Real open data — five cities, 6.37M incidents, 28 panels
 
 Identical engine, identical metrics. `ml/ingest_cities.py` writes the same column schema as the
 Indian corpus specifically so `build_panels.py` and the engine run unchanged; a city-specific
@@ -106,16 +106,17 @@ districts, San Francisco analysis neighbourhoods, Seattle beats.
 | sanfrancisco district×week | 11 | 0.654 | 0.834 | 21.6 | 0.536 | 16–24% | 1.61 | 1.60 | 90.1% |
 | sanfrancisco taluk×week | 132 | 0.703 | 0.800 | 12.2 | 0.661 | 5–7% | 11.93 | 11.89 | 89.5% |
 | sanfrancisco grid 500 m×week | 447 | 0.722 | 0.776 | 7.0 | 0.726 | 0% | **13.60** | 12.93 | 90.0% |
+| sanfrancisco grid 500 m×day | 419 | 0.813 | 0.823 | 1.3 | 0.828 | 0% | **12.59** | 12.13 | 89.8% |
 | seattle taluk×week | 53 | 0.650 | 0.750 | 13.3 | 0.734 | 0–6% | 1.76 | 1.56 | 92.5% |
 | seattle grid 800 m×week | 378 | 0.712 | 0.768 | 7.3 | 0.799 | 0% | **10.47** | 10.39 | 91.1% |
 | seattle grid 800 m×day | 336 | 0.822 | 0.835 | 1.6 | 0.900 | 0% | 9.95 | 9.84 | 90.3% |
 
-Full 27-panel table: `ml/.venv/bin/python ml/report_table.py ml/out/reports --real`
+Full 28-panel table: `ml/.venv/bin/python ml/report_table.py ml/out/reports --real`
 
 ### What the real data says
 
-1. **The engine beats seasonal-naive on all 27 real panels** (MASE 0.47–0.83) and beats the
-   police historical-pattern baseline on 26 of 27. The one exception is Los Angeles
+1. **The engine beats seasonal-naive on all 28 real panels** (MASE 0.47–0.83) and beats the
+   police historical-pattern baseline on 27 of 28. The one exception is Los Angeles
    taluk × day, where it ties.
 2. **Grid resolution is the operational unlock, and this replicates in every city.** PAI@1%
    goes from 1.5–2.3 at district level to **6.3–13.6** on a fine grid: 1% of the city, ranked
@@ -129,7 +130,7 @@ Full 27-panel table: `ml/.venv/bin/python ml/report_table.py ml/out/reports --re
    21–75%, because the long-run-mean baseline cannot track trend or level shifts while the
    model can. New York is the extreme case: the police baseline scores MASE 1.852, i.e. far
    worse than simply repeating last year.
-5. **Intervals are calibrated**: Mondrian conformal 90% coverage lands at 85.7–96.5% across 27
+5. **Intervals are calibrated**: Mondrian conformal 90% coverage lands at 85.7–96.5% across 28
    panels with no per-panel tuning.
 6. **Corrected headroom at fine resolution is 0–7%.** The engine is close to the achievable
    floor wherever the panel is fine-grained. The larger corrected ranges (New York district,

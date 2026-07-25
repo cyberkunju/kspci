@@ -251,14 +251,24 @@ def build(level: str = "district", period: str = "week", split_head: bool = Fals
 
 @app.local_entrypoint()
 def sweep(pattern: str = "", test_frac: float = 0.25, quantiles: bool = True,
-          min_total: int = 0):
-    """Evaluate every panel in the Volume in parallel, one container each."""
+          min_total: int = 0, retrain_every: int = 8):
+    """Evaluate every panel in the Volume in parallel, one container each.
+
+    ``retrain_every`` is exposed because the largest daily panels cannot finish at the default
+    8-origin cadence: a 1,500-unit x 2,191-day panel needs ~200 refits on a training set
+    growing to millions of rows, which outlasts the container preemption window, so the work
+    restarts from the beginning and never completes. A 28-origin cadence is both inside the
+    window and a closer match to how a deployed system would retrain. Retraining less often
+    can only hurt accuracy, so those numbers are conservative; the cadence used is recorded in
+    every report's diagnostics.
+    """
     names = [n for n in list_panels.remote() if n.endswith(".json") and pattern in n]
     if not names:
         raise SystemExit("no panels matched — run `modal run ml/modal_app.py::build` first")
-    print(f"evaluating {len(names)} panels in parallel")
+    print(f"evaluating {len(names)} panels in parallel, retrain every {retrain_every}")
     reports = list(evaluate_panel.starmap(
-        [(n, test_frac, 8, 5, quantiles, min_total) for n in names], return_exceptions=True
+        [(n, test_frac, retrain_every, 5, quantiles, min_total) for n in names],
+        return_exceptions=True
     ))
     _print_table([r for r in reports if isinstance(r, dict)])
     for r in reports:
