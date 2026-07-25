@@ -84,7 +84,10 @@ async function writeSnapshot(app, route, opts, payload, { partialState = null } 
   // creating a scope of its own, so the national read still returns every district.
   const scope = scopeKey(route, partialState ? { ...opts, state: null } : opts);
   const computedAt = new Date().toISOString();
-  const units = Array.isArray(payload && payload.forecasts) ? payload.forecasts : [];
+  // Forecast payloads carry `forecasts`; early-warning payloads carry the same per-unit records
+  // under `alerts` with severity attached. Both are stored as rows of the same shape.
+  const units = Array.isArray(payload && payload.forecasts) ? payload.forecasts
+    : (Array.isArray(payload && payload.alerts) ? payload.alerts : []);
 
   const cleared = await clearScope(app, TABLE, scope, partialState);
   // Exactly one metadata row per scope, always. A partial refresh rewrites it rather than
@@ -107,6 +110,10 @@ async function writeSnapshot(app, route, opts, payload, { partialState = null } 
     Band: f.band || f.riskBand || null,
     Latitude: num(f.lat),
     Longitude: num(f.lng),
+    // z and severity only exist on early-warning rows. Stored rather than recomputed on read,
+    // because z needs the unit's recent variance, which the snapshot does not carry.
+    Zscore: num(f.z),
+    Severity: f.severity || null,
     ComputedAt: computedAt,
   }));
 
@@ -167,7 +174,7 @@ async function readSnapshot(app, route, opts, { maxAgeHours = 0 } = {}) {
   const forecasts = [];
   for (let offset = 0; offset < 4000; offset += 300) {
     const res = await zcql.executeZCQLQuery(
-      `SELECT StateName, DistrictName, UnitName, Predicted, Baseline, TrendPct, Low, High, Band, Latitude, Longitude FROM ${TABLE} WHERE Scope='${scope}' ORDER BY Predicted DESC LIMIT ${offset}, 300`);
+      `SELECT StateName, DistrictName, UnitName, Predicted, Baseline, TrendPct, Low, High, Band, Latitude, Longitude, Zscore, Severity FROM ${TABLE} WHERE Scope='${scope}' ORDER BY Predicted DESC LIMIT ${offset}, 300`);
     const batch = (res || []).map((r) => r[TABLE] || {});
     for (const r of batch) {
       forecasts.push({
@@ -175,6 +182,7 @@ async function readSnapshot(app, route, opts, { maxAgeHours = 0 } = {}) {
         predicted: num(r.Predicted), baseline: num(r.Baseline), trendPct: num(r.TrendPct),
         low: num(r.Low), high: num(r.High), band: r.Band,
         lat: num(r.Latitude), lng: num(r.Longitude),
+        z: num(r.Zscore), severity: r.Severity || undefined,
       });
     }
     if (batch.length < 300) break;
@@ -183,9 +191,16 @@ async function readSnapshot(app, route, opts, { maxAgeHours = 0 } = {}) {
 
   let context = {};
   try { context = JSON.parse(meta.Payload || '{}'); } catch (_) { context = {}; }
+  // Early-warning clients read `alerts`, forecast clients read `forecasts`. The rows are the
+  // same shape, so the route decides the key rather than the storage duplicating them.
+  const keyed = route === 'earlywarning'
+    ? { alerts: forecasts.filter((f) => f.severity),
+        critical: forecasts.filter((f) => f.severity === 'critical').length,
+        elevated: forecasts.filter((f) => f.severity === 'elevated').length }
+    : { forecasts };
   return {
     ...context,
-    forecasts,
+    ...keyed,
     cached: true,
     computedAt: meta.ComputedAt,
     ageHours: +((Date.now() - Date.parse(meta.ComputedAt)) / 3.6e6).toFixed(2),
