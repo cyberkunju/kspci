@@ -11,8 +11,8 @@ import { Kpi, MetricSkeletons, PageHeader, ViewError, VizCard } from './Cards';
 Chart.register(...registerables);
 
 const GRID = 'rgba(255,255,255,0.06)';
-const TICK = '#8695b3';
-const SEV_COLOR = { critical: '#f43f5e', elevated: '#fbbf24', watch: '#22d3ee' };
+const TICK = '#a3a3a3';
+const SEV_COLOR = { critical: '#ec6d5f', elevated: '#e0aa4e', watch: '#45b5d1' };
 const SEV_VARIANT = { critical: 'error', elevated: 'warning', watch: 'info' };
 const SEV_DOT = { critical: 'error', elevated: 'warning', watch: 'accent' };
 
@@ -36,7 +36,7 @@ function ForecastMap({ forecasts, alerts }) {
     forecasts.forEach((f) => {
       if (f.lat == null) return;
       const sev = sevOf[f.district];
-      const col = sev ? SEV_COLOR[sev] : '#3d8bfd';
+      const col = sev ? SEV_COLOR[sev] : '#6d93f5';
       const r = 8 + (f.predicted / max) * 32;
       const c = L.circleMarker([f.lat, f.lng], { radius: r, color: col, weight: 2, fillColor: col, fillOpacity: sev ? 0.45 : 0.22 }).addTo(group);
       c.bindTooltip(`${f.district}: predicted ${f.predicted} (${f.trendPct >= 0 ? '+' : ''}${f.trendPct}%)`, { direction: 'top' });
@@ -69,8 +69,8 @@ function LineChart({ statewide }) {
       data: {
         labels: statewide.map((s) => s.label),
         datasets: [
-          { label: 'Actual', data: statewide.map((s) => s.actual), borderColor: '#22d3ee', backgroundColor: 'transparent', tension: 0.35, pointRadius: 2, borderWidth: 2 },
-          { label: 'Predicted (ensemble)', data: statewide.map((s) => s.predicted), borderColor: '#fbbf24', backgroundColor: 'rgba(251,191,36,0.10)', borderDash: [5, 4], fill: true, tension: 0.35, pointRadius: 2, borderWidth: 2 }
+          { label: 'Actual', data: statewide.map((s) => s.actual), borderColor: '#45b5d1', backgroundColor: 'transparent', tension: 0.35, pointRadius: 2, borderWidth: 2 },
+          { label: 'Predicted (ensemble)', data: statewide.map((s) => s.predicted), borderColor: '#e0aa4e', backgroundColor: 'rgba(224,170,78,0.10)', borderDash: [5, 4], fill: true, tension: 0.35, pointRadius: 2, borderWidth: 2 }
         ]
       },
       options: {

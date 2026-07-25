@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Chart, registerables } from 'chart.js';
 Chart.register(...registerables);
 
-import { PALETTE, GRID, TICK, ACCENT } from '../lib/chartTheme';
+import { PALETTE, GRID, TICK, ACCENT, SURFACE } from '../lib/chartTheme';
 import { Grid, Stack, Text } from '../ui';
 import { VizCard } from './Cards';
 
@@ -58,14 +58,14 @@ export default function TrendCharts({ trends }) {
       <VizCard title="By case status">
         <ChartCanvas type="doughnut" data={{
           labels: (trends.byStatus || []).map((d) => d.label),
-          datasets: [{ data: (trends.byStatus || []).map((d) => d.count), backgroundColor: PALETTE, borderColor: '#0b1120', borderWidth: 2 }]
+          datasets: [{ data: (trends.byStatus || []).map((d) => d.count), backgroundColor: PALETTE, borderColor: SURFACE, borderWidth: 2 }]
         }} />
       </VizCard>
 
       <VizCard title="By gravity">
         <ChartCanvas type="doughnut" data={{
           labels: (trends.byGravity || []).map((d) => d.label),
-          datasets: [{ data: (trends.byGravity || []).map((d) => d.count), backgroundColor: ['#f43f5e', '#3d8bfd', '#fbbf24'], borderColor: '#0b1120', borderWidth: 2 }]
+          datasets: [{ data: (trends.byGravity || []).map((d) => d.count), backgroundColor: ['#ec6d5f', '#6d93f5', '#e0aa4e'], borderColor: SURFACE, borderWidth: 2 }]
         }} />
       </VizCard>
     </Grid>

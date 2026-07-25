@@ -11,10 +11,13 @@
      canvases (charts, map, evidence rail, code blocks) share one cohesive
      surface family with every Astryx component. App ships dark-only, so the
      resolved dark values are used directly for predictable canvas/JS colors. */
-  --bg-0: #1b1b1b;   /* page / body (Astryx --color-background-body) */
+  --bg-0: #1b1b1b;   /* page / body + card (Astryx --color-background-body/card) */
   --bg-1: #1f1f1f;   /* panels & rails, a hair above page for separation */
-  --bg-2: #262626;   /* raised surface (Astryx --color-background-surface) */
+  --bg-2: #262626;   /* raised/elevated surface (Astryx --color-background-surface) */
   --bg-3: #2f2f2f;   /* hover / highest surface */
+  /* Data-canvas inset (graphs, maps): sits just below the #1b1b1b card so
+     visualisations read as recessed panels, in the same neutral family. */
+  --canvas: #171717;
   --line: #333333;   /* subtle divider on dark neutral */
   --line-2: #525252; /* emphasized border (Astryx --color-border-emphasized) */
   --text: #fafafa;   /* --color-text-primary */
@@ -174,12 +177,12 @@ body {
 /* ---- Chart.js / Leaflet / D3 canvases ---- */
 .chart-h { position: relative; }
 .hotspot-map { height: clamp(340px, 56vh, 560px); border-radius: var(--r-md); overflow: hidden; border: 1px solid var(--line); }
-.leaflet-container { background: var(--bg-2); }
+.leaflet-container { background: var(--canvas); }
 
 /* ---- interactive network graph (canvas) ---- */
 .ng-wrap {
   position: relative; width: 100%; border-radius: var(--r-md); overflow: hidden;
-  border: 1px solid var(--line); background: #12151b; touch-action: none;
+  border: 1px solid var(--line); background: var(--canvas); touch-action: none;
 }
 .ng-canvas { display: block; width: 100%; height: 100%; }
 .ng-toolbar {

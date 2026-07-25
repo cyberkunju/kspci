@@ -3,7 +3,7 @@ import { api } from '../api';
 import { Chart, registerables } from 'chart.js';
 Chart.register(...registerables);
 
-import { PALETTE as PAL, GRID, TICK } from '../lib/chartTheme';
+import { PALETTE as PAL, GRID, TICK, SURFACE, ACCENT } from '../lib/chartTheme';
 import { Grid, Stack, Text } from '../ui';
 import { ViewError, VizCard } from './Cards';
 
@@ -42,7 +42,7 @@ export default function Sociology({ role }) {
   return (
     <Grid columns={{ minWidth: 280, max: 3 }} gap={3}>
       <VizCard title="Accused — age distribution">
-        <C type="bar" data={{ labels: cat(d.accusedAge).labels, datasets: [{ label: 'Accused', data: cat(d.accusedAge).data, backgroundColor: '#3d8bfd' }] }} options={{ plugins: { legend: { display: false } } }} />
+        <C type="bar" data={{ labels: cat(d.accusedAge).labels, datasets: [{ label: 'Accused', data: cat(d.accusedAge).data, backgroundColor: ACCENT }] }} options={{ plugins: { legend: { display: false } } }} />
       </VizCard>
       <VizCard title="Victim — age distribution">
         <C type="bar" data={{ labels: cat(d.victimAge).labels, datasets: [{ label: 'Victims', data: cat(d.victimAge).data, backgroundColor: '#f472b6' }] }} options={{ plugins: { legend: { display: false } } }} />
@@ -51,19 +51,19 @@ export default function Sociology({ role }) {
         <C type="bar" data={{ labels: occ.labels, datasets: [{ label: 'Complaints', data: occ.data, backgroundColor: PAL }] }} options={{ indexAxis: 'y', plugins: { legend: { display: false } } }} height={260} />
       </VizCard>
       <VizCard title="Accused gender">
-        <C type="doughnut" data={{ labels: cat(d.accusedGender).labels, datasets: [{ data: cat(d.accusedGender).data, backgroundColor: PAL, borderColor: '#0b1120', borderWidth: 2 }] }} />
+        <C type="doughnut" data={{ labels: cat(d.accusedGender).labels, datasets: [{ data: cat(d.accusedGender).data, backgroundColor: PAL, borderColor: SURFACE, borderWidth: 2 }] }} />
       </VizCard>
       <VizCard title="Community — religion">
-        <C type="doughnut" data={{ labels: cat(d.religion).labels, datasets: [{ data: cat(d.religion).data, backgroundColor: PAL, borderColor: '#0b1120', borderWidth: 2 }] }} />
+        <C type="doughnut" data={{ labels: cat(d.religion).labels, datasets: [{ data: cat(d.religion).data, backgroundColor: PAL, borderColor: SURFACE, borderWidth: 2 }] }} />
       </VizCard>
       <VizCard title="Social category">
-        <C type="doughnut" data={{ labels: cat(d.caste).labels, datasets: [{ data: cat(d.caste).data, backgroundColor: PAL, borderColor: '#0b1120', borderWidth: 2 }] }} />
+        <C type="doughnut" data={{ labels: cat(d.caste).labels, datasets: [{ data: cat(d.caste).data, backgroundColor: PAL, borderColor: SURFACE, borderWidth: 2 }] }} />
       </VizCard>
       <VizCard title="Crime type × accused gender (behavioural pattern)" note={d.note} full>
         <C type="bar" height={280} data={{
           labels: (d.crimeByGender || []).map((x) => x.sub),
           datasets: [
-            { label: 'Male', data: (d.crimeByGender || []).map((x) => x.male), backgroundColor: '#3d8bfd' },
+            { label: 'Male', data: (d.crimeByGender || []).map((x) => x.male), backgroundColor: ACCENT },
             { label: 'Female', data: (d.crimeByGender || []).map((x) => x.female), backgroundColor: '#f472b6' }
           ]
         }} options={{ plugins: { legend: { display: true } }, scales: { x: { stacked: true, grid: { color: GRID }, ticks: { color: TICK, font: { size: 9 } } }, y: { stacked: true, grid: { color: GRID }, ticks: { color: TICK } } } }} />

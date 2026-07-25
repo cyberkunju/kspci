@@ -6,6 +6,10 @@ import { Scan, Search, X } from 'lucide-react';
 const RING_COLORS = ['#8a94a6', '#6d93f5', '#22d3ee', '#42c990', '#e0aa4e', '#f472b6', '#a78bfa', '#f87171', '#38bdf8', '#facc15'];
 const ringColor = (r) => RING_COLORS[(r || 0) % RING_COLORS.length];
 const moneyColor = (r) => (r === 2 ? '#e0aa4e' : '#6d93f5');
+// Canvas surface: a subtle inset below the Astryx card (#1b1b1b) it sits in,
+// kept in the theme's warm-neutral family (never blue-black).
+const CANVAS_BG = '#171717';
+const LABEL_BG = 'rgba(23,23,23,0.86)';
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 /**
@@ -88,7 +92,7 @@ export default function NetworkGraph({ data, kind = 'crime', height = 520, onSel
       const fs = clamp(12 / scale, 2, 13);
       ctx.font = `600 ${fs}px Inter, system-ui, sans-serif`;
       const tw = ctx.measureText(label).width;
-      ctx.fillStyle = 'rgba(8,11,16,0.78)';
+      ctx.fillStyle = LABEL_BG;
       ctx.fillRect(node.x - tw / 2 - 3 / scale, node.y - r - 4 / scale - fs, tw + 6 / scale, fs + 3 / scale);
       ctx.fillStyle = '#eef1f5';
       ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
@@ -149,7 +153,7 @@ export default function NetworkGraph({ data, kind = 'crime', height = 520, onSel
         width={width}
         height={height}
         graphData={graphData}
-        backgroundColor="#12151b"
+        backgroundColor={CANVAS_BG}
         nodeRelSize={5}
         nodeVal={(n) => (n.degree || 1)}
         autoPauseRedraw={false}

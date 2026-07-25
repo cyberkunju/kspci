@@ -37,7 +37,7 @@ export default function HotspotMap({ data }) {
     // sampled incident points (subtle)
     (data.points || []).forEach((p) => {
       L.circleMarker([p.lat, p.lng], {
-        radius: 2, color: '#22d3ee', weight: 0, fillOpacity: 0.25
+        radius: 2, color: '#45b5d1', weight: 0, fillOpacity: 0.28
       }).addTo(group);
     });
 
