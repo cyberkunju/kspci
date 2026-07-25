@@ -30,6 +30,10 @@ const BASE = process.env.KSP_API
   || 'https://project-rainfall-60079622152.development.catalystserverless.in/server/api';
 const ADMIN_KEY = process.env.ADMIN_KEY || 'ksp-2026-seed-9f3ab7c1d84e';
 const BATCH = Number(process.env.BATCH || 200);
+// Concurrent in-flight batches. The ceiling is the deployed function's ability to absorb
+// parallel inserts, not this machine; 8 was chosen by measurement and backs off on failure via
+// insert()'s retry. Raise with CONCURRENCY= if the function scales further.
+const CONCURRENCY = Math.max(1, Number(process.env.CONCURRENCY || 8));
 const SEED_DIR = path.join(__dirname, 'seed');
 const STATE_FILE = path.join(SEED_DIR, '.load-state.json');
 const TABLES = ['Cases', 'Accused', 'Victims', 'Complainants', 'Arrests', 'CoAccusedLinks', 'OffenderRisk', 'FinancialTxns'];
@@ -82,7 +86,7 @@ async function insert(table, rows, attempt = 0) {
   }
 }
 
-async function loadTable(table) {
+async function loadTable(table, total = 0) {
   const file = path.join(SEED_DIR, table + '.csv');
   if (!fs.existsSync(file)) { console.log(`- ${table}: no CSV, skipping`); return; }
 
@@ -95,17 +99,51 @@ async function loadTable(table) {
     crlfDelay: Infinity,
   });
 
-  const flush = async () => {
-    if (!batch.length) return;
-    const res = await insert(table, batch);
-    inserted += res.inserted ?? batch.length;
-    batch = [];
-    state[table] = index;
+  // Batches are posted concurrently. The load is tens of thousands of requests whose cost is
+  // almost entirely the round trip, so one-at-a-time spends the whole run waiting: 8.2M rows at
+  // 200 per call is ~41,000 sequential requests, hours of pure latency.
+  //
+  // The checkpoint is what makes this safe to parallelise. With requests in flight out of order,
+  // the resume point may only advance to the last row index for which *every* earlier batch has
+  // landed — otherwise an interruption would skip a gap and lose rows silently. So completed
+  // batch offsets are tracked and the checkpoint moves only across a contiguous prefix.
+  const inflight = new Map();       // startIndex -> promise
+  const completed = new Set();      // startIndex values that have landed
+  const sizes = new Map();          // startIndex -> row count
+  let nextCheckpoint = done;
+
+  const advance = () => {
+    // Walk the contiguous run of finished batches from the current checkpoint.
+    while (completed.has(nextCheckpoint)) {
+      const n = sizes.get(nextCheckpoint);
+      completed.delete(nextCheckpoint);
+      sizes.delete(nextCheckpoint);
+      nextCheckpoint += n;
+    }
+    state[table] = nextCheckpoint;
     saveState();
-    const rate = inserted > done ? (inserted - done) / ((Date.now() - started) / 1000) : 0;
-    process.stdout.write(`\r- ${table}: ${inserted.toLocaleString('en-IN')} rows  (${rate.toFixed(0)}/s)      `);
   };
 
+  const post = (rows, startIndex) => {
+    sizes.set(startIndex, rows.length);
+    const p = insert(table, rows).then((res) => {
+      inserted += res.inserted ?? rows.length;
+      completed.add(startIndex);
+      advance();
+      const rate = inserted > done ? (inserted - done) / ((Date.now() - started) / 1000) : 0;
+      const pct = total ? ` ${((inserted / total) * 100).toFixed(1)}%` : '';
+      process.stdout.write(
+        `\r- ${table}: ${inserted.toLocaleString('en-IN')}${pct}  (${rate.toFixed(0)} rows/s)      `);
+    }).finally(() => inflight.delete(startIndex));
+    inflight.set(startIndex, p);
+    return p;
+  };
+
+  const drainTo = async (limit) => {
+    while (inflight.size >= limit) await Promise.race(inflight.values());
+  };
+
+  let batchStart = done;
   for await (const line of rl) {
     if (!cols) { cols = splitCsvLine(line).map((c) => c.trim()); continue; }
     if (!line) continue;
@@ -115,20 +153,43 @@ async function loadTable(table) {
     const row = {};
     for (let i = 0; i < cols.length; i++) row[cols[i]] = vals[i] ?? '';
     batch.push(row);
-    if (batch.length >= BATCH) await flush();
+    if (batch.length >= BATCH) {
+      await drainTo(CONCURRENCY);
+      post(batch, batchStart);
+      batchStart = index;
+      batch = [];
+    }
   }
-  await flush();
-  console.log(`\r- ${table}: ${inserted.toLocaleString('en-IN')} rows  done` + ' '.repeat(20));
+  if (batch.length) post(batch, batchStart);
+  await Promise.all(inflight.values());
+  advance();
+  console.log(`\r- ${table}: ${inserted.toLocaleString('en-IN')} rows  done` + ' '.repeat(24));
 }
 
 (async () => {
-  console.log(`Seeding via ${BASE}  (batch=${BATCH})`);
+  console.log(`Seeding via ${BASE}  (batch=${BATCH}, concurrency=${CONCURRENCY})`);
   if (Object.keys(state).length) {
     console.log(`Resuming from checkpoint: ${Object.entries(state).map(([t, n]) => `${t}=${n}`).join(', ')}`);
     console.log('Pass --restart to ignore it.');
   }
   const tables = onlyArg ? TABLES.filter((t) => onlyArg.includes(t)) : TABLES;
-  for (const table of tables) await loadTable(table);
+  for (const table of tables) {
+    // Row count for the progress percentage, read from the file's line count minus the header.
+    // Cheap enough once per table and the difference between a progress bar and a number that
+    // means nothing on a multi-hour run.
+    let total = 0;
+    const f = path.join(SEED_DIR, table + '.csv');
+    if (fs.existsSync(f)) {
+      await new Promise((res) => {
+        let n = 0;
+        fs.createReadStream(f, { highWaterMark: 1 << 22 })
+          .on('data', (c) => { for (let i = 0; i < c.length; i++) if (c[i] === 10) n++; })
+          .on('end', () => { total = Math.max(0, n - 1); res(); })
+          .on('error', () => res());
+      });
+    }
+    await loadTable(table, total);
+  }
   console.log('\nAll tables seeded.');
 })().catch((e) => {
   console.error('\nLoad failed:', e.message);
