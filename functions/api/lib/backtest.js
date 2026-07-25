@@ -431,6 +431,9 @@ async function computeEarlyWarning(app, { level, state } = {}) {
     .sort((a, b) => b.z - a.z);
   return {
     horizon: fc.horizon, generatedAt: fc.generatedAt,
+    // Carried through so an operator can tell which engine produced the flags, and see the
+    // accuracy of the forecast they rest on, without a second request.
+    servedBy: fc.servedBy, serviceError: fc.serviceError, accuracy: fc.accuracy,
     method: 'Ensemble forecast vs 12-month control baseline (z-score / EWMA-style expectation)',
     critical: alerts.filter((a) => a.severity === 'critical').length,
     elevated: alerts.filter((a) => a.severity === 'elevated').length,
