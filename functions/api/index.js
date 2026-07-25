@@ -16,11 +16,19 @@
  *   GET  /trends                 crime trend + hotspot aggregation                     [Phase 2]
  *   GET  /offender/:id/risk      AutoML risk score + factors                          [Phase 2/3]
  *   POST /ingest/ocr             scanned FIR OCR ingestion (Zia OCR)                   [Phase 3]
+ *
+ *   WhatsApp field-officer channel (lib/wa/*):
+ *   GET  /whatsapp/webhook           Meta subscription handshake
+ *   POST /whatsapp/webhook           inbound messages (HMAC-verified, fast ack)
+ *   POST /whatsapp/process           internal: run one turn through the field agent
+ *   POST /whatsapp/alerts/dispatch   internal: cron-driven early-warning push
+ *   GET  /whatsapp/health            channel configuration diagnostics
+ *   GET/POST /admin/officers         officer roster (admin-key guarded)
  */
 
 const express = require('express');
-const crypto = require('crypto');
 const catalyst = require('zcatalyst-sdk-node');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { parseCsv } = require('./lib/csv');
@@ -128,6 +136,7 @@ app.get('/health', (req, res) => {
 
 // ============================ ADMIN: SDK-based data seeder ============================
 // Loads synthetic CSVs (bundled in seed/) into Data Store via the SDK — no interactive
+// prompts, no 5k CLI cap workaround needed beyond dev-env limits. Batched by the caller.
 /**
  * Constant-time secret comparison. Used by every shared-key guard so they match
  * the discipline the webhook's HMAC check already follows — a `!==` on a secret
@@ -142,7 +151,6 @@ function secretMatches(supplied, expected) {
   return crypto.timingSafeEqual(a, b);
 }
 
-// prompts, no 5k CLI cap workaround needed beyond dev-env limits. Batched by the caller.
 function adminGuard(req, res, next) {
   if (!secretMatches(req.headers['x-admin-key'], process.env.ADMIN_KEY)) {
     return res.status(401).json({ error: 'unauthorized' });
@@ -413,6 +421,7 @@ app.get('/analytics/brief', requireRole(), async (req, res) => {
     res.status(500).json({ error: 'brief_failed', message: String((e && e.message) || e) });
   }
 });
+
 // ============================ WhatsApp field-officer channel ============================
 // Meta WhatsApp Cloud API webhook + the internal endpoints its async processing and
 // alert cron call back into. See lib/wa/* and documentation/15-whatsapp-field-bot.md.
@@ -560,7 +569,6 @@ app.post('/admin/officers', adminGuard, async (req, res) => {
     res.status(500).json({ error: 'officer_upsert_failed', message: String((e && e.message) || e) });
   }
 });
-
 
 // Admin: clear tables before a fresh re-seed (guarded).
 app.post('/admin/reset', adminGuard, async (req, res) => {
