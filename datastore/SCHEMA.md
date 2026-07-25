@@ -22,6 +22,7 @@ Every table also has the automatic `ROWID`, `CREATEDTIME`, `MODIFIEDTIME` column
 | Year | Int |
 | CrimeMonth | Int |  (note: `Month` is a reserved keyword) |
 | IncidentDate | Text |
+| **StateName** | **Text** — *added for all-India coverage; group by this for national comparisons* |
 | DistrictName | Text |
 | StationName | Text |
 | latitude | Decimal |
@@ -81,6 +82,43 @@ SessionID(Text), UserId(Text), Role(Text), Language(Text), Title(Text), CreatedA
 | ModelUsed | Text |
 | AnswerText | Text (max) |
 | CreatedAt | DateTime |
+
+---
+
+---
+
+## Generating seed data
+
+Two generators are available; both write `datastore/seed/*.csv`.
+
+| Script | Coverage | Use |
+|---|---|---|
+| `datastore/generate.js` | Karnataka (15 districts) | original, KSP-only demo |
+| `datastore/generate-india.js` | **All-India** — ~416 districts, 35 states/UTs | current default |
+
+```bash
+# All-India, NCRB-2023-calibrated (target case volume is a parameter)
+node datastore/generate-india.js --cases 200000
+node datastore/generate-india.js --cases 200000 --years 3
+```
+
+The all-India generator is calibrated against real reference data held in
+`datastore/ref/`:
+
+- `india_cities.json` — 528 Indian cities (>=1 lakh, Census 2011) with district,
+  state, population and coordinates. Aggregated to ~416 district centroids.
+- `ncrb_states_2023.json` — NCRB *Crime in India 2023* per state/UT: crime rate per
+  lakh, chargesheet rate, conviction rate, violent-crime rate and
+  murder/rape/kidnapping/extortion/robbery rates.
+
+It also emits `functions/api/ref/india_districts.json`, which the API uses for
+district and state map centroids. **Regenerate and redeploy the function together**,
+otherwise new districts will have no coordinates on the hotspot map.
+
+> Volumes are scaled down from the real ~6.24 million cases/year to the requested
+> target; relative differences between states are preserved, absolute counts are not
+> real. City populations cover urban areas only, so largely rural states are
+> under-represented relative to their true totals.
 
 ---
 
