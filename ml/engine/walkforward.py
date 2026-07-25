@@ -84,6 +84,9 @@ class Result:
     achievability: dict = field(default_factory=dict)
     diagnostics: dict = field(default_factory=dict)
     runtime_s: float = 0.0
+    # Populated when evaluate(..., keep_predictions=True). Held out of the JSON report by
+    # the runner, since these are arrays rather than summary numbers.
+    predictions: dict | None = None
 
     def summary(self) -> str:
         lines = [f"── {self.dataset} ──", "  " + self.panel.get("describe", ""),
@@ -101,6 +104,13 @@ class Result:
                 f"vs achieved {a['achieved_mae']} → efficiency {a['efficiency']} "
                 f"({a['headroom_pct']}% headroom remains); floor MASE {a['floor_mase']}"
             )
+            if a.get("dispersion_bracket"):
+                b, f, h = (a["dispersion_bracket"], a["dispersion_floor_mae"],
+                           a["dispersion_headroom_pct"])
+                lines.append(
+                    f"  over-dispersion corrected: index in [{b[0]}, {b[1]}] → "
+                    f"floor MAE [{f[0]}, {f[1]}], real headroom [{h[0]}%, {h[1]}%]"
+                )
         if self.spatial:
             lines.append("  spatial (flagged-area budget → PAI / PEI / hit-rate):")
             for k, v in self.spatial.items():
@@ -127,6 +137,7 @@ def evaluate(
     n_neighbours: int = 5,
     budgets: tuple[float, ...] = BUDGETS,
     with_quantiles: bool = True,
+    keep_predictions: bool = False,
     seed: int = 7,
 ) -> Result:
     t_start = time.time()
@@ -232,7 +243,10 @@ def evaluate(
             "weight": weights.get(m, 0.0),
         }
     ens_test = ensemble(sp.t_calib, T)
-    achieve = MT.achievability(ens_test, y_test, naive_test)
+    # Dispersion is estimated on the training prefix only. Estimating it on the full series
+    # would use the test window to decide how good the test-window result is.
+    achieve = MT.achievability(ens_test, y_test, naive_test,
+                               dispersion=panel.dispersion_bracket(upto=sp.t_train))
     point["ENSEMBLE"] = {
         "mase": round(MT.mase(ens_test, y_test, naive_test), 4),
         "rmsse": round(MT.rmsse(ens_test, y_test, naive_test), 4),
@@ -299,6 +313,23 @@ def evaluate(
         "coverage_by_band": per_band,
     }
 
+    preds = None
+    if keep_predictions:
+        i0 = idx_of[sp.t_calib]
+        preds = {
+            "units": list(panel.units),
+            "origins": [panel.labels[t] for t in origins[i0:]],
+            # (n_test_origins, B) so a caller can align panels on unit and period and
+            # aggregate across them.
+            "ensemble": np.stack(
+                [np.stack([store[m][i] for m in stack_members], axis=1) @ w for i in range(i0, len(origins))]
+            ),
+            "actual": np.stack(actuals[i0:]),
+            "poisson_gbm": np.stack(store["poisson_gbm"][i0:]),
+            "historical_pattern": np.stack(store["historical_pattern"][i0:]),
+            "seasonal_naive": np.stack(store["seasonal_naive"][i0:]),
+        }
+
     return Result(
         dataset=dataset,
         panel={
@@ -323,4 +354,5 @@ def evaluate(
             "spatial_baseline_historical_pattern": spatial_baseline,
         },
         runtime_s=round(time.time() - t_start, 1),
+        predictions=preds,
     )

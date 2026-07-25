@@ -91,6 +91,52 @@ class Panel:
         mv = self.mean_volume(upto)
         return np.digitize(mv, [3.0, 15.0, 60.0, 250.0]).astype(np.int8)
 
+    def dispersion_bracket(self, upto: int | None = None) -> tuple[float, float]:
+        """Bracket the variance-to-mean ratio of the counts. Returns (low, high).
+
+        This exists to correct the achievability bound. The Poisson floor assumes variance
+        equals mean; clustered crime is over-dispersed, so the Poisson floor *understates*
+        irreducible error and overstates how much headroom a better model could claim.
+
+        Dispersion means variance at fixed intensity, and the variance of a unit's series
+        over time is not that — it also contains trend and seasonality, which would be
+        counted as noise. Successive differences remove whatever is common to adjacent
+        periods, since E[(X_t - X_t-1)^2] = 2 sigma^2 when intensity is locally flat.
+
+        A single number is not honestly available, so this returns a bracket:
+
+        * **high** — plain successive differences. Any real period-to-period movement in
+          intensity inflates it.
+        * **low** — successive differences after dividing out the cross-sectional common
+          factor (the shared national seasonal envelope). Removing that factor also removes
+          some genuine independent variation, so it deflates.
+
+        Checked against ground truth. Six independent realisations of the same intensity
+        field give a district-week dispersion index of **1.705**; this bracket is
+        [1.29, 1.99], which contains it, and neither endpoint alone is close enough to
+        report as a point estimate. That is the whole reason for the bracket: real data
+        arrives as one realisation and can never be replicated, so a point estimate here
+        would be false precision that silently rewrites every headroom figure.
+        """
+        c = np.asarray(self.counts[:, :upto] if upto else self.counts, dtype=np.float64)
+        # At daily resolution adjacent periods differ by the day-of-week cycle, which is not
+        # noise, so the difference is taken a full cycle apart instead.
+        lag = self.season if self.period == "day" else 1
+        mean = float(np.mean(c))
+        if c.shape[1] <= lag or mean <= 1e-9:
+            return (1.0, 1.0)
+
+        def vmr(m: np.ndarray) -> float:
+            d = m[:, lag:] - m[:, :-lag]
+            mu = float(np.mean(m))
+            return max(1.0, float(np.mean(d ** 2) / 2.0) / mu) if mu > 1e-9 else 1.0
+
+        high = vmr(c)
+        tot = c.sum(axis=0)
+        f = tot / max(1e-9, float(tot.mean()))
+        low = vmr(c / np.where(f <= 0, 1.0, f))
+        return (min(low, high), max(low, high))
+
     # ----------------------------------------------------------------- spatial
     def neighbours(self, k: int = 5) -> np.ndarray | None:
         """(B, k) indices of each unit's k nearest neighbours by centroid distance.

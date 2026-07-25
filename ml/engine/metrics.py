@@ -90,27 +90,52 @@ def poisson_expected_abs_dev(lam: np.ndarray) -> np.ndarray:
     return 2.0 * np.exp(log_term)
 
 
-def achievability(pred: np.ndarray, actual: np.ndarray, naive: np.ndarray) -> dict:
-    """How close the forecast is to the Poisson noise floor.
+def achievability(pred: np.ndarray, actual: np.ndarray, naive: np.ndarray,
+                  dispersion: float | None = None) -> dict:
+    """How close the forecast is to the noise floor.
 
     ``floor_mae`` uses the forecast itself as the intensity estimate, which is the best
     available stand-in for the unknown true intensity. ``efficiency`` is floor / achieved:
-    at 1.0 the forecast is at the information-theoretic limit for a Poisson process and no
-    architecture can improve it. Values slightly above 1.0 mean the forecast is closer to
-    the realised counts than the noise floor implies, which happens when the intensity
-    estimate is itself shrunk toward the observation — it should be read as "at the floor",
-    not as beating it.
+    at 1.0 the forecast is at the information-theoretic limit and no architecture can
+    improve it. Values slightly above 1.0 mean the forecast is closer to the realised counts
+    than the noise floor implies, which happens when the intensity estimate is itself shrunk
+    toward the observation — it should be read as "at the floor", not as beating it.
+
+    The Poisson floor is a **lower bound** on irreducible error, and for clustered crime it
+    is a loose one. Near-repeat victimisation means events arrive in bursts, so the count in
+    a cell is over-dispersed and a forecaster who knew the intensity exactly would still do
+    worse than Poisson predicts. Measured on six independent realisations of the same
+    intensity field, district-week counts have a dispersion index of 1.71 and a true floor
+    1.30x the Poisson figure — which turns an apparent 32% of remaining headroom into about
+    12%. Pass ``dispersion`` (variance / mean) to get the corrected numbers; without it only
+    the Poisson bound is reported, clearly labelled as a bound.
+
+    The correction scales the floor by sqrt(dispersion), because the mean absolute deviation
+    of a count distribution scales with its standard deviation.
     """
     floor = float(np.mean(poisson_expected_abs_dev(pred)))
     achieved = mae(pred, actual)
     denom = float(np.mean(np.abs(actual - naive)))
-    return {
+    out = {
         "poisson_floor_mae": round(floor, 4),
         "achieved_mae": round(achieved, 4),
         "efficiency": round(floor / achieved, 4) if achieved > 0 else None,
         "headroom_pct": round(100.0 * (achieved - floor) / achieved, 2) if achieved > 0 else None,
         "floor_mase": round(floor / denom, 4) if denom > 0 else None,
     }
+    if dispersion and achieved > 0:
+        lo, hi = (dispersion, dispersion) if isinstance(dispersion, (int, float)) else dispersion
+        # Higher dispersion means a higher floor, so it gives the *lower* headroom.
+        f_lo, f_hi = floor * float(np.sqrt(lo)), floor * float(np.sqrt(hi))
+        head = lambda f: round(max(0.0, 100.0 * (achieved - f) / achieved), 2)  # noqa: E731
+        out.update({
+            "dispersion_bracket": [round(float(lo), 4), round(float(hi), 4)],
+            "dispersion_floor_mae": [round(f_lo, 4), round(f_hi, 4)],
+            "dispersion_efficiency": [round(min(f_lo / achieved, 1.0), 4),
+                                      round(min(f_hi / achieved, 1.0), 4)],
+            "dispersion_headroom_pct": [head(f_hi), head(f_lo)],
+        })
+    return out
 
 
 def coverage(lo: np.ndarray, hi: np.ndarray, actual: np.ndarray) -> float:
