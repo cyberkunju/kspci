@@ -53,3 +53,8 @@ Thumbs.db
 
 # Source PDF (confidential reference, not for repo)
 Police_FIR_ER_Diagram.pdf
+
+# AppSail build artefacts: vendored wheels (~200MB) and the engine copy, both regenerated
+# by ml/service/deploy.sh from ml/engine and requirements.txt.
+ml/service/vendor/
+ml/service/engine/

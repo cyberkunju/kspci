@@ -1,3 +1,11 @@
+# AppSail's managed Python runtime does not install requirements at deploy time, so these are
+# vendored into ./vendor by deploy.sh and added to sys.path by app.py.
+#
+# LightGBM is deliberately absent. The engine prefers it offline, but it needs a binary wheel
+# plus libgomp, and scikit-learn's HistGradientBoostingRegressor provides both objectives that
+# matter here natively — loss="poisson" and loss="quantile" — so the serving path gets the same
+# Poisson objective and a real predictive distribution without the extra binary dependency.
+# Every run records which backend produced it.
 fastapi==0.115.6
 uvicorn==0.34.0
 numpy==2.1.3

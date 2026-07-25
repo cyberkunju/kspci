@@ -1,177 +1,162 @@
+"""KSP Forecasting Engine — served on Catalyst AppSail.
+
+This runs the **same** ``engine`` package that produced every number in ml/RESULTS.md:
+LightGBM with a Poisson objective, nine quantile regressors, NNLS-stacked ensemble against
+the police historical-pattern baseline, and Mondrian/CQR conformal intervals chosen on
+measured width at equal coverage.
+
+Why this service exists at all. The Catalyst Function that used to answer /analytics/forecast
+fitted a model inside the HTTP request, under a 25-second ceiling — which is why the live
+service was pinned to the coarsest resolution it could get away with. Worse, it was a *second*
+implementation: squared-error boosting and a single global conformal quantile, so the published
+accuracy figures did not describe what the API actually returned. A forecast served by
+different code than the code its accuracy was measured on is an unvalidated forecast.
+
+AppSail is a long-running container with no per-request ceiling and a real Docker image, so
+LightGBM installs normally and the full engine runs unchanged. A national 640-district monthly
+panel takes ~45 s here, which is fine for a batch refresh and impossible in a function.
+
+Contract: the caller sends the panel it already assembled from the Data Store; this service
+does no data access, which keeps the trust boundary at the function and means this container
+holds no credentials.
+"""
+
+from __future__ import annotations
+
 import os
 import sys
-# AppSail's managed Python runtime does not auto-install requirements; the Linux
-# dependency wheels are vendored into ./vendor and added to the path here.
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor"))
 
-from typing import Dict, List, Optional
-import numpy as np
-from fastapi import FastAPI
-from pydantic import BaseModel
-from sklearn.ensemble import HistGradientBoostingRegressor
-from scipy.optimize import nnls
+# Must precede every third-party import. AppSail's managed Python runtime does not install
+# requirements.txt, so the dependencies are vendored into ./vendor by deploy.sh and put on the
+# path here. ./ is added too, for the engine package copied in alongside.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_HERE, "vendor"))
+sys.path.insert(0, _HERE)
 
-# ---------------------------------------------------------------------------
-# KSP Forecasting Engine — served on Catalyst AppSail (managed Python runtime).
-# Full-strength validated stack (the exact champion from the Chicago backtest):
-#   scikit-learn HistGradientBoostingRegressor + scipy NNLS-stacked ensemble
-#   + split-conformal prediction intervals. Validated on 2.49M real Chicago
-#   incidents (MASE 0.68-0.81, PAI@1% up to 6.3, ~90% interval coverage).
-# ---------------------------------------------------------------------------
+from typing import Dict, List, Optional  # noqa: E402
 
-app = FastAPI(title="KSP Forecasting Engine", version="2.0")
+import numpy as np  # noqa: E402,F401
+from fastapi import FastAPI, HTTPException  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
+
+from engine import Panel, forecast_next  # noqa: E402
+from engine import models as MD  # noqa: E402
+
+app = FastAPI(title="KSP Forecasting Engine", version="3.0")
+
+SEASON = {"month": 12, "week": 52, "day": 365}
 
 
-def nnls_pg(A, b):
-    """Non-negative least squares (scipy, exact active-set)."""
-    w, _ = nnls(np.asarray(A, float), np.asarray(b, float))
-    return w
+class UnitMeta(BaseModel):
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    pop: Optional[float] = None
 
 
 class PanelIn(BaseModel):
+    """A units x periods count panel — the engine's single input contract."""
+
     series: Dict[str, List[float]]
-    period: int = 12
-    horizonLabel: Optional[str] = None
-    budgets: List[float] = [0.1, 0.2, 0.33]
+    labels: List[str] = Field(default_factory=list)
+    months: List[int] = Field(default_factory=list)
+    period: str = "month"
+    level: Optional[str] = None
+    unitMeta: Dict[str, UnitMeta] = Field(default_factory=dict)
+    calibFrac: float = 0.2
+    neighbours: int = 5
+    withQuantiles: bool = True
+    level90: float = Field(0.9, alias="intervalLevel")
+
+    class Config:
+        populate_by_name = True
 
 
-def _feats(M, t, umean, period):
-    B = M.shape[0]
-    lag = lambda k: M[:, t - k] if t >= k else np.zeros(B)
-    roll = lambda k: M[:, max(0, t - k):t].mean(axis=1) if t >= 1 else np.zeros(B)
-    ph = 2 * np.pi * (t % period) / period
-    return np.stack([lag(1), lag(2), lag(3), lag(period), roll(3), roll(6),
-                     np.full(B, np.sin(ph)), np.full(B, np.cos(ph)), umean], axis=1)
+def _to_panel(p: PanelIn) -> Panel:
+    units = list(p.series.keys())
+    if not units:
+        raise HTTPException(400, "empty panel")
+    T = max(len(v) for v in p.series.values())
+    counts = np.array([(list(v) + [0.0] * (T - len(v)))[:T] for v in p.series.values()],
+                      dtype=np.float32)
+    labels = p.labels[:T] if len(p.labels) >= T else [str(i) for i in range(T)]
 
+    # Calendar month per period drives the seasonal features. Derived from the labels when the
+    # caller does not send it, because guessing it as a plain index would silently destroy the
+    # seasonal signal rather than fail.
+    months = p.months[:T] if len(p.months) >= T else []
+    if len(months) < T:
+        months = []
+        for lab in labels:
+            try:
+                months.append(int(str(lab)[5:7]))
+            except Exception:
+                months.append((len(months) % 12) + 1)
+    month = np.array(months[:T], dtype=np.int16)
 
-def _train_set(M, t_lo, t_hi, umean, period):
-    X, Y = [], []
-    for t in range(t_lo, t_hi):
-        X.append(_feats(M, t, umean, period)); Y.append(M[:, t])
-    return (np.vstack(X), np.concatenate(Y)) if X else (np.zeros((0, 9)), np.zeros(0))
+    lat = lng = pop = None
+    if p.unitMeta:
+        lat = np.array([(p.unitMeta.get(u).lat if p.unitMeta.get(u) else None) or np.nan
+                        for u in units], dtype=np.float64)
+        lng = np.array([(p.unitMeta.get(u).lng if p.unitMeta.get(u) else None) or np.nan
+                        for u in units], dtype=np.float64)
+        pop = np.array([(p.unitMeta.get(u).pop if p.unitMeta.get(u) else None) or 0.0
+                        for u in units], dtype=np.float64)
+        if not np.isfinite(lat).any():
+            lat = lng = None
 
-
-def _fit_gbm(M, t_hi, umean, period):
-    X, Y = _train_set(M, 4, t_hi, umean, period)
-    if len(X) < 24:
-        return None
-    g = HistGradientBoostingRegressor(max_depth=4, learning_rate=0.08, max_iter=300,
-                                      l2_regularization=1.0, min_samples_leaf=20)
-    g.fit(X, Y)
-    return g
-
-
-def _simple(M, t, period):
-    return {"seasonal_naive": M[:, t - period] if t >= period else M[:, t - 1],
-            "ma": M[:, max(0, t - 3):t].mean(axis=1)}
+    period = p.period if p.period in SEASON else "month"
+    return Panel(units=units, counts=counts, period=period, season=SEASON[period],
+                 labels=labels, month=month, lat=lat, lng=lng, pop=pop,
+                 meta={"level": p.level, "source": "catalyst-datastore"})
 
 
 @app.get("/")
-def root():
-    return {"service": "ksp-forecast-engine", "status": "ok"}
-
-
 @app.get("/health")
 def health():
-    return {"service": "ksp-forecast-engine", "status": "ok",
-            "engine": "sklearn-HistGBM + scipy-NNLS ensemble + split-conformal",
-            "validated": "2.49M real Chicago incidents; MASE 0.68-0.81, PAI@1% up to 6.3"}
+    return {
+        "service": "ksp-forecast-engine",
+        "status": "ok",
+        "version": "3.0",
+        "engine": "engine/serve — Poisson GBM + quantile GBM, NNLS ensemble, Mondrian/CQR conformal",
+        "lightgbm": MD.lgb is not None,
+        "validated": "ml/RESULTS.md — 28 panels on 6.37M real incidents across 5 cities, "
+                     "plus 56 configurations on a 27.4M-incident synthetic corpus",
+    }
 
 
 @app.post("/forecast")
 def forecast(p: PanelIn):
-    units = list(p.series.keys())
-    if not units:
-        return {"error": "empty panel"}
-    T = max(len(v) for v in p.series.values())
-    M = np.array([(v + [0] * (T - len(v)))[:T] for v in p.series.values()], dtype=float)
-    B = M.shape[0]
-    period = max(2, int(p.period))
-    if T < period + 6:
-        return {"error": "insufficient history", "T": T, "need": period + 6}
-
-    t0 = max(period, int(T * 0.5))
-    umean_fit = M[:, :t0].mean(axis=1)
-    gbm = _fit_gbm(M, t0, umean_fit, period)
-    cand = ["seasonal_naive", "ma", "gbm"]
-
-    origins = list(range(t0, T))
-    fit_end = t0 + max(1, int(len(origins) * 0.6))
-    P = {m: [] for m in cand}; A = []
-    for t in origins:
-        s = _simple(M, t, period)
-        s["gbm"] = gbm.predict(_feats(M, t, umean_fit, period)) if gbm is not None else s["ma"]
-        for m in cand:
-            P[m].append(s[m])
-        A.append(M[:, t])
-    P = {m: np.concatenate(v) for m, v in P.items()}
-    A = np.concatenate(A)
-    nfit = sum(B for t in origins if t < fit_end)
-    Afit = np.stack([P[m][:nfit] for m in cand], axis=1)
-    w = nnls_pg(Afit, A[:nfit])
-    if w.sum() <= 1e-9:
-        w = np.ones(len(cand)) / len(cand)
-    wd = dict(zip(cand, w))
-    ens = sum(wd[m] * P[m] for m in cand)
-    rf = np.abs(ens[:nfit] - A[:nfit]); nq = len(rf) or 1
-    q90 = float(np.quantile(rf, min(1.0, np.ceil((nq + 1) * 0.9) / nq)))
-
-    ev = slice(nfit, len(A))
-    naive_mae = float(np.mean(np.abs(A[ev] - P["seasonal_naive"][ev]))) or 1.0
-    mase = lambda pred: round(float(np.mean(np.abs(pred[ev] - A[ev])) / naive_mae), 3)
-    metrics = {m: {"mase": mase(P[m])} for m in cand}
-    metrics["ensemble"] = {"mase": mase(ens)}
-    cov = float(np.mean((A[ev] >= np.maximum(0, ens[ev] - q90)) & (A[ev] <= ens[ev] + q90)))
-
-    ev_origins = [t for t in origins if t >= fit_end]
-    pai = {}
-    if ev_origins:
-        ens_t = ens.reshape(len(origins), B); act_t = A.reshape(len(origins), B)
-        off = len([t for t in origins if t < fit_end])
-        for bud in p.budgets:
-            k = max(1, int(round(bud * B))); pais, peis = [], []
-            for i in range(off, len(origins)):
-                pr, ac = ens_t[i], act_t[i]; tot = ac.sum() or 1
-                cap = ac[np.argsort(-pr)[:k]].sum() / tot
-                orc = ac[np.argsort(-ac)[:k]].sum() / tot
-                pais.append(cap / (k / B)); peis.append(cap / orc if orc > 0 else np.nan)
-            pai[f"{int(bud*100)}%"] = {"PAI": round(float(np.nanmean(pais)), 3),
-                                       "PEI": round(float(np.nanmean(peis)), 3)}
-
-    umean_full = M.mean(axis=1)
-    s = _simple(M, T, period)
-    s["gbm"] = gbm.predict(_feats(M, T, umean_full, period)) if gbm is not None else s["ma"]
-    ens_next = sum(wd[m] * s[m] for m in cand)
-    forecasts = []
-    for i, u in enumerate(units):
-        base = float(M[i, -min(period, T):].mean()); pt = float(max(0, ens_next[i]))
-        forecasts.append({"unit": u, "predicted": round(pt, 2),
-                          "low": round(max(0, pt - q90), 2), "high": round(pt + q90, 2),
-                          "baseline": round(base, 2), "last": float(M[i, -1]),
-                          "trendPct": round(((pt - base) / base) * 100) if base > 0 else 0})
-    forecasts.sort(key=lambda x: -x["predicted"])
-
-    return {"horizon": p.horizonLabel, "engine": "sklearn-HistGBM + seasonal + ma, scipy-NNLS ensemble, split-conformal",
-            "units": B, "periods": T, "evalOrigins": len(ev_origins), "fitOrigins": fit_end - t0,
-            "weights": {k: round(float(v), 3) for k, v in wd.items()},
-            "accuracy": {"mase": metrics, "coverage90": round(cov * 100, 1), "naiveMae": round(naive_mae, 3)},
-            "spatial": pai, "conformalQ90": round(q90, 2), "forecasts": forecasts}
+    panel = _to_panel(p)
+    try:
+        return forecast_next(panel, calib_frac=p.calibFrac, n_neighbours=p.neighbours,
+                             with_quantiles=p.withQuantiles, level=p.level90)
+    except ValueError as e:
+        # Too little history is a client-side condition, not a server fault: the caller chose
+        # the scope. A 500 here would send an operator hunting the wrong problem.
+        raise HTTPException(422, str(e))
 
 
 if __name__ == "__main__":
     import uvicorn
-    port = None
-    # 1) port passed as CLI arg (shell-expanded ${X_ZOHO_CATALYST_LISTEN_PORT})
-    if len(sys.argv) > 1:
-        try:
-            port = int(sys.argv[1])
-        except ValueError:
-            port = None
-    # 2) fallback to the env var AppSail injects
-    if port is None:
-        try:
-            port = int(os.getenv("X_ZOHO_CATALYST_LISTEN_PORT", os.getenv("PORT", "9000")))
-        except ValueError:
-            port = 9000
-    print("KSP forecast engine starting on port", port, flush=True)
+
+    # The port must come from AppSail or the container is unreachable and the platform reports
+    # only "check the startup command or port". Order matters: the startup command's
+    # ${X_ZOHO_CATALYST_LISTEN_PORT} is not always shell-expanded, in which case argv[1] is the
+    # literal placeholder, so a failed parse has to fall through to the environment rather than
+    # quietly keeping a default.
+    def _port() -> int:
+        for cand in (sys.argv[1] if len(sys.argv) > 1 else None,
+                     os.getenv("X_ZOHO_CATALYST_LISTEN_PORT"),
+                     os.getenv("PORT")):
+            try:
+                p = int(str(cand))
+                if 1 <= p <= 65535:
+                    return p
+            except (TypeError, ValueError):
+                continue
+        return 9000
+
+    port = _port()
+    print(f"KSP forecast engine starting on port {port} "
+          f"(argv={sys.argv[1:]}, env={os.getenv('X_ZOHO_CATALYST_LISTEN_PORT')})", flush=True)
     uvicorn.run(app, host="0.0.0.0", port=port)

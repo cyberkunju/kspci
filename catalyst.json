@@ -11,5 +11,11 @@
   "client": {
     "source": "client/dist",
     "ignore": []
-  }
+  },
+  "appsail": [
+    {
+      "source": "ml/service",
+      "name": "kspforecast"
+    }
+  ]
 }
