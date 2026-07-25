@@ -137,6 +137,19 @@ class Panel:
         low = vmr(c / np.where(f <= 0, 1.0, f))
         return (min(low, high), max(low, high))
 
+    def dispersion_is_informative(self, upto: int | None = None,
+                                  max_ratio: float = 3.0) -> bool:
+        """Whether the dispersion bracket is tight enough to draw a conclusion from.
+
+        At monthly resolution adjacent periods are different seasons, so successive
+        differencing does not remove the seasonal component and the bracket blows out — on the
+        district-month panel it is [4.2, 27.6], which is consistent with almost any headroom
+        and therefore says nothing. Reporting that as a range would dress up an absent
+        measurement as a finding.
+        """
+        lo, hi = self.dispersion_bracket(upto)
+        return hi / max(lo, 1e-9) <= max_ratio
+
     # ----------------------------------------------------------------- spatial
     def neighbours(self, k: int = 5) -> np.ndarray | None:
         """(B, k) indices of each unit's k nearest neighbours by centroid distance.

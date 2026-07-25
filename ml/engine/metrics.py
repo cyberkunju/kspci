@@ -130,6 +130,10 @@ def achievability(pred: np.ndarray, actual: np.ndarray, naive: np.ndarray,
         head = lambda f: round(max(0.0, 100.0 * (achieved - f) / achieved), 2)  # noqa: E731
         out.update({
             "dispersion_bracket": [round(float(lo), 4), round(float(hi), 4)],
+            # A bracket wider than ~3x is consistent with almost any headroom and should not
+            # be read as a measurement. Happens at monthly resolution, where successive
+            # differencing cannot separate noise from the seasonal cycle.
+            "dispersion_informative": bool(hi / max(lo, 1e-9) <= 3.0),
             "dispersion_floor_mae": [round(f_lo, 4), round(f_hi, 4)],
             "dispersion_efficiency": [round(min(f_lo / achieved, 1.0), 4),
                                       round(min(f_hi / achieved, 1.0), 4)],
