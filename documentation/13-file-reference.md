@@ -6,7 +6,7 @@ A map of every meaningful file in the repository and what it does.
 
 | File | Purpose |
 |---|---|
-| `catalyst.json` | Catalyst deploy config — functions target `api` (source `functions/`), client source `client/dist`. |
+| `catalyst.json` | Catalyst deploy config — functions target `api` (source `functions/`), client source `client/dist`, AppSail service `research` (container image `localhost/ksp-research:latest`, port 9000). |
 | `.catalystrc` | Project/env binding — Project‑Rainfall, env `60079622152`, India DC, Asia/Kolkata. |
 | `.gitignore` | Excludes node_modules, build output, secrets/config, ML data/venv, seed/train CSVs, the confidential ER‑diagram PDF. |
 | `Police_FIR_ER_Diagram.pdf` | The datathon's source ER diagram (git‑ignored, confidential). |
@@ -30,6 +30,10 @@ A map of every meaningful file in the repository and what it does.
 | `lib/investigator.js` | `caseSupport` — 360° case dossier (record, entities, timeline, similar cases + disposition, LLM leads). |
 | `lib/ocr.js` | Catalyst Zia OCR (`extractOpticalCharacters`) → `structureFir` (GLM) → `insertIngestedCase` (Data Store). |
 | `lib/oauth.js` | Zoho QuickML GLM OAuth token (the active LLM auth path). |
+| `lib/research.js` | Bridge to the AppSail research engine: gathers the identity anchors from the Data Store, determines the subject's role from our own records, and proxies start/poll/cancel with the internal key. |
+| `lib/wa/*` | WhatsApp field-officer channel — see [15-whatsapp-field-bot.md](./15-whatsapp-field-bot.md). `tools.js` also hosts the `open_source_research` tool. |
+| `test/research.test.js` | Anchor-gathering, subject-role and proxy-failure tests (16 checks). |
+| `test/wa.test.js` | WhatsApp channel logic tests (79 checks). |
 | `seed/*.csv` | Seed data bundled with the function (`Cases`, `Accused`, `Victims`, `Complainants`, `Arrests`, `CoAccusedLinks`, `OffenderRisk`, `FinancialTxns`). |
 
 ## `client/` — React SPA
@@ -53,12 +57,13 @@ A map of every meaningful file in the repository and what it does.
 | `src/components/Sociology.jsx` | Sociological charts. |
 | `src/components/MoneyTrail.jsx` | Money‑flow graph + hubs. |
 | `src/components/Ingest.jsx` | OCR FIR upload view. |
+| `src/components/Research.jsx` | Open-source research view: purpose-bound request form, live stage progress, anchor-strength summary, attribution-banded source table, dated-claims timeline, PDF export. |
 | `src/components/NetworkGraph.jsx` | d3‑force SVG network graph. |
 | `src/components/HotspotMap.jsx` | Leaflet hotspot map. |
 | `src/components/TrendCharts.jsx` | Chart.js trend charts. |
 | `src/components/Cards.jsx` | Shared `Kpi` + `VizCard`. |
 | `src/lib/voice.js` | MediaRecorder capture + Sarvam STT/TTS playback. |
-| `src/lib/pdf.js` | Conversation → printable HTML → print‑to‑PDF. |
+| `src/lib/pdf.js` | One print shell, two exports: conversation report and open-source research report → printable HTML → print‑to‑PDF. |
 | `src/lib/chartTheme.js` | Global Chart.js theme + palette. |
 
 ## `datastore/` — data model, generation, loading
@@ -89,9 +94,34 @@ A map of every meaningful file in the repository and what it does.
 | `service/test_client.py` | Local test client for the `/forecast` endpoint. |
 | `service/vendor/` | Vendored Linux cp312 wheels (managed‑runtime dependency path, ~202 MB). |
 
+## `research/` — OSINT research engine (AppSail container)
+
+Full design notes in [16-research-engine.md](./16-research-engine.md).
+
+| File | Purpose |
+|---|---|
+| `Dockerfile` | Custom OCI runtime for AppSail (`python:3.12-slim`, non-root uid 10001, uvicorn on `X_ZOHO_CATALYST_LISTEN_PORT`). |
+| `requirements.txt` | fastapi, uvicorn, httpx, pydantic, trafilatura, lxml, pypdf. |
+| `app/main.py` | HTTP surface: start / sync / poll / cancel / SSE stream / health, all behind `x-research-key`, failing closed. |
+| `app/config.py` | `Budget` (quick / standard / deep) and environment-driven `Settings`. |
+| `app/models.py` | `Tier`, `Anchors` (with `strength()`), `Hit`, `Document`, `Story`, `Claim`, `Finding`. |
+| `app/governance.py` | Purpose binding, subject-type gate, role gate, daily cap, audit line, disclaimer. |
+| `app/plan.py` | Name variants, query neutralisation, anchor-driven query set, GDELT plan + absolute date window. |
+| `app/tiers.py` | 27 official domains, 16 Kannada outlets, and the 11 on-site search endpoints. |
+| `app/sources.py` | Discovery adapters: GDELT (rate-limited, cooldown), Wikipedia, Wikidata, Wayback, on-site search, SearXNG, Mojeek, Marginalia. |
+| `app/net.py` | Fetcher with SSRF defence on every redirect hop, robots, per-host limits, rate limiter. |
+| `app/extract.py` | Trafilatura article extraction, PDF text, script-based language, prompt-injection screen. |
+| `app/cluster.py` | Simhash clustering so syndication counts once; containment for truncated copies. |
+| `app/attribute.py` | The attribution bands and the reasons behind each, person- and topic-shaped scoring. |
+| `app/claims.py` | Span-verified claim extraction and marker-validated synthesis. |
+| `app/llm.py` | One model interface: `openai` / `quickml` / `none`, with `none` as a supported mode. |
+| `app/pipeline.py` | The run: deadline, stages, degradation, findings and counts. |
+| `app/runs.py` | In-memory run registry with TTL, eviction and a concurrency gate. |
+| `app/selftest.py`, `selftest_reason.py`, `selftest_claims.py`, `selftest_pipeline.py` | Four offline suites — extraction, attribution reasoning, claims, and the whole pipeline plus the HTTP surface. |
+
 ## `documentation/` — this documentation set
 
-`README.md` (index) + `01`–`13` as listed in the [README](./README.md#documentation-map).
+`README.md` (index) + `01`–`16` as listed in the [README](./README.md#documentation-map).
 
 ---
 
