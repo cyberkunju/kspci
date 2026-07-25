@@ -97,44 +97,83 @@ Two generators are available; both write `datastore/seed/*.csv`.
 
 | Script | Coverage | Use |
 |---|---|---|
-| `datastore/generate.js` | Karnataka (15 districts) | original, KSP-only demo |
-| `datastore/generate-india.js` | **All-India** — ~416 districts, 35 states/UTs | current default |
+| `datastore/generate.js` | Karnataka, 15 districts | original KSP-only demo, kept for reference |
+| `datastore/generate-india.js` | **All-India** — 640 districts, 36 states/UTs, ~9,700 taluks, ~155,000 localities | current default |
 
 ```bash
-# All-India, NCRB-2023-calibrated (target case volume is a parameter)
-node datastore/generate-india.js --cases 200000
+# One-time: fetch the open-data inputs and build the geography reference
+./datastore/fetch-geo.sh && node datastore/build-geo.js
+
+# Generate (target case volume is a parameter)
+node --max-old-space-size=12288 datastore/generate-india.js --cases 1500000
 node datastore/generate-india.js --cases 200000 --years 3
 ```
 
-The all-India generator is calibrated against real reference data held in
-`datastore/ref/`:
+`build-geo.js` produces the geography and demography reference; see
+`datastore/ref/SOURCES.md` for full provenance of every input. The generator is
+calibrated against:
 
-- `india_cities.json` — 528 Indian cities (>=1 lakh, Census 2011) with district,
-  state, population and coordinates. Aggregated to ~416 district centroids.
-- `ncrb_states_2023.json` — NCRB *Crime in India 2023* per state/UT: crime rate per
-  lakh, chargesheet rate, conviction rate, violent-crime rate and
+- `india_districts_full.json` — all 640 Census 2011 districts: real centroid from the
+  district boundary, population, and the district's actual religion, SC/ST, literacy,
+  worker-class and age-band composition.
+- `india_localities.json` — ~155,000 real localities across ~9,700 taluks, from the
+  India Post directory, each attached to its district.
+- `ncrb_states_2023.json` — NCRB *Crime in India 2023* per state/UT: total cases,
+  crime rate per lakh, chargesheet rate, conviction rate, violent-crime rate and
   murder/rape/kidnapping/extortion/robbery rates.
+- `ncrb_crime_heads_2022.json` — 186 real NCRB crime heads in 16 groups, each with its
+  published 2022 all-India case count and charging provision.
+
+How the numbers are anchored:
+
+- **State volume** comes from each state's real NCRB 2023 case total, so the spread
+  between states is real (Kerala and Delhi dense, Nagaland and Sikkim sparse).
+- **Within a state**, districts split that total by population weighted by urban
+  share.
+- **Head mix** follows the real 2022 national shares, tilted per state by that state's
+  real murder, rape, kidnapping, extortion and robbery rates. Generated group shares
+  land within ~0.3pp of NCRB.
+- **Outcomes** follow each state's real chargesheet and conviction rates, with trial
+  pendency at ~82% to match Indian court reality.
+- **People** draw caste, religion, occupation and age from their district's census
+  distributions.
+
+The generator prints a calibration report comparing generated shares against NCRB on
+every state, group and top head. Read it: it is the check that the run is sound.
 
 It also emits `functions/api/ref/india_districts.json`, which the API uses for
 district and state map centroids. **Regenerate and redeploy the function together**,
 otherwise new districts will have no coordinates on the hotspot map.
 
-> Volumes are scaled down from the real ~6.24 million cases/year to the requested
-> target; relative differences between states are preserved, absolute counts are not
-> real. City populations cover urban areas only, so largely rural states are
-> under-represented relative to their true totals.
+> **Scale.** Volumes are scaled down from the real ~6.24 million cases/year to the
+> requested target; relative differences between states, districts and crime heads are
+> preserved, absolute counts are not real. At `--cases 1500000` the output is ~9.1M
+> rows across 8 tables and ~1.5 GB of CSV. Full real scale (~18.7M cases over three
+> years, ~115M rows) generates locally but exceeds the development Data Store's
+> practical load budget — see below.
 
 ---
 
 ## Loading data (fully automated — no console clicks)
 
-After the 10 tables exist, data is loaded via the deployed API's admin seeder
-(SDK-based bulk insert, no interactive prompts):
+Tables must already exist in the console with the current column set. Then:
 
-```
-# per table, batched; the loader script orchestrates all of them:
+```bash
 node datastore/load.js
+node datastore/load.js --only Cases,Accused
+node datastore/load.js --restart          # ignore the resume checkpoint
 ```
 
-The loader calls `POST /server/api/admin/seed` with an admin key, streaming each
-table's rows from `functions/api/seed/*.csv` in batches.
+The loader streams each CSV line by line and posts 200-row batches to
+`POST /server/api/admin/insert` with an admin key. It never holds a table in memory,
+which is required at this scale: an 852 MB `Cases.csv` cannot be read into a single
+JavaScript string.
+
+Progress is checkpointed to `datastore/seed/.load-state.json` after every batch, so an
+interrupted run resumes instead of duplicating rows. Failed requests retry with
+backoff.
+
+> **Load budget.** The development environment allows ~200,000 API calls. At 200 rows
+> per call, 9.1M rows costs ~45,700 calls — comfortable. Full real scale would cost
+> ~575,000 calls and is not loadable here; the generator warns when a run exceeds the
+> budget.
