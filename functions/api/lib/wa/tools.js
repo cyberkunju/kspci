@@ -396,6 +396,64 @@ const TOOLS = {
     }
   },
 
+  open_source_research: {
+    roles: OPERATIONAL,
+    args: '{"tool":"open_source_research","subject":"person, crime or event","kind":"person|crime|event|organisation","purpose":"why this is needed, in a few words"}',
+    describe: 'Search the open internet — news, court and government sites, Kannada and English — for a person, crime, event or organisation, and return the sources with how confident we are that each one is really about this subject. Anchors the search on our own records automatically. Nothing it returns is evidence. Requires a purpose, which is recorded.',
+    async run(ctx, args) {
+      const research = require('../research');
+      if (!research.configured()) {
+        return { error: 'Open-source research is not configured on this deployment. Answer from the crime database instead.' };
+      }
+      const subject = guard.sanitizeIdentifier(args.subject, { max: 120 });
+      if (!subject) return { error: 'A usable subject is required (no quotes).' };
+      const kind = ['person', 'crime', 'event', 'organisation', 'identifier', 'topic']
+        .includes(String(args.kind || '')) ? args.kind : 'person';
+      // Purpose binding is a governance requirement, not a formality: the engine
+      // refuses an unexplained run and records the refusal. It is not defaulted here —
+      // a default would satisfy the check while destroying the thing it protects.
+      const purpose = String(args.purpose || '').trim().slice(0, 200);
+      if (purpose.split(/\s+/).filter(Boolean).length < 3) {
+        return { error: 'A purpose of at least a few words is required, and it is recorded against this officer. State why the research is needed, e.g. "tracing absconding accused in FIR 118/2023".' };
+      }
+
+      let out;
+      try {
+        // Quick mode only. A field officer is waiting on WhatsApp and the standard
+        // budget is 90 seconds; the desk UI is where a deep run belongs.
+        out = await research.sync(ctx.app, {
+          subject, kind, purpose, crimeNo: args.crimeNo ? guard.sanitizeIdentifier(args.crimeNo, { max: 80 }) : '',
+          // The officer id, not the handset number: the engine writes this into its
+          // audit line on stdout, and a phone number does not need to be there.
+          role: ctx.officer.role, officer: ctx.officer.officerId || ctx.officer.name
+        });
+      } catch (e) {
+        return { error: 'Open-source research failed: ' + String((e && e.message) || e).slice(0, 160) };
+      }
+
+      const findings = (out.findings || [])
+        .filter((f) => f.attribution === 'confirmed' || f.attribution === 'probable')
+        .slice(0, 6);
+      return {
+        subject, mode: out.mode, partial: out.partial || false,
+        anchoredOn: out.anchors || {},
+        summary: String(out.summary || '').slice(0, 1200),
+        counts: out.counts || {},
+        sources: findings.map((f) => ({
+          title: String(f.title || '').slice(0, 140), url: f.url,
+          outlet: f.outlet, published: f.published,
+          confidence: f.attribution, language: f.language || 'en'
+        })),
+        // Surfaced to the model on purpose. A run that reached no source about this
+        // subject must be reported as that, not as "nothing exists about them".
+        note: findings.length
+          ? out.disclaimer
+          : 'No open source could be attributed to this subject. That is not the same as finding nothing about the name — say so plainly.',
+        warnings: (out.warnings || []).slice(0, 3)
+      };
+    }
+  },
+
   whoami: {
     roles: ANY,
     args: '{"tool":"whoami"}',
