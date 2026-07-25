@@ -255,3 +255,61 @@ One state per request, because 28 s does not fit a Function's 25 s ceiling. Each
 only its own rows inside the shared national scope. Requires the `Forecasts` and
 `ForecastMetrics` tables (schema in `datastore/SCHEMA.md`); without them the read routes fall
 back to live computation, so this is optional and additive.
+
+---
+
+## 10. Data Store migration and load
+
+### Schema, applied via the console over CDP
+
+The Catalyst CLI cannot change Data Store schema, and neither browser MCP works on this
+machine — the Playwright server runs an unauthenticated profile and the Chrome DevTools server
+needs an X server. So Chrome is launched on the existing X display with a debug port and
+Playwright attaches over CDP:
+
+```bash
+DISPLAY=:10 google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/kspchrome \
+    --password-store=basic --no-first-run "https://console.catalyst.zoho.in/baas/index" &
+node tools/drive.js tools/steps/table-columns.js Cases
+node tools/drive.js tools/steps/add-column.js Cases StateName:text TalukName:text
+node tools/drive.js tools/steps/create-table.js Forecasts ForecastMetrics
+```
+
+Steps are idempotent and verify against the rendered schema rather than trusting a click. They
+drive the console's `data-zcqa` hooks, which are stable across UI releases in a way CSS classes
+are not. `openTable` always reloads the route: a left-open inline editor blocks clicks on the
+table list and shows up as a click timeout on an element the log says it resolved.
+
+Applied: `Cases` + StateName/TalukName/LocalityName, `Victims` + Caste/Religion, and the
+`Forecasts` (21 columns) / `ForecastMetrics` (10 columns) tables.
+
+> If a fresh Chrome profile lands on the sign-in page, the Zoho session cookies are
+> **non-persistent** and a new profile never loads them. `tools/chrome-cookies.py` reads them
+> out of a profile snapshot for injection — but note they only exist on disk while the session
+> is live, and the file is rewritten without them.
+
+### Loading, and the quota ceiling
+
+```bash
+KSP_API="https://ksp.cyberkunju.com/server/api" CONCURRENCY=8 node datastore/load.js
+```
+
+Concurrency is the difference between 200 rows/s and ~5,700 rows/s; the checkpoint advances
+only across a contiguous prefix of completed batches, so an interrupted run resumes without
+leaving a gap. Rerun the same command to resume from `datastore/seed/.load-state.json`.
+
+**The binding constraint is the Catalyst subscription, not the API call budget.** A full-scale
+load (1.5M cases, 8.24M rows) exhausts the plan amount partway through and the environment then
+returns `SUBSCRIPTION_USAGE_LIMIT_REACHED` for *everything* — functions and AppSail included, so
+the app goes down, not just the load. This was hit at ~608,000 rows.
+
+Before a full load, either raise the plan or generate a dataset sized to it:
+
+```bash
+node datastore/generate-india.js --cases 150000 --years 3   # ~800k rows across 8 tables
+```
+
+Coverage of all 36 states and 640 districts is preserved at any `--cases` value; only the volume
+per district shrinks. The forecast engine needs district-month history, not raw volume, so a
+smaller corpus still exercises every code path — and `ml/RESULTS.md` is measured offline on the
+full 27.4M-incident corpus regardless of what the Data Store holds.
