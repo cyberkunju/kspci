@@ -81,6 +81,19 @@ def unit_expr(level: str, grid_m: float, mean_lat: float) -> tuple[str, str]:
     raise ValueError(f"unknown level {level}")
 
 
+def source_expr(events: str) -> str:
+    """DuckDB scan expression for the incident table.
+
+    Parquet is worth converting to once: the CSV is re-parsed in full on every scan, while
+    Parquet is columnar, so a panel that needs five of eleven columns reads only those and
+    skips the rest. On the 27M-row table that is the difference between a container spending
+    most of its life in the CSV parser and spending it on the aggregation.
+    """
+    if events.endswith((".parquet", ".pq")):
+        return f"read_parquet('{events}')"
+    return f"read_csv_auto('{events}', header=true)"
+
+
 def build(
     con: duckdb.DuckDBPyConnection,
     events: str,
@@ -89,8 +102,9 @@ def build(
     grid_m: float,
     where: list[str],
     min_total: int,
+    source: str = "ksp-synthetic-all-india",
 ) -> dict:
-    src = f"read_csv_auto('{events}', header=true)"
+    src = source_expr(events)
     filt = (" WHERE " + " AND ".join(where)) if where else ""
 
     mean_lat = con.execute(f"SELECT avg(latitude) FROM {src}{filt}").fetchone()[0] or 22.0
@@ -145,7 +159,7 @@ def build(
         for u in units
     }
     return {
-        "source": "ksp-synthetic-all-india",
+        "source": source,
         "level": level, "period": period, "grid_m": grid_m if level == "grid" else None,
         "filters": where, "min_total": min_total,
         "units_before_filter": n_all,
@@ -170,6 +184,13 @@ def main() -> int:
     ap.add_argument("--min-total", type=int, default=0)
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--out", default="out/panels")
+    # Real city corpora go through this same builder — see ingest_cities.py, which writes them
+    # with these column names precisely so no second panel path is needed. The prefix and
+    # source keep the resulting panels distinguishable from the synthetic ones, which matters
+    # because the whole point of the real data is to be reported separately.
+    ap.add_argument("--prefix", default="india", help="filename prefix for built panels")
+    ap.add_argument("--source", default="ksp-synthetic-all-india",
+                    help="provenance string recorded in the panel")
     args = ap.parse_args()
 
     con = duckdb.connect()
@@ -186,7 +207,7 @@ def main() -> int:
     jobs: list[tuple[str, list[str]]] = []
     if args.split_head:
         groups = [r[0] for r in con.execute(
-            f"SELECT DISTINCT head FROM read_csv_auto('{args.events}', header=true) ORDER BY 1"
+            f"SELECT DISTINCT head FROM {source_expr(args.events)} ORDER BY 1"
         ).fetchall()]
         enf = sorted(g for g in groups if g in ENFORCEMENT_LED)
         vic = sorted(g for g in groups if g not in ENFORCEMENT_LED)
@@ -203,8 +224,9 @@ def main() -> int:
 
     Path(args.out).mkdir(parents=True, exist_ok=True)
     for tag, where in jobs:
-        panel = build(con, args.events, args.level, args.period, args.grid_m, where, args.min_total)
-        bits = ["india", args.level]
+        panel = build(con, args.events, args.level, args.period, args.grid_m, where,
+                      args.min_total, args.source)
+        bits = [args.prefix, args.level]
         if args.level == "grid":
             bits.append(f"{int(args.grid_m)}m")
         bits.append(args.period)
