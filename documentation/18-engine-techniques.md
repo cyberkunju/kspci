@@ -195,16 +195,83 @@ models. None of those is forkable.
 What is available is the standard published technique its class of product is built on, and
 two pieces are worth adopting here:
 
-- **Cross-encoder reranking.** Score `(query, passage)` pairs with a small reranker rather
-  than ordering by lexical overlap. This is the correct long-term fix for choosing which 48
-  of 128 candidates to read; rank fusion above is the cheap approximation that needs no
-  model and no GPU.
+- **Cross-encoder reranking. Now implemented — see §5 below.** Score `(query, candidate)`
+  pairs with a cross-encoder rather than ordering by lexical overlap.
 - **Chunk-level rather than document-level attribution.** We score up to 60,000 characters
   of a story as one blob. Attributing the specific passage that mentions the subject would
   sharpen both the band and the claim spans.
 
-Both are on the remaining-work list rather than implemented, and honestly so: neither can be
-shown to help until there is a labelled evaluation set to measure against.
+Chunk-level attribution remains on the remaining-work list. Reranking did not wait for the
+labelled set, because its effect turned out to be visible without one: it changed which
+sources the summary rests on, on the first subject tried.
+
+## 5. Cross-encoder reranking — implemented
+
+**The decision it makes.** Discovery returns 130-140 candidates; a standard run reads 48.
+Reading is what earns an attribution band, so this is the highest-leverage choice in the
+pipeline, and it was being made lexically.
+
+**Why lexical could not work.** "Vipul Singh" and "Manmohan Singh" share the query word.
+Nothing in title-overlap, tier, recency or rank fusion separates them — fusion knows what
+several sources thought was relevant to the *query*, not who the document is *about*. The
+search APIs make it worse rather than better: Quintype ORs the terms and has no
+exact-phrase mode, so noise arrives by design.
+
+**What we use.** Cohere Rerank v4.0 Pro on Azure AI Foundry. Scored on the five documents
+that broke the lexical path:
+
+| Document | Score |
+|---|---|
+| the real encounter report | **0.907** |
+| an unrelated Baghpat shootout detail | 0.379 |
+| "Khooni Monday" — a box-office column | 0.127 |
+| Justice Vipul Pancholi — a different person | 0.081 |
+| Manmohan Singh's funeral | 0.059 |
+
+**Two things that cost real time, recorded so they do not again.**
+
+1. The working route is `{endpoint}/providers/cohere/v2/rerank`. The older
+   `/models/v1/rerank` route answers **HTTP 500 for every request body** against a v4
+   deployment — identical response for six different schemas — which reads as a payload
+   problem and is not one. A model name the catalog knows but has no deployment answers
+   `unavailable_model`; one it does not know answers `unknown_model`. That distinction is
+   how the deployment was found at all.
+2. A candidate with no headline and no snippet gives the model nothing to judge, and it
+   still returns a number. Left in, fourteen untitled Indian Kanoon results scored high
+   enough to consume a third of the read budget and every one graded `unrelated`. They are
+   now held out and given the median score, so they compete on the tier and lexical rank
+   we do actually have. The underlying cause was also fixed: those results were untitled
+   because the search page links each judgment twice and the furniture link came first.
+
+**What the lexical pass still does.** It is the fallback when reranking is unavailable, the
+tiebreak between equal scores, and the ordering of what the model gets shown. One rule
+outranks the model: a publisher we have learned we cannot read statically still goes last,
+because the model scores a headline and cannot predict whether the page will open.
+
+**Measured.** 140 of 140 candidates scored, 48 of 48 pages readable. The officer's summary
+went from resting on one source to two independent ones, gaining the subject's village and
+his gang affiliation — both of which were in the candidate pool before and never got read.
+
+## 6. Why the general web needs a key, and everything else does not
+
+Recorded because it is the one place this engine pays for access, and that deserves a
+justification rather than a config entry.
+
+Every other tier is keyless and public. For general web search — the tier that reaches
+forums, complaint boards, blogs and stray PDFs — every keyless route was tested and each
+one fails on its own terms:
+
+| Route | Why not |
+|---|---|
+| Google, Bing web search | `robots.txt` disallows `/search`. Bing's **news** search is a different path with no rule, which is exactly why the feed tier exists. |
+| DuckDuckGo | `duckduckgo.com/robots.txt` disallows `/html` and `/lite`. The identical endpoints on `html.duckduckgo.com` ship an empty `robots.txt`; using that loophole against the operator's evident intent is not the standard we applied to Mojeek or Google News. Moot anyway — it answered HTTP 202 to one request and 0 links to the other, so it is blocked for datacenters. |
+| Reddit | `robots.txt` is `Disallow: /`; the search API answers 403. |
+| Mojeek | `robots.txt` disallows `/search`. Kept behind a flag for a licensed API. |
+| Marginalia | Free key, given out on request. Adapter written, unkeyed. |
+| SearXNG | Has no index of its own. It scrapes the engines above, which CAPTCHA datacenter ranges — self-hosting relocates the failure rather than fixing it. |
+
+So the choice was a paid index or no general web at all, and `available()` reports `web:
+false` rather than letting a press-only run look like an internet-wide one.
 
 ---
 

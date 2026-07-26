@@ -127,7 +127,21 @@ Grouped by **how each one fails**, because that is what determines how to use it
 | **News feed** | Bing News RSS | The breadth tier, and the one that fixed the engine's worst blind spot. Keyless, answers from a datacenter, multilingual, and the item link embeds the **publisher's** url so there is no redirect to follow. |
 | **Datasets** | GDELT DOC 2.0, Wikipedia, Wikidata, Wayback CDX | Published for machines. No key, no quota, reliable from a datacenter. |
 | **On-site** | 27 official domains + 16 Kannada + 21 Hindi outlets; **9** with a queryable search endpoint — 6 through Quintype's JSON search API, 3 by reading the results page | For a court or a newsroom this is simply the correct method, and it reaches vernacular coverage no English-first index surfaces. Was 13: five adapters were found to be returning their front page regardless of the query and one was disallowed by robots. See [18 §4](./18-engine-techniques.md). |
+| **General web** | one search API (`SERPER_API_KEY`) | The only tier that reaches forums, complaint boards, blogs and stray PDFs. **Off until keyed**, and reported as off, because a run that searched the press must not look like one that searched the internet. Every keyless alternative fails on robots or on datacenter blocking — see [18 §6](./18-engine-techniques.md). |
 | **Metasearch** | SearXNG, Marginalia, (Mojeek) | Long-tail breadth. Deliberately last, deliberately optional. |
+
+The news feed is asked in **three markets** — `en-IN`, `hi-IN`, `kn-IN`. `mkt` changes which
+outlets Bing ranks, not just the interface language, and the vernacular markets are where
+local crime reporting lives. Wikipedia is likewise asked in English, Hindi and Kannada.
+
+### Which candidates get read
+
+Discovery returns 130-140 candidates and a standard run reads 48. That choice is made by a
+**cross-encoder** (Cohere Rerank v4.0 Pro), because lexical overlap cannot tell "Vipul
+Singh" from "Manmohan Singh" — both contain the query word. The lexical pass remains as the
+fallback and the tiebreak. Reported by `/health` as `rerank`, separately from the chat
+model, because losing it degrades a run quietly rather than loudly. Details and measurements
+in [18 §5](./18-engine-techniques.md).
 
 ### Why a news feed, and why that one
 
@@ -425,8 +439,18 @@ runtimes have no `app-config.json`):
 | `RESEARCH_LLM_BACKEND` | `openai` \| `quickml` \| unset |
 | `QUICKML_LLM_ENDPOINT`, `QUICKML_MODEL`, `QUICKML_ORG_ID`, `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_REFRESH_TOKEN`, `ZOHO_ACCOUNTS_URL` | the QuickML path, same credentials the function uses |
 | `OPENAI_API_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` | any OpenAI-compatible endpoint, including a self-hosted vLLM/Ollama |
+| `RERANK_ENDPOINT`, `RERANK_KEY`, `RERANK_MODEL` | the cross-encoder that picks which 48 of ~140 candidates get read. `RERANK_ENDPOINT` is the Azure AI Foundry resource root — the adapter appends `/providers/cohere/v2/rerank`, which is the route that works; `/models/v1/rerank` returns HTTP 500 for a v4 deployment. Falls back to `AZURE_AI_ENDPOINT`/`AZURE_AI_KEY`. Set `RERANK_ENABLED=false` to switch it off; losing it degrades a run rather than failing it |
+| `SERPER_API_KEY` | the general-web tier — forums, blogs, complaint boards. Unset means the engine searches the press only, and `/health` says so |
 | `SEARXNG_URL`, `MARGINALIA_KEY`, `MOJEEK_ENABLED` | optional extra tiers |
 | `RESEARCH_DEFAULT_MODE`, `RESEARCH_RUN_TTL_S`, `RESEARCH_MAX_CONCURRENT`, `RESEARCH_FETCH_TIMEOUT_S`, `RESEARCH_USER_AGENT`, `RESEARCH_CONTACT` | tuning |
+
+A deployment detail worth knowing before you try it: `catalyst.json`'s `env_variables` is
+**ignored for a `docker://` AppSail target**. The CLI only reads it on the `catalyst`
+runtime (`lib/deploy/features/appsail/index.js`, the `case 'catalyst'` branch), so a
+container service's variables must be set in the console or through
+`POST /baas/v1/project/{id}/appsail/{sailId}/configuration` with
+`{"environment":{"variables":{…}}}`. That call **replaces** the set, so read the existing
+variables and merge before writing. Ordinary deploys do not disturb them.
 
 **On the function**, additionally: `RESEARCH_CALLBACK_URL` — where the engine POSTs a
 finished run. Defaults to `WA_PROCESS_URL`'s host with `/research/callback`, so a
