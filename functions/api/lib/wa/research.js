@@ -30,6 +30,35 @@ const officers = require('./officers');
 //: phone is for the answer, not the appendix.
 const MAX_LINKS = 6;
 
+/**
+ * Where the engine should POST a finished run.
+ *
+ * `RESEARCH_CALLBACK_URL` when set. Otherwise derived from `WA_PROCESS_URL`, which every
+ * deployment with the WhatsApp channel already has: the two routes live in the same
+ * function, so the host is necessarily the same one, and asking an operator to configure
+ * the same origin twice is how the two drift apart.
+ *
+ * Returns '' when neither is available. The caller must treat that as "cannot run
+ * research on this channel" rather than starting a run whose result has nowhere to go —
+ * a run nobody receives is worse than a refusal, because the officer waits for it.
+ */
+function callbackUrl() {
+  const explicit = String(process.env.RESEARCH_CALLBACK_URL || '').trim();
+  if (explicit) return explicit;
+  const process_url = String(process.env.WA_PROCESS_URL || '').trim();
+  if (!process_url) return '';
+  try {
+    const u = new URL(process_url);
+    // WA_PROCESS_URL ends in the wa-process route; the callback is a sibling under the
+    // same function mount, so replace the last path segment rather than guessing a prefix.
+    u.pathname = u.pathname.replace(/\/[^/]*$/, '/research/callback');
+    u.search = '';
+    return u.toString();
+  } catch (_) {
+    return '';
+  }
+}
+
 const BAND = {
   confirmed: 'confirmed',
   probable: 'probable',
@@ -168,4 +197,4 @@ async function record(app, key, phone, status, body) {
   } catch (_) { /* the ledger is an audit aid, not a precondition for delivery */ }
 }
 
-module.exports = { deliver, format, MAX_LINKS };
+module.exports = { deliver, format, callbackUrl, MAX_LINKS };

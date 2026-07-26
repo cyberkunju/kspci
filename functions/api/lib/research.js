@@ -30,8 +30,6 @@ const SERVICE_URL = (process.env.RESEARCH_SERVICE_URL || '').replace(/\/+$/, '')
 const INTERNAL_KEY = process.env.RESEARCH_INTERNAL_KEY || '';
 const START_TIMEOUT_MS = Number(process.env.RESEARCH_START_TIMEOUT_MS || 15000);
 const POLL_TIMEOUT_MS = Number(process.env.RESEARCH_POLL_TIMEOUT_MS || 20000);
-// A sync run is capped well below the function's own 30s ceiling: the engine's quick
-// budget is 25s, and we must still be able to read and return its response.
 // The only two modes. `quick` was removed: it existed to fit inside this function's
 // 30-second ceiling, and ten pages read is a sample rather than research. Callers that
 // cannot poll supply a callback instead and are told when the run finishes.

@@ -279,6 +279,140 @@ test('wa tool: an unconfigured deployment says so instead of failing obscurely',
   assert.match(out.error, /not configured/i);
 });
 
+/*
+ * The tool starts a run and ends the turn. These tests exist because the handler was
+ * once written against a synchronous `research.sync()` that had already been removed,
+ * and nothing failed until someone read the file: no test touched this path, so the only
+ * research route a field officer has would have thrown "research.sync is not a function"
+ * on first use. Every branch of it is covered now.
+ */
+
+const RESEARCH_CTX = {
+  app: null,
+  language: 'en',
+  messages: require('../lib/wa/copy').EN,
+  officer: { role: 'investigator', officerId: 'off_1', name: 'PSI Rao', phone: '919000000000' }
+};
+
+function withStartStub(fn) {
+  const originals = {
+    configured: research.configured, start: research.start,
+    callbackUrl: waResearch.callbackUrl, env: process.env.RESEARCH_CALLBACK_URL
+  };
+  const calls = [];
+  research.configured = () => true;
+  research.start = async (app, opts) => { calls.push(opts); return { id: 'rq_test', mode: opts.mode }; };
+  process.env.RESEARCH_CALLBACK_URL = 'https://x.example/server/api/research/callback';
+  return Promise.resolve(fn(calls)).finally(() => {
+    research.configured = originals.configured;
+    research.start = originals.start;
+    waResearch.callbackUrl = originals.callbackUrl;
+    if (originals.env === undefined) delete process.env.RESEARCH_CALLBACK_URL;
+    else process.env.RESEARCH_CALLBACK_URL = originals.env;
+  });
+}
+
+test('wa tool: research starts a run and ends the turn instead of answering', async () => {
+  await withStartStub(async (calls) => {
+    const out = await waTools.TOOLS.open_source_research.run(RESEARCH_CTX, {
+      subject: 'Suresh Kumar', kind: 'person',
+      purpose: 'tracing an absconding accused in FIR 118/2023'
+    });
+    assert.equal(calls.length, 1, 'the engine was asked to start exactly one run');
+    assert.equal(out._TERMINAL, true, 'the loop must stop; the model has nothing to add');
+    assert.match(out.reply, /About a minute/,
+      'the officer is told it is running and that they need not wait');
+    assert.equal(out.researchStarted.id, 'rq_test');
+    // The callback must carry everything needed to find this officer again.
+    assert.equal(calls[0].callbackContext.channel, 'whatsapp');
+    assert.equal(calls[0].callbackContext.phone, '919000000000');
+    assert.equal(calls[0].callbackContext.language, 'en');
+    assert.equal(calls[0].callbackUrl, 'https://x.example/server/api/research/callback');
+    // The officer id, never the handset number, reaches the engine's audit line.
+    assert.equal(calls[0].officer, 'off_1');
+    assert.equal(calls[0].mode, 'standard');
+  });
+});
+
+test('wa tool: deep mode is selectable and gets its own longer promise', async () => {
+  await withStartStub(async (calls) => {
+    const out = await waTools.TOOLS.open_source_research.run(RESEARCH_CTX, {
+      subject: 'Suresh Kumar', purpose: 'tracing an absconding accused', mode: 'deep'
+    });
+    assert.equal(calls[0].mode, 'deep');
+    assert.match(out.reply, /five minutes/);
+  });
+  // An invented mode falls back rather than being passed through to the engine.
+  await withStartStub(async (calls) => {
+    await waTools.TOOLS.open_source_research.run(RESEARCH_CTX, {
+      subject: 'Suresh Kumar', purpose: 'tracing an absconding accused', mode: 'quick'
+    });
+    assert.equal(calls[0].mode, 'standard', 'quick no longer exists');
+  });
+});
+
+test('wa tool: Kannada gets the Kannada wait message', async () => {
+  await withStartStub(async () => {
+    const out = await waTools.TOOLS.open_source_research.run(
+      { ...RESEARCH_CTX, language: 'kn', messages: require('../lib/wa/copy').KN },
+      { subject: 'Suresh Kumar', purpose: 'tracing an absconding accused' });
+    assert.match(out.reply, /[\u0C80-\u0CFF]/, 'the reply is in Kannada script');
+  });
+});
+
+test('wa tool: a run with nowhere to deliver is refused, not started', async () => {
+  // A started run whose result cannot be delivered is worse than a refusal, because the
+  // officer waits for a message that will never arrive.
+  const originals = { configured: research.configured, start: research.start,
+                      cb: process.env.RESEARCH_CALLBACK_URL, wa: process.env.WA_PROCESS_URL };
+  let started = 0;
+  research.configured = () => true;
+  research.start = async () => { started += 1; return { id: 'x' }; };
+  delete process.env.RESEARCH_CALLBACK_URL;
+  delete process.env.WA_PROCESS_URL;
+  try {
+    const out = await waTools.TOOLS.open_source_research.run(RESEARCH_CTX, {
+      subject: 'Suresh Kumar', purpose: 'tracing an absconding accused' });
+    assert.match(out.error, /cannot be delivered/i);
+    assert.equal(started, 0, 'no run was started');
+
+    // Same for an officer with no handset on file.
+    process.env.RESEARCH_CALLBACK_URL = 'https://x.example/server/api/research/callback';
+    const noPhone = await waTools.TOOLS.open_source_research.run(
+      { ...RESEARCH_CTX, officer: { ...RESEARCH_CTX.officer, phone: '' } },
+      { subject: 'Suresh Kumar', purpose: 'tracing an absconding accused' });
+    assert.match(noPhone.error, /handset/i);
+    assert.equal(started, 0);
+  } finally {
+    research.configured = originals.configured;
+    research.start = originals.start;
+    if (originals.cb === undefined) delete process.env.RESEARCH_CALLBACK_URL;
+    else process.env.RESEARCH_CALLBACK_URL = originals.cb;
+    if (originals.wa !== undefined) process.env.WA_PROCESS_URL = originals.wa;
+  }
+});
+
+test('wa callback url: derived from WA_PROCESS_URL when not set explicitly', () => {
+  const originals = { cb: process.env.RESEARCH_CALLBACK_URL, wa: process.env.WA_PROCESS_URL };
+  try {
+    delete process.env.RESEARCH_CALLBACK_URL;
+    process.env.WA_PROCESS_URL = 'https://ksp.example/server/api/wa/process?x=1';
+    assert.equal(waResearch.callbackUrl(),
+                 'https://ksp.example/server/api/wa/research/callback');
+    process.env.RESEARCH_CALLBACK_URL = 'https://explicit.example/cb';
+    assert.equal(waResearch.callbackUrl(), 'https://explicit.example/cb',
+                 'an explicit value always wins');
+    delete process.env.RESEARCH_CALLBACK_URL;
+    delete process.env.WA_PROCESS_URL;
+    assert.equal(waResearch.callbackUrl(), '', 'neither configured means no address');
+  } finally {
+    if (originals.cb === undefined) delete process.env.RESEARCH_CALLBACK_URL;
+    else process.env.RESEARCH_CALLBACK_URL = originals.cb;
+    if (originals.wa === undefined) delete process.env.WA_PROCESS_URL;
+    else process.env.WA_PROCESS_URL = originals.wa;
+  }
+});
+
 /* ============================ our own records ============================ */
 
 const RICH = {
