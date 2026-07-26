@@ -540,7 +540,17 @@ async def _retrieve(f: Fetcher, hits: list[Hit], budget: Budget, dl: Deadline,
 
 async def run(*, subject: str, kind: str, anchors: Anchors, budget: Budget,
               question: str = "", records: list[str] | None = None,
+              reply_language: str = "en",
               progress: Progress | None = None) -> RunResult:
+    """`reply_language` decides the language of the SUMMARY only.
+
+    Retrieval, attribution and the source table are language-independent — a Kannada
+    report is graded the same way whoever reads it. But the summary is the part the
+    officer actually reads, and the WhatsApp channel is trilingual: a Kannada officer
+    was receiving a Kannada heading, a Kannada statistics line and English prose in
+    between. The claims themselves are still quoted in their original language, because
+    a translated quotation is no longer a quotation.
+    """
     dl = Deadline(budget.wall_s)
     records = [r for r in (records or []) if str(r).strip()][:20]
     out = RunResult(subject=subject, kind=kind, mode=budget.name, records=records)
@@ -707,6 +717,7 @@ async def run(*, subject: str, kind: str, anchors: Anchors, budget: Budget,
                 "describes what was found instead")
             text, warns = await claims_mod.synthesise_coverage(
                 stories, subject=subject, anchors=anchors, records=records,
+                reply_language=reply_language,
                 aliases=[n for n in anchors.names if n.lower() != subject.lower()])
             out.summary = text
             out.summary_kind = "no_match"
@@ -752,10 +763,23 @@ async def run(*, subject: str, kind: str, anchors: Anchors, budget: Budget,
             if not dl.expired:
                 text, warns = await claims_mod.synthesise(
                     stories, all_claims, subject=subject, question=question,
-                    records=records)
+                    records=records, reply_language=reply_language)
                 out.summary = text
                 out.warnings.extend(warns)
                 out.stages.append("summary")
+
+                # Carry the summary's citation markers onto the sources they refer to, so
+                # "[S3]" in the prose resolves to a row in the officer's table. The
+                # markers are assigned inside synthesise from the admitted claims, which
+                # is why this can only happen after it.
+                markers = claims_mod.marker_map(all_claims)
+                by_url = {f.url: f for f in out.findings}
+                for s in stories:
+                    marker = markers.get(s.id)
+                    lead = s.lead
+                    finding = by_url.get(lead.final_url or lead.url)
+                    if marker and finding is not None:
+                        finding.marker = marker
 
             out.timeline = _timeline(all_claims, stories)
 

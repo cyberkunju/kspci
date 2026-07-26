@@ -76,6 +76,12 @@ class ResearchIn(BaseModel):
     crime_number: str = ""
     anchors: AnchorsIn = Field(default_factory=AnchorsIn)
 
+    #: Which language the SUMMARY is written in — `en`, `kn` or `hi`, anything else falls
+    #: back to English. Retrieval and grading are unaffected; only the prose the officer
+    #: reads changes. The WhatsApp channel is trilingual, and a Kannada officer was
+    #: receiving a Kannada heading wrapped around English prose.
+    reply_language: str = "en"
+
     #: Short factual statements from the caller's own database about this subject. Used
     #: in the report, cited as [DB], and kept visibly separate from open-source material.
     #: Supplied by the caller because only the caller can read its own records — this
@@ -194,7 +200,8 @@ async def _execute(run: Run, body: ResearchIn, anchors: Anchors) -> None:
             result = await run_pipeline(
                 subject=body.subject, kind=body.kind, anchors=anchors,
                 budget=budget_for(body.mode), question=body.question,
-                records=body.records, progress=progress)
+                records=body.records, reply_language=body.reply_language,
+                progress=progress)
             run.result = asdict(result)
             run.state = "done"
             registry.note(run, "done", "complete")
