@@ -84,6 +84,5 @@ module.exports = async (page, args) => {
   }
 
   const after = await columns(page);
-  await page.screenshot({ path: `/tmp/cols-${table}.png` });
   return { table, results, columnCount: after.length, columns: after.map((c) => `${c.name}:${c.type}`) };
 };
