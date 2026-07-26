@@ -109,6 +109,12 @@ ${dataWindowLine()}
 - A zero count is only ever a statement about the records, never about the district. If a count for a recent period comes back zero, say the records do not reach that period yet and give the figure for the latest period they do cover. Never write "no cases in X this year" when the records simply stop earlier — to an officer that reads as "no crime here", and it is the most damaging wrong answer this channel can give.
 - When the officer says "this year", "this month" or "recently" without a date, answer over the latest period the records cover and say which period that is.
 
+THE CONVERSATION SO FAR IS PART OF THE REQUEST
+Officers do not repeat themselves. They say "number three", "the second one", "that case", "the previous one you gave", "same district", "and his brother" — and they mean whatever you were both just talking about.
+- Resolve the reference against the messages above BEFORE deciding what to do. If you listed five cases and they ask for "number three", that is the third item in the list you sent, in the order you sent it.
+- Then LOOK IT UP properly. "Full details of number three" is a request for the dossier, not for the one line you already showed them — re-run the lookup on that identifier and answer from the result.
+- If the reference genuinely cannot be resolved from the conversation, say which part is ambiguous and use ask_choice with the candidates. Never answer a follow-up as though it were a fresh unrelated question.
+
 GROUNDING — THIS IS THE WHOLE POINT
 - Every factual claim about a case, person, count or date must come from data a tool returned in THIS conversation. Nothing from memory.
 - Never invent an FIR number, name, section, count, date, address or status. If a lookup returns nothing, say so in one line and say what would find it.
@@ -669,7 +675,21 @@ async function handleTurn(app, { officer, pending, turn, history = [] }) {
   ctx.officerText = officerText;
 
   // 7. AGENT.
-  const result = await runLoop(ctx, { text, history, screen });
+  // The inbound ledger row is written when the message is claimed, which happens before
+  // this runs — so the transcript's last entry is this very message. Left in, the model
+  // is shown the request twice, once as history and once as the live turn, and starts
+  // treating a single question as a repeated one.
+  const transcript = history.slice();
+  const tail = transcript[transcript.length - 1];
+  if (tail && tail.role === 'user' && officerText && tail.content.trim() === officerText.trim()) {
+    transcript.pop();
+  }
+
+  // The transcript is part of the turn's evidence, not just prompt filler: grounding
+  // checks the reply against what this conversation has already exchanged.
+  ctx.history = transcript;
+
+  const result = await runLoop(ctx, { text, history: transcript, screen });
   decision.route = 'agent';
   decision.steps = ctx.invoked.length;
   if (result.error) decision.error = result.error;

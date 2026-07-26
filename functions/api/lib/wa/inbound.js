@@ -547,6 +547,13 @@ async function buildTurn(app, officer, event, pending, language) {
       // transcription that is never shown looks like the bot answering a
       // different question for no reason.
       turn.transcript = said;
+      // Put the transcript into the ledger row, which was written as "[audio]" when the
+      // message was claimed. That row is what the model reads back as the officer's turn
+      // next time, so without this a conversation held by voice has no history: every
+      // officer message in it reads "[audio]", and a follow-up like "number three"
+      // refers to nothing. Not awaited into the reply path — history quality must never
+      // hold up an answer.
+      officers.updateInboundBody(app, event.msgId, said).catch(() => {});
       return turn;
     } catch (e) {
       if (e && e.status === 413) return { refusal: m.mediaTooLarge };

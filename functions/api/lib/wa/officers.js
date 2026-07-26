@@ -598,6 +598,31 @@ async function messageAlreadyAnswered(app, msgId) {
   }
 }
 
+/**
+ * Replace an inbound ledger row's body with what the officer actually said.
+ *
+ * A voice note is claimed before it can be transcribed, so the row is written as
+ * `[audio]` — and that string is what the model later reads back as the officer's turn.
+ * A conversation held entirely by voice therefore had no usable history at all: every
+ * officer message in it said `[audio]`, so "number three" referred to nothing.
+ *
+ * It is also the better audit record. "[audio]" documents that a voice note arrived;
+ * the transcript documents what was asked.
+ */
+async function updateInboundBody(app, msgId, text) {
+  const body = String(text || '').trim();
+  if (!msgId || !body) return false;
+  try {
+    const rows = await q(app,
+      `SELECT ROWID FROM WaMessages WHERE MsgID='${String(msgId).replace(/'/g, '')}' AND Direction='in' LIMIT 1`);
+    if (!rows.length) return false;
+    await app.datastore().table('WaMessages').updateRow({ ROWID: rows[0].ROWID, Body: body.slice(0, 40000) });
+    return true;
+  } catch (_) {
+    return false; // history is degraded, not the turn — never fail a reply over this
+  }
+}
+
 /** Mark a turn finished. After this the message id can never be processed again. */
 async function completeMessage(app, msgId) {
   if (!msgId) return;
@@ -653,19 +678,28 @@ async function alertAlreadySent(app, alertKey) {
 }
 
 /** Recent conversation turns for multi-turn context, oldest first. */
-async function recentTurns(app, phone, limit = 6) {
+/**
+ * The recent transcript, oldest first, as chat messages.
+ *
+ * Sized for follow-ups rather than for token thrift. Six messages at 600 characters is
+ * three exchanges with every list truncated halfway, which is precisely the context an
+ * officer relies on when they say "number three" — so it is ten messages at 1200. The
+ * head of each message is kept, not the tail, because that is where a numbered list's
+ * items are.
+ */
+async function recentTurns(app, phone, limit = 10) {
   const p = normalizePhone(phone);
   if (!p) return [];
   // Filtered in the query, not after it. Audit, alert and status rows share this
   // table, and letting them consume the LIMIT meant history thinned out on exactly
   // the turns that wrote or used biometrics — the ones where context matters most.
   const rows = await q(app,
-    `SELECT Direction, Body, MsgType FROM WaMessages WHERE Phone='${p}' AND Direction IN ('in','out') ORDER BY CREATEDTIME DESC LIMIT ${Math.min(Number(limit) || 6, 20)}`);
+    `SELECT Direction, Body, MsgType FROM WaMessages WHERE Phone='${p}' AND Direction IN ('in','out') ORDER BY CREATEDTIME DESC LIMIT ${Math.min(Number(limit) || 10, 30)}`);
   return rows.reverse()
     .filter((r) => r.Direction === 'in' || r.Direction === 'out')
     .map((r) => ({
       role: r.Direction === 'in' ? 'user' : 'assistant',
-      content: String(r.Body || '').slice(0, 600)
+      content: String(r.Body || '').slice(0, 1200)
     }))
     .filter((m) => m.content);
 }
@@ -720,7 +754,7 @@ module.exports = {
   upsertOfficer, deleteOfficer, setAlertPrefs, setLanguage, setRole,
   touchOfficer, withinServiceWindow, LANGUAGES,
   checkRate, claimMessage, completeMessage, releaseMessage, logMessage,
-  messageAlreadyAnswered,
+  messageAlreadyAnswered, updateInboundBody,
   alertAlreadySent, recentTurns, shapeOfficer, dtNow, genId,
   getPending, parsePending, serializePending, rowIdLiteral,
   mintUndoToken, looksLikeUndoToken, recordUndo, findUndo, consumeUndo,
