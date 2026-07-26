@@ -13,7 +13,10 @@
 const SARVAM = 'https://api.sarvam.ai';
 
 /** Sarvam wants BCP-47; the app carries 'en' / 'kn'. */
-const sarvamLang = (l) => (String(l || '').toLowerCase().startsWith('kn') ? 'kn-IN' : 'en-IN');
+const SARVAM_LANGS = { kn: 'kn-IN', hi: 'hi-IN', en: 'en-IN' };
+
+/** Map an internal language code to Sarvam's BCP-47 tag, defaulting to Indian English. */
+const sarvamLang = (l) => SARVAM_LANGS[String(l || '').toLowerCase().slice(0, 2)] || 'en-IN';
 
 const timeoutMs = () => Number(process.env.SARVAM_TIMEOUT_MS || 30000);
 

@@ -34,6 +34,11 @@
 /** Kannada block. One codepoint from here settles the turn. */
 const KANNADA_SCRIPT = /[\u0C80-\u0CFF]/;
 
+/** Devanagari block — Hindi. Same standing as Kannada script. */
+const DEVANAGARI_SCRIPT = /[\u0900-\u097F]/;
+
+const countMatches = (text, re) => (String(text).match(new RegExp(re.source, 'g')) || []).length;
+
 /**
  * Romanized Kannada function words, verbs and question words — the tokens that
  * carry grammar rather than content. Content words are excluded on purpose: a
@@ -63,6 +68,48 @@ const KN_LEXICON = new Set([
   'yaake', 'andre', 'anta', 'antha', 'alli', 'illi', 'ega', 'eega', 'nintre', 'yavdu',
   // policing register that officers romanize
   'prakarana', 'aparadha', 'dhaklu', 'tanikhe', 'sthiti', 'vivara', 'hesaru', 'jille', 'jilla'
+]);
+
+/**
+ * Romanized Hindi function words. Same principle as the Kannada set — grammar, not
+ * content — with two extra exclusion rules, because Hindi romanizes into much more
+ * dangerous territory than Kannada does.
+ *
+ * Excluded for colliding with ENGLISH: `the` (थे), `do` (दो), `is` (इस), `to` (तो),
+ * `in`, `par`, `main`, `mat`. Romanized Hindi shares whole function words with
+ * English, and `the` alone would have made every English sentence read as Hindi.
+ *
+ * Excluded for colliding with KANNADA or with domain vocabulary: `illa`, `sthiti`,
+ * `vivara`, and `fir` — that last one is FIR, which appears in almost every message
+ * on this channel and would have made the whole corpus look Hindi.
+ *
+ * Anything under three characters is left out entirely: `ka`, `ki`, `ke`, `se`, `ho`,
+ * `na` carry no weight against the false-positive risk.
+ */
+const HI_LEXICON = new Set([
+  // question words
+  'kya', 'kyaa', 'kaun', 'kaunsa', 'kahan', 'kahaan', 'kab', 'kyun', 'kyon',
+  'kaise', 'kaisa', 'kaisi', 'kitna', 'kitne', 'kitni',
+  // copula / tense / aspect
+  // 'hogi' is absent: Kannada already claims it (ಹೋಗಿ), and one token cannot be
+  // evidence for two languages at once.
+  'hai', 'hain', 'tha', 'thi', 'hoga', 'honge', 'hua', 'hui',
+  'raha', 'rahi', 'rahe', 'gaya', 'gayi', 'gaye', 'nahi', 'nahin', 'bilkul',
+  // pronouns / possessives
+  'mujhe', 'mujhko', 'mera', 'meri', 'mere', 'hamara', 'hamare',
+  'aap', 'aapka', 'aapke', 'aapko', 'tumhara', 'tumhein',
+  'uska', 'uski', 'unka', 'unke', 'unko', 'iska', 'iski', 'inka', 'inke', 'jiska',
+  // verbs of request — the bulk of what an officer actually types
+  'karo', 'karna', 'karein', 'kijiye', 'kariye', 'karke', 'karta', 'karti', 'karte',
+  'dijiye', 'dedo', 'batao', 'bataiye', 'bata', 'dekho', 'dekhiye', 'dekhna',
+  'dikhao', 'dikhaiye', 'bhejo', 'bhejiye', 'chahiye', 'chaahiye',
+  // quantifiers / connectives / time / place
+  'kuch', 'kuchh', 'sab', 'sabhi', 'sirf', 'bhi', 'bahut', 'thoda', 'zyada', 'jyada',
+  'lekin', 'magar', 'kyunki', 'kyonki', 'agar', 'phir', 'mein',
+  'abhi', 'aaj', 'yahan', 'yahaan', 'wahan', 'wahaan', 'upar', 'niche', 'andar', 'bahar',
+  'jaldi', 'wala', 'wali', 'zaroorat', 'zaruri', 'jaruri',
+  // policing register officers romanize in Hindi
+  'jankari', 'vivaran', 'mamla', 'mamle', 'apradh', 'thana', 'naam'
 ]);
 
 /**
@@ -126,13 +173,20 @@ const NEUTRAL = new Set([
  */
 function analyzeLanguage(text) {
   const body = String(text == null ? '' : text);
-  const signals = { script: false, lexicon: 0, morphology: 0, english: 0, prose: 0 };
+  const signals = { script: false, lexicon: 0, hindi: 0, morphology: 0, english: 0, prose: 0 };
 
   if (!body.trim()) return { language: null, source: 'empty', confidence: 0, signals };
 
-  if (KANNADA_SCRIPT.test(body)) {
+  // Both blocks are decisive, so when a message somehow carries both, the one with
+  // more codepoints wins rather than whichever happens to be tested first.
+  const knChars = countMatches(body, KANNADA_SCRIPT);
+  const hiChars = countMatches(body, DEVANAGARI_SCRIPT);
+  if (knChars || hiChars) {
     signals.script = true;
-    return { language: 'kn', source: 'script', confidence: 1, signals };
+    return {
+      language: hiChars > knChars ? 'hi' : 'kn',
+      source: 'script', confidence: 1, signals
+    };
   }
 
   const tokens = proseTokens(body);
@@ -140,13 +194,20 @@ function analyzeLanguage(text) {
 
   for (const t of tokens) {
     if (KN_LEXICON.has(t)) signals.lexicon++;
+    else if (HI_LEXICON.has(t)) signals.hindi++;
     else if (ENGLISH_MARKERS.has(t)) signals.english++;
     else if (t.length >= 6 && KN_SUFFIXES.some((s) => t.endsWith(s))) signals.morphology++;
   }
 
-  // Lexicon evidence with no competing English function words is conclusive.
-  if (signals.lexicon >= 1 && signals.lexicon >= signals.english) {
-    return { language: 'kn', source: 'lexicon', confidence: signals.lexicon >= 2 ? 0.9 : 0.7, signals };
+  // Lexicon evidence with no competing English function words is conclusive. Between
+  // the two Indic sets the larger count wins; a tie goes to Kannada, which is the
+  // language this deployment is actually for.
+  const indic = Math.max(signals.lexicon, signals.hindi);
+  if (indic >= 1 && indic >= signals.english) {
+    return {
+      language: signals.hindi > signals.lexicon ? 'hi' : 'kn',
+      source: 'lexicon', confidence: indic >= 2 ? 0.9 : 0.7, signals
+    };
   }
 
   // Morphology is recall, not proof. It needs TWO suffix hits in a genuine
@@ -176,8 +237,12 @@ const PRIOR_WINDOW = 12;
  * language was established by SCRIPT or LEXICON are recorded — morphology is
  * recall-oriented and would poison the prior with false Kannada.
  */
+const SUPPORTED = ['en', 'kn', 'hi'];
+const isSupported = (v) => SUPPORTED.includes(String(v || '').toLowerCase());
+const normalize = (v) => (isSupported(v) ? String(v).toLowerCase() : null);
+
 function updatePrior(prior, analysis) {
-  const list = Array.isArray(prior) ? prior.filter((x) => x === 'kn' || x === 'en') : [];
+  const list = Array.isArray(prior) ? prior.filter(isSupported) : [];
   if (!analysis || !analysis.language) return list.slice(0, PRIOR_WINDOW);
   if (analysis.source !== 'script' && analysis.source !== 'lexicon' && analysis.source !== 'markers') {
     return list.slice(0, PRIOR_WINDOW);
@@ -191,18 +256,21 @@ function updatePrior(prior, analysis) {
  */
 function priorLean(prior) {
   const list = Array.isArray(prior) ? prior : [];
-  let kn = 0;
-  let en = 0;
+  const score = { en: 0, kn: 0, hi: 0 };
+  let total = 0;
   for (let i = 0; i < list.length && i < PRIOR_WINDOW; i++) {
+    const code = normalize(list[i]);
+    if (!code) continue;
     const w = 1 / (1 + i * 0.35);
-    if (list[i] === 'kn') kn += w;
-    else if (list[i] === 'en') en += w;
+    score[code] += w;
+    total += w;
   }
-  const total = kn + en;
   if (!total) return { language: null, strength: 0 };
-  return kn > en
-    ? { language: 'kn', strength: kn / total }
-    : { language: 'en', strength: en / total };
+  // Ties resolve toward Kannada then Hindi rather than English: leaning English on a
+  // tie is the same cardinal sin this module exists to prevent, just quieter.
+  const order = ['kn', 'hi', 'en'];
+  const best = order.reduce((a, b) => (score[b] > score[a] ? b : a), order[0]);
+  return { language: best, strength: score[best] / total };
 }
 
 /**
@@ -212,20 +280,34 @@ function priorLean(prior) {
  * @param {string}   o.text        the officer's message (already transcribed if voice)
  * @param {string}   o.sttLanguage language the speech engine reported, if any
  * @param {string[]} o.prior       the officer's recent turn languages, newest first
- * @param {string}   o.preference  the officer's roster Language column
+ * @param {string}   o.preference  the officer's roster Language column — a weak default
+ * @param {string}   o.lock        a language the officer explicitly chose
  */
-function resolveLanguage({ text, sttLanguage, prior, preference } = {}) {
+function resolveLanguage({ text, sttLanguage, prior, preference, lock } = {}) {
   const analysis = analyzeLanguage(text);
   const nextPrior = updatePrior(prior, analysis);
+  const locked = normalize(lock);
+
+  // Script is the only thing that outranks an explicit choice. Writing in another
+  // script is an unambiguous act, so that turn is answered in it — but a locked
+  // language is not abandoned on the strength of romanized guesswork or a couple of
+  // English function words, because the officer said which language they want.
+  if (analysis.language && analysis.source === 'script') {
+    return { language: analysis.language, source: 'script', analysis, prior: nextPrior };
+  }
+  if (locked) {
+    return { language: locked, source: 'locked', analysis, prior: nextPrior };
+  }
 
   if (analysis.language) {
     return { language: analysis.language, source: analysis.source, analysis, prior: nextPrior };
   }
 
-  // A voice note transcribed as Kannada is direct evidence even when the
-  // romanized transcript reads as neutral.
-  if (String(sttLanguage || '').toLowerCase().startsWith('kn')) {
-    return { language: 'kn', source: 'stt', analysis, prior: ['kn', ...nextPrior].slice(0, PRIOR_WINDOW) };
+  // A voice note the engine transcribed as Kannada or Hindi is direct evidence even
+  // when the romanized transcript reads as neutral.
+  const stt = String(sttLanguage || '').toLowerCase().slice(0, 2);
+  if (stt === 'kn' || stt === 'hi') {
+    return { language: stt, source: 'stt', analysis, prior: [stt, ...nextPrior].slice(0, PRIOR_WINDOW) };
   }
 
   // Inconclusive turn: fail toward the officer, not toward English.
@@ -234,11 +316,11 @@ function resolveLanguage({ text, sttLanguage, prior, preference } = {}) {
     return { language: lean.language, source: 'prior', analysis, prior: nextPrior };
   }
 
-  const pref = String(preference || 'en').toLowerCase() === 'kn' ? 'kn' : 'en';
-  return { language: pref, source: 'preference', analysis, prior: nextPrior };
+  return { language: normalize(preference) || 'en', source: 'preference', analysis, prior: nextPrior };
 }
 
 module.exports = {
   analyzeLanguage, resolveLanguage, updatePrior, priorLean, proseTokens,
-  PRIOR_WINDOW, KN_LEXICON, ENGLISH_MARKERS
+  isSupported, normalize,
+  PRIOR_WINDOW, SUPPORTED, KN_LEXICON, HI_LEXICON, ENGLISH_MARKERS
 };

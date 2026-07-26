@@ -1,8 +1,8 @@
 'use strict';
 
 /**
- * The field channel's message pack — every string an officer can see, in English
- * and Kannada.
+ * The field channel's message pack — every string an officer can see, in English,
+ * Kannada and Hindi.
  *
  * Why a pack instead of inline strings: the single worst failure a bilingual bot
  * can commit is being written to in Kannada and answering in English. That only
@@ -67,6 +67,21 @@ const EN = {
   /* --- alerts ------------------------------------------------------------- */
   alertsUpdated: (districts, severity) => `Alerts set: *${districts}* at *${severity}* and above.`,
   alertsOff: 'Alerts off. Send "alert me about <district>" whenever you want them back.',
+  alertBody: (a, horizon, advisory) => [
+    `*${a.severity.toUpperCase()} — ${a.district}*`,
+    `Forecast for ${horizon}: *${a.predicted}* cases vs baseline ${a.baseline} (${a.trendPct >= 0 ? '+' : ''}${a.trendPct}%, z=${a.z}).`,
+    advisory,
+    '',
+    '_Decision support for deployment planning only — not grounds for action against any individual. Reply for detail, or send "alerts off" to unsubscribe._'
+  ].join('\n'),
+
+  /* --- setup (reset → language → role) ------------------------------------ */
+  languageSet: (name) => `Language set to *${name}*. I will stay in it unless you write to me in another script, or ask me to change.`,
+  askRole: 'Which access context should I use? This decides what I can show you — risk scores, associate networks and financial trails need analyst or above.',
+  onboardReady: (name, role) => `Ready, ${name}. Access context: *${role}*.\n\nAlerts and scheduled briefings will reach you here from now on.`,
+  onboardAbandoned: 'Left your setup as it was. Send "reset" whenever you want to run through it again.',
+  roleSelfDisabled: 'Your access context is set by your control room on this deployment, so I have left it alone.',
+  languageOnly: (name) => `Language set to *${name}*. Everything else is unchanged.`,
 
   /* --- undo --------------------------------------------------------------- */
   undoHint: (token) => `\n\n_Undo: reply ${token}_`,
@@ -126,6 +141,20 @@ const KN = {
 
   alertsUpdated: (districts, severity) => `Alerts ಹೊಂದಿಸಲಾಗಿದೆ: *${districts}*, *${severity}* ಮತ್ತು ಮೇಲಿನ ಮಟ್ಟ.`,
   alertsOff: 'Alerts ನಿಲ್ಲಿಸಲಾಗಿದೆ. ಬೇಕಾದಾಗ "alert me about <ಜಿಲ್ಲೆ>" ಎಂದು ಕಳುಹಿಸಿ.',
+  alertBody: (a, horizon, advisory) => [
+    `*${a.severity.toUpperCase()} — ${a.district}*`,
+    `${horizon} ಗಾಗಿ ಮುನ್ಸೂಚನೆ: *${a.predicted}* ಪ್ರಕರಣಗಳು, baseline ${a.baseline} (${a.trendPct >= 0 ? '+' : ''}${a.trendPct}%, z=${a.z}).`,
+    advisory,
+    '',
+    '_ಇದು ನಿಯೋಜನೆ ಯೋಜನೆಗೆ ಸಹಾಯಕ ಮಾಹಿತಿ ಮಾತ್ರ — ಯಾವುದೇ ವ್ಯಕ್ತಿಯ ವಿರುದ್ಧ ಕ್ರಮಕ್ಕೆ ಆಧಾರವಲ್ಲ. ವಿವರಕ್ಕೆ ಉತ್ತರಿಸಿ, ಅಥವಾ ನಿಲ್ಲಿಸಲು "alerts off" ಕಳುಹಿಸಿ._'
+  ].join('\n'),
+
+  languageSet: (name) => `ಭಾಷೆ *${name}* ಗೆ ಹೊಂದಿಸಲಾಗಿದೆ. ನೀವು ಬೇರೆ ಲಿಪಿಯಲ್ಲಿ ಬರೆಯುವವರೆಗೆ ಅಥವಾ ಬದಲಾಯಿಸಲು ಕೇಳುವವರೆಗೆ ಇದೇ ಇರುತ್ತದೆ.`,
+  askRole: 'ಯಾವ access context ಬಳಸಬೇಕು? ಇದು ನಾನು ಏನು ತೋರಿಸಬಹುದು ಎಂದು ನಿರ್ಧರಿಸುತ್ತದೆ — risk score, associate network ಮತ್ತು financial trail ಗೆ analyst ಅಥವಾ ಮೇಲಿನ ಮಟ್ಟ ಬೇಕು.',
+  onboardReady: (name, role) => `ಸಿದ್ಧ, ${name}. Access context: *${role}*.\n\nಇಂದಿನಿಂದ alerts ಮತ್ತು ನಿಗದಿತ briefing ಇಲ್ಲಿಗೆ ಬರುತ್ತವೆ.`,
+  onboardAbandoned: 'ನಿಮ್ಮ setup ಹಾಗೆಯೇ ಬಿಟ್ಟಿದ್ದೇನೆ. ಪುನಃ ಮಾಡಬೇಕಾದಾಗ "reset" ಕಳುಹಿಸಿ.',
+  roleSelfDisabled: 'ಈ deployment ನಲ್ಲಿ ನಿಮ್ಮ access context ನಿಮ್ಮ control room ನಿರ್ಧರಿಸುತ್ತದೆ, ಹಾಗಾಗಿ ನಾನು ಅದನ್ನು ಬದಲಿಸಿಲ್ಲ.',
+  languageOnly: (name) => `ಭಾಷೆ *${name}* ಗೆ ಹೊಂದಿಸಲಾಗಿದೆ. ಉಳಿದದ್ದು ಬದಲಾಗಿಲ್ಲ.`,
 
   undoHint: (token) => `\n\n_ಹಿಂತೆಗೆಯಲು: ${token} ಎಂದು ಕಳುಹಿಸಿ_`,
   undoDone: (what) => `↩️ ${what} ಹಿಂತೆಗೆಯಲಾಗಿದೆ.`,
@@ -142,11 +171,106 @@ const KN = {
   helpCard: `*KSP Field Intelligence*\n\nಬೇಕಾದದ್ದನ್ನು ಸರಳವಾಗಿ ಹೇಳಿ — command ಬೇಡ.\n\n- "ಸುರೇಶ್ ಕುಮಾರ್ history ಇದೆಯಾ"\n- "FIR 4021/2026 ಸ್ಥಿತಿ"\n- ವ್ಯಕ್ತಿಯ ಫೋಟೋ ಕಳುಹಿಸಿ → ಸಂಭಾವ್ಯ matches\n- ಫೋಟೋ + "FIR 4021/2026 ನಲ್ಲಿ ಸುರೇಶ್ ಕುಮಾರ್ ಎಂದು save ಮಾಡಿ" → ನೋಂದಣಿ\n- ದಾಖಲೆಯ ಫೋಟೋ ಕಳುಹಿಸಿ → ಓದಿ ಹುಡುಕುತ್ತೇನೆ\n- "ಮುಂದಿನ ತಿಂಗಳು ಮೈಸೂರಿನಲ್ಲಿ ಏನು flag ಆಗಿದೆ"\n- "ಬಳ್ಳಾರಿ ಬಗ್ಗೆ alert ಕೊಡಿ" / "alerts off"\n\nVoice note ಮತ್ತು location ಹಂಚಿಕೆಯೂ ಕೆಲಸ ಮಾಡುತ್ತದೆ. ಇಲ್ಲಿನ ಎಲ್ಲವೂ ನಿಮ್ಮ ಹೆಸರಿನಲ್ಲಿ ದಾಖಲಾಗುತ್ತದೆ.`
 };
 
-const PACKS = { en: EN, kn: KN };
+const HI = {
+  unregistered: 'यह नंबर KSP Field Intelligence के लिए रजिस्टर नहीं है. जुड़ने के लिए अपने control room से संपर्क करें.',
+  throttled: (limit) => `इस चैनल पर प्रति घंटा ${limit} संदेशों की सीमा पूरी हो गई है. अगले घंटे रीसेट होगी — ज़रूरी हो तो सीधे control room से संपर्क करें.`,
+  restricted: (role) => `इसके लिए ${role} भूमिका से ऊपर का access चाहिए. आपका control room उसे मांग सकता है. केस विवरण, पिछले अपराध और क्षेत्र के alerts मैं अब भी दे सकता हूँ.`,
+
+  frameCancelled: 'वह सवाल छोड़ दिया. आगे जो चाहिए भेजें — नाम, FIR नंबर, या फोटो.',
+  frameError: 'आपका जवाब संभालते समय कुछ गड़बड़ हुई — गलती मेरी तरफ़ की है. एक बार फिर भेजें.',
+  frameMaxRetriesSuffix: '\n\n(उसे अभी छोड़ रहा हूँ. जब तैयार हों, नए सिरे से शुरू करें.)',
+  framePickPrompt: (prompt, options) =>
+    `${prompt}\n\n${options.map((o, i) => `${i + 1}. ${o.label}`).join('\n')}\n\nनंबर भेजें, या "cancel".`,
+  frameUnknownPick: (options) =>
+    `समझ नहीं आया आपका मतलब कौन सा था. 1 से ${options.length} तक का नंबर भेजें, या "cancel".`,
+
+  imageAck: (seen) => {
+    if (seen.faces === 1) return '📷 फोटो मिल गई — एक चेहरा दिख रहा है.';
+    if (seen.faces > 1) return `📷 फोटो मिल गई — ${seen.faces} चेहरे दिख रहे हैं.`;
+    return '📷 फोटो मिल गई.';
+  },
+  imageUnreadable: 'उसमें से काम का कुछ नहीं पढ़ पाया. पास से, सीधा, अच्छी रोशनी में लिया गया फोटो आमतौर पर चलता है — या जो चाहिए वह टाइप कर दें.',
+  voiceUnclear: 'वह voice note साफ़ सुनाई नहीं दिया. किसी शांत जगह पर दोबारा कोशिश करें, या टाइप कर दें.',
+  voiceFailed: 'वह voice note लिखित में नहीं बदल सका. अपनी बात टाइप कर दें, आगे मैं देख लूँगा.',
+  mediaTooLarge: 'वह फ़ाइल बहुत बड़ी है — 8 MB से कम की भेजें.',
+  mediaDownloadFailed: 'वह attachment WhatsApp से नहीं आया. दोबारा भेजें.',
+  unsupportedType: (kind) => `मैं text, voice note, फोटो, PDF और साझा किया गया location संभाल सकता हूँ. ${kind ? `${kind} संदेश` : 'वह'} मैं पढ़ नहीं सकता — इनमें से किसी एक रूप में भेजें.`,
+  locationNote: (near, km) => `(अधिकारी ने location साझा किया. सबसे नज़दीकी ज़िला केंद्र: ${near}, लगभग ${km} कि.मी. इसे उनका अनुमानित क्षेत्र मानें.)`,
+  locationUnmatched: '(अधिकारी ने जो location साझा किया वह किसी ज़िले से मेल नहीं खाया.)',
+
+  idNoFace: 'उस फोटो में कोई चेहरा नहीं है. अगर वह दस्तावेज़, FIR कॉपी या नंबर प्लेट है तो दोबारा भेजकर "read this" कहें — मैं OCR चला दूँगा.',
+  idMultipleFaces: (n) => `उस फोटो में ${n} चेहरे हैं, तो तुलना गलत व्यक्ति पर जा सकती है. सिर्फ़ एक व्यक्ति वाला फोटो भेजें.`,
+  idEmptyGallery: 'अभी कोई reference फोटो दर्ज नहीं है, तो तुलना करने के लिए कुछ नहीं है. नाम और FIR के साथ फोटो भेजकर पहला दर्ज करें — हर दर्ज फोटो अगली जाँच को संभव बनाता है.',
+  idNoMatch: (compared) => `रिपोर्ट करने की सीमा से ऊपर कोई candidate नहीं — ${compared} दर्ज फोटो से तुलना की गई. यह क्लीयरेंस नहीं है: वह व्यक्ति दर्ज ही न हो, यह भी हो सकता है. दस्तावेज़ से पुष्टि करें.`,
+  idNeverProof: 'फोटो की तुलना पुष्टि के लिए एक सुराग है, पहचान नहीं, और अकेले उसके आधार पर कार्रवाई नहीं की जा सकती. दस्तावेज़ या रिकॉर्ड से पक्का करें.',
+
+  enrollNeedName: 'वह फोटो किस व्यक्ति के नाम पर दर्ज करूँ, बताएँ — और FIR नंबर हो तो दें, जिससे आगे कोई match केस के साथ आए.',
+  enrolled: (name, crimeNo) => `वह फोटो *${name}* के लिए${crimeNo ? ` ${crimeNo} के विरुद्ध` : ''} दर्ज कर दिया.`,
+  enrollStale: 'वह पुष्टि किसी पुराने संदेश की है, तो मैंने कुछ नहीं किया. यह मौजूदा है.',
+  tapStale: 'वह बटन किसी पुराने संदेश का है, तो मैंने कुछ नहीं किया — पुराने सवाल पर दबाने से गलत रिकॉर्ड छू जाता है. जो चाहिए दोबारा भेजें.',
+
+  alertsUpdated: (districts, severity) => `Alerts सेट: *${districts}*, *${severity}* और उससे ऊपर.`,
+  alertsOff: 'Alerts बंद. जब चाहें "alert me about <ज़िला>" भेज दें.',
+  alertBody: (a, horizon, advisory) => [
+    `*${a.severity.toUpperCase()} — ${a.district}*`,
+    `${horizon} का पूर्वानुमान: *${a.predicted}* केस, baseline ${a.baseline} (${a.trendPct >= 0 ? '+' : ''}${a.trendPct}%, z=${a.z}).`,
+    advisory,
+    '',
+    '_यह केवल तैनाती योजना के लिए सहायक जानकारी है — किसी व्यक्ति के विरुद्ध कार्रवाई का आधार नहीं. विवरण के लिए उत्तर दें, या बंद करने के लिए "alerts off" भेजें._'
+  ].join('\n'),
+
+  languageSet: (name) => `भाषा *${name}* पर सेट कर दी. जब तक आप किसी दूसरी लिपि में न लिखें या बदलने को न कहें, यही रहेगी.`,
+  askRole: 'कौन सा access context इस्तेमाल करूँ? इससे तय होता है कि मैं क्या दिखा सकता हूँ — risk score, associate network और financial trail के लिए analyst या उससे ऊपर चाहिए.',
+  onboardReady: (name, role) => `तैयार, ${name}. Access context: *${role}*.\n\nअब से alerts और निर्धारित briefing यहीं आएँगे.`,
+  onboardAbandoned: 'आपका setup वैसा ही छोड़ दिया. दोबारा करना हो तो "reset" भेजें.',
+  roleSelfDisabled: 'इस deployment पर आपका access context आपका control room तय करता है, तो मैंने उसे नहीं छेड़ा.',
+  languageOnly: (name) => `भाषा *${name}* पर सेट कर दी. बाकी सब वैसा ही है.`,
+
+  undoHint: (token) => `\n\n_पलटने के लिए: ${token} भेजें_`,
+  undoDone: (what) => `↩️ ${what} पलट दिया.`,
+  undoNotFound: 'वह undo कोड नहीं मिला. उसकी अवधि पूरी हो गई हो, या पहले ही इस्तेमाल हो गया हो.',
+  undoAlready: 'वह पहले ही पलटा जा चुका है.',
+
+  refusedNegated: 'आपके संदेश में उसे न करने को कहा गया था, तो मैंने नहीं किया. आपको जो चाहिए साफ़ बताएँ, मैं कर दूँगा — या गलती से लिखा हो तो "मत" हटाकर दोबारा भेजें.',
+  refusedHypothetical: 'वह आदेश से ज़्यादा "क्या होगा" वाला सवाल लगता है, तो मैंने कुछ नहीं किया. सच में करवाना हो तो सीधे कहें, कर दूँगा.',
+
+  engineError: 'उसे संभालते समय मेरी तरफ़ कुछ टूट गया — आपके संदेश की गलती नहीं. दोबारा भेजें, मैं फिर कोशिश करूँगा.',
+  timeout: 'जवाब आने में बहुत देर लग गई. दोबारा भेजें.',
+  notUnderstood: 'मैं इसे ठीक से करना चाहता हूँ पर समझ नहीं पाया आपको क्या चाहिए. मैं FIR नंबर से केस, नाम से पिछले अपराध, दस्तावेज़ के फोटो की पढ़ाई, फोटो किससे मेल खा सकता है उसकी जाँच, या किसी ज़िले की alert तस्वीर दे सकता हूँ. इनमें से कौन सा?',
+  groundingBlocked: 'उसे रिकॉर्ड से पक्का नहीं कर सका, तो मैं ऐसे आंकड़े नहीं दूँगा जिन पर टिक न सकूँ. FIR नंबर या पूरा नाम बताएँ, असली आंकड़े निकाल दूँगा.',
+  helpCard: `*KSP Field Intelligence*\n\nजो चाहिए सीधे कह दें — कोई command नहीं.\n\n- "सुरेश कुमार का history है क्या"\n- "FIR 4021/2026 की स्थिति"\n- किसी व्यक्ति का फोटो भेजें → संभावित matches\n- फोटो + "FIR 4021/2026 में सुरेश कुमार के नाम save करो" → दर्ज\n- दस्तावेज़ का फोटो भेजें → पढ़कर खोज लूँगा\n- "अगले महीने मैसूर में क्या flag हुआ है"\n- "बल्लारी के alerts दो" / "alerts off"\n\nVoice note और location साझा करना भी चलता है. यहाँ सब कुछ आपके नाम पर दर्ज होता है.`
+};
+
+const PACKS = { en: EN, kn: KN, hi: HI };
+
+/**
+ * The language menu, deliberately identical in every pack.
+ *
+ * Each name is written in its own script, because at the moment this menu is shown
+ * the officer's language is exactly what we do not know — offering "Kannada" in
+ * Latin script to someone who reads Kannada is the same failure this pack exists to
+ * prevent, one step earlier.
+ */
+const LANGUAGES = [
+  { code: 'en', label: 'English' },
+  { code: 'kn', label: 'ಕನ್ನಡ' },
+  { code: 'hi', label: 'हिन्दी' }
+];
+
+const languageName = (code) => (LANGUAGES.find((l) => l.code === code) || LANGUAGES[0]).label;
+
+/**
+ * The setup prompt, shown in all three languages at once.
+ *
+ * Not taken from a pack on purpose: this is the one message sent before any
+ * language is known, so picking a pack for it would mean guessing, and a guess here
+ * is what strands an officer who cannot read the menu.
+ */
+const ASK_LANGUAGE = 'Choose your language\nಭಾಷೆ ಆಯ್ಕೆ ಮಾಡಿ\nअपनी भाषा चुनें';
 
 /** The message pack for a language, falling back to English. */
 function messages(language) {
   return PACKS[String(language || 'en').toLowerCase()] || EN;
 }
 
-module.exports = { messages, EN, KN };
+module.exports = { messages, EN, KN, HI, LANGUAGES, languageName, ASK_LANGUAGE };
