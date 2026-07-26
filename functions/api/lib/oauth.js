@@ -14,6 +14,27 @@
 
 let _cache = { token: null, exp: 0 };
 
+/**
+ * Throw away the token we hold, in-process and in the shared cache.
+ *
+ * Needed because an access token's stated expiry is not the only thing that ends its
+ * life: Zoho invalidates a self-client's earlier access tokens when a newer one is
+ * minted, so a token with fifty minutes left can already be rejected. Without this the
+ * caller retries forever with the same dead credential. Called only after Zoho has
+ * actually refused it — see lib/llm.js.
+ */
+async function invalidateQuickMLToken(app) {
+  _cache = { token: null, exp: 0 };
+  try {
+    if (app && app.cache) {
+      // Overwritten with a one-hour TTL rather than deleted: `delete` is not uniformly
+      // available across SDK versions, and a stored empty string fails the
+      // `startsWith('{')` guard on read, which is the same outcome.
+      await app.cache().segment().put('glm_access_token', '', 1);
+    }
+  } catch (_) { /* the cache is an optimisation; the in-process clear is what matters */ }
+}
+
 async function getQuickMLToken(app) {
   const now = Date.now();
   if (_cache.token && now < _cache.exp - 120000) return _cache.token;
@@ -58,4 +79,4 @@ async function getQuickMLToken(app) {
   return _cache.token;
 }
 
-module.exports = { getQuickMLToken };
+module.exports = { getQuickMLToken, invalidateQuickMLToken };

@@ -11,7 +11,7 @@
  *   { message, content, toolCalls, supportsTools, provider, usage, raw }
  */
 
-const { getQuickMLToken } = require('./oauth');
+const { getQuickMLToken, invalidateQuickMLToken } = require('./oauth');
 
 const QUICKML_ENDPOINT = process.env.QUICKML_LLM_ENDPOINT || '';
 const QUICKML_MODEL = process.env.QUICKML_MODEL || 'crm-di-glm47b_30b_it';
@@ -41,9 +41,11 @@ async function chatLLM(app, opts) {
   return chatQuickML(app, opts);
 }
 
+/** Zoho's answer when the access token we hold is no longer accepted. */
+const AUTH_FAILED = /INVALID_OAUTHTOKEN|AUTHENTICATION_FAILURE|INVALID_TOKEN|EXPIRED_TOKEN/i;
+
 async function chatQuickML(app, { messages, tools, toolChoice, maxTokens = 1500, temperature } = {}) {
   if (!QUICKML_ENDPOINT) throw new Error('QUICKML_LLM_ENDPOINT not set');
-  const token = await getQuickMLToken(app);
   const nativeTools = supportsNativeTools();
 
   const body = {
@@ -60,27 +62,47 @@ async function chatQuickML(app, { messages, tools, toolChoice, maxTokens = 1500,
     body.tool_choice = toolChoice || 'auto';
   }
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), Number(process.env.LLM_TIMEOUT_MS || 60000));
-  let r, j;
-  try {
-    r = await fetch(QUICKML_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Zoho-oauthtoken ' + token,
-        ...(QUICKML_ORG ? { 'CATALYST-ORG': QUICKML_ORG } : {})
-      },
-      body: JSON.stringify(body),
-      signal: ctrl.signal
-    });
-    j = await r.json().catch(() => ({}));
-  } catch (e) {
-    if (e.name === 'AbortError') throw new Error('LLM_TIMEOUT');
-    throw e;
-  } finally {
-    clearTimeout(timer);
+  const payload = JSON.stringify(body);
+  const send = async (token) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), Number(process.env.LLM_TIMEOUT_MS || 60000));
+    try {
+      const res = await fetch(QUICKML_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Zoho-oauthtoken ' + token,
+          ...(QUICKML_ORG ? { 'CATALYST-ORG': QUICKML_ORG } : {})
+        },
+        body: payload,
+        signal: ctrl.signal
+      });
+      return { res, json: await res.json().catch(() => ({})) };
+    } catch (e) {
+      if (e.name === 'AbortError') throw new Error('LLM_TIMEOUT');
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  let { res: r, json: j } = await send(await getQuickMLToken(app));
+
+  // ONE retry, only on an authentication failure, only after discarding the token.
+  //
+  // This is not defensive padding. Zoho invalidates a self-client's earlier access
+  // tokens when a newer one is minted, so a token cached with an hour left on its
+  // nominal expiry can already be dead — and it will be, whenever anything else
+  // refreshed after this instance did. The observed symptom was every model-backed
+  // surface in the product, web chat and WhatsApp alike, answering "something went
+  // wrong" simultaneously and indefinitely, because nothing ever discarded the token
+  // that was being rejected. A chat completion that failed auth ran nothing, so
+  // repeating it is safe.
+  if ((!r.ok || j.error) && AUTH_FAILED.test(JSON.stringify(j.error || j))) {
+    await invalidateQuickMLToken(app);
+    ({ res: r, json: j } = await send(await getQuickMLToken(app)));
   }
+
   if (!r.ok || j.error) throw new Error('QuickML GLM error: ' + JSON.stringify(j.error || j).slice(0, 400));
 
   // Catalyst GLM serving returns a flat shape: { response, tool_calls, usage, model }.

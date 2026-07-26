@@ -254,7 +254,29 @@ app.get('/admin/status', adminGuard, async (req, res) => {
         out[t] = obj ? Number(Object.values(obj)[0]) : 0;
       } catch (_) { out[t] = 'table_missing'; }
     }
-    res.json({ counts: out });
+    // `?llm=1` probes the model with a two-token prompt and reports what came back.
+    // Without it, every model failure — an expired refresh token, a revoked scope, an
+    // endpoint change, a QuickML outage — presents identically as "Sorry, something went
+    // wrong processing that" on every surface at once, and the only way to tell them
+    // apart was to reconstruct the call by hand outside the function. The research
+    // engine's own /health reports `model.last_error` for the same reason.
+    let llm;
+    if (String(req.query.llm || '') === '1') {
+      const { chatLLM, modelLabel } = require('./lib/llm');
+      const started = Date.now();
+      try {
+        const r = await chatLLM(adminApp, {
+          messages: [{ role: 'user', content: 'Reply with the single word: ok' }],
+          maxTokens: 16
+        });
+        llm = { ok: true, model: modelLabel(), ms: Date.now() - started,
+                reply: String(r.content || '').slice(0, 80) };
+      } catch (e) {
+        llm = { ok: false, model: modelLabel(), ms: Date.now() - started,
+                error: String((e && e.message) || e).slice(0, 400) };
+      }
+    }
+    res.json({ counts: out, ...(llm ? { llm } : {}) });
   } catch (e) {
     res.status(500).json({ error: 'status_failed', message: String(e && e.message || e) });
   }
