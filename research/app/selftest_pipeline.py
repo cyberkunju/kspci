@@ -288,7 +288,7 @@ def test_api() -> None:
     from fastapi.testclient import TestClient
 
     from . import main as main_mod
-    from .config import settings
+    from .config import BUDGETS, budget_for, settings
 
     # The service must not be drivable without a key; the test supplies one so the
     # governance checks below are reached rather than short-circuited by the auth gate.
@@ -296,7 +296,7 @@ def test_api() -> None:
     client = TestClient(main_mod.app)
     key = {"x-research-key": "test-key"}
     body = {"subject": "Suresh Kumar", "kind": "person", "purpose": "tracing absconding accused",
-            "mode": "quick", "role": "investigator", "officer": "off_1"}
+            "mode": "standard", "role": "investigator", "officer": "off_1"}
 
     check("no key is rejected", client.post("/research", json=body).status_code == 401)
     check("a wrong key is rejected", client.post(
@@ -308,10 +308,9 @@ def test_api() -> None:
     # Syntactically broken JSON is a separate case and deliberately not asserted:
     # FastAPI parses the raw body before it solves dependencies, so that still answers
     # 422 — which discloses nothing beyond "this endpoint expects JSON".
-    for route in ("/research", "/research/sync"):
-        r = client.post(route, json={})
-        check(f"an unauthenticated empty body on {route} is 401, not a schema hint",
-              r.status_code == 401, f"{r.status_code} {r.text[:60]}")
+    r = client.post("/research", json={})
+    check("an unauthenticated empty body is 401, not a schema hint",
+          r.status_code == 401, f"{r.status_code} {r.text[:60]}")
     check("an unauthenticated stream is refused",
           client.get("/research/rq_x/stream").status_code == 401)
 
@@ -330,6 +329,15 @@ def test_api() -> None:
 
     r = client.get("/research/rq_does_not_exist", headers=key)
     check("an unknown run is a clear 404, not an empty result", r.status_code == 404)
+
+    check("quick mode no longer exists",
+          "quick" not in BUDGETS and sorted(BUDGETS) == ["deep", "standard"],
+          str(sorted(BUDGETS)))
+    check("an unknown mode falls back to standard rather than failing",
+          budget_for("quick").name == "standard", budget_for("quick").name)
+    check("there is no synchronous endpoint",
+          client.post("/research/sync", json=body, headers=key).status_code in (404, 405),
+          str(client.post("/research/sync", json=body, headers=key).status_code))
 
     h = client.get("/health", headers=key).json()
     check("health reports which sources are live", h["sources"]["gdelt"] is True)
@@ -355,6 +363,45 @@ def test_api() -> None:
     check("the result comes back through the poll",
           bool(state.get("result", {}).get("findings")),
           str(len((state.get("result") or {}).get("findings", []))))
+
+    head("internal records and the callback")
+    # Records travel through and are carried into the result, so a report can show what
+    # our own database holds beside what the open web says. The service never reads a
+    # database itself; only the caller can read the caller's records.
+    delivered: list[dict] = []
+
+    async def fake_deliver(run, body):
+        delivered.append({"url": body.callback_url, "context": body.callback_context,
+                          "state": run.state,
+                          "records": (run.result or {}).get("records", [])})
+
+    main_mod._deliver = fake_deliver  # type: ignore[assignment]
+    r = client.post("/research", headers=key, json={
+        **body,
+        "records": ["3 cases on record in Mysuru district", "arrested 2023-04-18"],
+        "callback_url": "https://example.invalid/whatsapp/research/deliver",
+        "callback_context": {"phone": "919000000000"}})
+    check("a run with records and a callback starts", r.status_code == 200, r.text[:80])
+    rid = r.json().get("id", "")
+    for _ in range(80):
+        st = client.get(f"/research/{rid}", headers=key).json()
+        if st["state"] in {"done", "failed"}:
+            break
+        _t.sleep(0.1)
+    check("records are carried into the result",
+          (st.get("result") or {}).get("records") == [
+              "3 cases on record in Mysuru district", "arrested 2023-04-18"],
+          str((st.get("result") or {}).get("records")))
+    check("the callback fires once the run is done", len(delivered) == 1, str(delivered))
+    check("and it echoes the caller's context",
+          delivered and delivered[0]["context"] == {"phone": "919000000000"},
+          str(delivered[:1]))
+
+    # [DB] is a citation like any other: valid only when records were actually supplied.
+    from .claims import _records_block
+    check("no records means no records block", _records_block([]) == "")
+    check("records are labelled as internal in the prompt",
+          "OUR RECORDS" in _records_block(["x"]) and "[DB]" in _records_block(["x"]))
 
 
 if __name__ == "__main__":
