@@ -42,6 +42,9 @@ features**.
 | 13 | **[13-file-reference.md](./13-file-reference.md)** | File‑by‑file reference of the whole repo |
 | 14 | **[14-zoho-ai-migration.md](./14-zoho-ai-migration.md)** | Migration to Zoho/Zia AI (QuickML LLM + Zia OCR + Web Speech), provisioning steps |
 | 15 | **[15-whatsapp-field-bot.md](./15-whatsapp-field-bot.md)** | WhatsApp field-officer channel — agent, photo identification, alerts, security model, provisioning |
+| 16 | **[16-research-engine.md](./16-research-engine.md)** | Open-source research engine — anchored discovery, attribution bands, span-verified claims, governance, AppSail service |
+| 17 | **[17-remaining-work.md](./17-remaining-work.md)** | What is not finished — blockers, real gaps, account actions, and the shortest path to a working demo |
+| 18 | **[18-engine-techniques.md](./18-engine-techniques.md)** | Techniques studied from Firecrawl, SearXNG and the published retrieval literature — what we adopted, what we rejected, and the licence boundary |
 
 ---
 

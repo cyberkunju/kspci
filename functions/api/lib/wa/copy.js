@@ -83,6 +83,13 @@ const EN = {
   roleSelfDisabled: 'Your access context is set by your control room on this deployment, so I have left it alone.',
   languageOnly: (name) => `Language set to *${name}*. Everything else is unchanged.`,
 
+  /* --- open-source research ----------------------------------------------- */
+  // The officer must be told two things and no more: that it is running, and roughly how
+  // long. A progress promise with no time attached is what makes people send the request
+  // again, which costs the instance two runs.
+  researchWait: (subject) => `Searching the open internet for *${subject}* now — news, court and government sources in English, Hindi and Kannada, plus whatever our own records hold. About a minute. I will send the findings here; you do not need to wait or ask again.`,
+  researchWaitDeep: (subject) => `Running a *deep* search on *${subject}* — the same sources, read much wider. Up to five minutes. I will send the findings here when they are in; carry on with anything else meanwhile.`,
+
   /* --- undo --------------------------------------------------------------- */
   undoHint: (token) => `\n\n_Undo: reply ${token}_`,
   undoDone: (what) => `↩️ Reversed ${what}.`,
@@ -157,6 +164,8 @@ const KN = {
   languageOnly: (name) => `ಭಾಷೆ *${name}* ಗೆ ಹೊಂದಿಸಲಾಗಿದೆ. ಉಳಿದದ್ದು ಬದಲಾಗಿಲ್ಲ.`,
 
   undoHint: (token) => `\n\n_ಹಿಂತೆಗೆಯಲು: ${token} ಎಂದು ಕಳುಹಿಸಿ_`,
+  researchWait: (subject) => `*${subject}* ಬಗ್ಗೆ ಈಗ ಆನ್‌ಲೈನ್ ಹುಡುಕುತ್ತಿದ್ದೇನೆ — ಇಂಗ್ಲಿಷ್, ಹಿಂದಿ ಮತ್ತು ಕನ್ನಡ news, court ಹಾಗೂ ಸರ್ಕಾರಿ ಮೂಲಗಳು, ಜೊತೆಗೆ ನಮ್ಮ ದಾಖಲೆಗಳೂ. ಸುಮಾರು ಒಂದು ನಿಮಿಷ. ಫಲಿತಾಂಶ ಇಲ್ಲಿಯೇ ಕಳುಹಿಸುತ್ತೇನೆ; ಕಾಯುವ ಅಥವಾ ಪುನಃ ಕೇಳುವ ಅಗತ್ಯವಿಲ್ಲ.`,
+  researchWaitDeep: (subject) => `*${subject}* ಬಗ್ಗೆ *deep* ಹುಡುಕಾಟ ನಡೆಸುತ್ತಿದ್ದೇನೆ — ಅದೇ ಮೂಲಗಳು, ಹೆಚ್ಚು ವಿಸ್ತಾರವಾಗಿ. ಗರಿಷ್ಠ ಐದು ನಿಮಿಷ. ಸಿದ್ಧವಾದಾಗ ಇಲ್ಲಿಯೇ ಕಳುಹಿಸುತ್ತೇನೆ; ಅಷ್ಟರಲ್ಲಿ ಬೇರೆ ಕೆಲಸ ಮುಂದುವರಿಸಿ.`,
   undoDone: (what) => `↩️ ${what} ಹಿಂತೆಗೆಯಲಾಗಿದೆ.`,
   undoNotFound: 'ಆ undo ಕೋಡ್ ಸಿಗಲಿಲ್ಲ. ಅವಧಿ ಮುಗಿದಿರಬಹುದು, ಅಥವಾ ಈಗಾಗಲೇ ಬಳಸಿರಬಹುದು.',
   undoAlready: 'ಅದನ್ನು ಈಗಾಗಲೇ ಹಿಂತೆಗೆಯಲಾಗಿದೆ.',
@@ -225,6 +234,9 @@ const HI = {
   onboardAbandoned: 'आपका setup वैसा ही छोड़ दिया. दोबारा करना हो तो "reset" भेजें.',
   roleSelfDisabled: 'इस deployment पर आपका access context आपका control room तय करता है, तो मैंने उसे नहीं छेड़ा.',
   languageOnly: (name) => `भाषा *${name}* पर सेट कर दी. बाकी सब वैसा ही है.`,
+
+  researchWait: (subject) => `*${subject}* के बारे में अभी खुले इंटरनेट पर खोज रहा हूँ — अंग्रेज़ी, हिंदी और कन्नड़ के news, court और सरकारी स्रोत, साथ में हमारे रिकॉर्ड भी. करीब एक मिनट. नतीजे यहीं भेज दूँगा; इंतज़ार करने या दोबारा पूछने की ज़रूरत नहीं.`,
+  researchWaitDeep: (subject) => `*${subject}* पर *deep* खोज चल रही है — वही स्रोत, बहुत ज़्यादा गहराई से. पाँच मिनट तक लग सकते हैं. तैयार होने पर यहीं भेज दूँगा; तब तक कोई और काम देखते रहें.`,
 
   undoHint: (token) => `\n\n_पलटने के लिए: ${token} भेजें_`,
   undoDone: (what) => `↩️ ${what} पलट दिया.`,

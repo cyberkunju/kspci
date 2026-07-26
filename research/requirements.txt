@@ -1,0 +1,20 @@
+# KSP Research Engine — Catalyst AppSail (custom Docker runtime).
+#
+# Deliberately small. Every dependency here replaces work we would otherwise do
+# badly ourselves; nothing here is a framework that wants to own the pipeline.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+httpx[http2]==0.28.1
+pydantic==2.10.4
+
+# Boilerplate removal. The single highest-value dependency in this service: it
+# turns a news page into just the article, in pure Python, with no browser.
+trafilatura==2.0.0
+
+# Robust HTML/XML parsing for the source adapters that read search pages and
+# feeds. lxml is trafilatura's engine anyway, so this is not a new footprint.
+lxml==5.3.0
+
+# Judgments, gazettes and advisories are PDFs. pypdf is the light option; we do
+# not need layout reconstruction for text extraction and citation.
+pypdf==5.1.0

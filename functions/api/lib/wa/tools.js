@@ -502,6 +502,72 @@ const TOOLS = {
     }
   },
 
+  open_source_research: {
+    roles: OPERATIONAL,
+    args: '{"tool":"open_source_research","subject":"person, crime or event","kind":"person|crime|event|organisation","purpose":"why this is needed, in a few words","mode":"standard|deep"}',
+    describe: 'Search the open internet — news, court, government, forums and social, in Kannada, Hindi and English — for a person, crime, event or organisation. Anchors the search on our own records automatically and grades every source by how confident we are that it is really about this subject. It does NOT answer inside this turn: a real search takes about a minute (`standard`) or up to five (`deep`), so it starts the search and the findings arrive here as a separate message. Do not call it twice for the same subject, and do not offer to wait. Nothing it returns is evidence. Requires a purpose, which is recorded.',
+    async run(ctx, args) {
+      const research = require('../research');
+      const waResearch = require('./research');
+      if (!research.configured()) {
+        return { error: 'Open-source research is not configured on this deployment. Answer from the crime database instead.' };
+      }
+      const subject = guard.sanitizeIdentifier(args.subject, { max: 120 });
+      if (!subject) return { error: 'A usable subject is required (no quotes).' };
+      const kind = ['person', 'crime', 'event', 'organisation', 'identifier', 'topic']
+        .includes(String(args.kind || '')) ? args.kind : 'person';
+      // Purpose binding is a governance requirement, not a formality: the engine
+      // refuses an unexplained run and records the refusal. It is not defaulted here —
+      // a default would satisfy the check while destroying the thing it protects.
+      const purpose = String(args.purpose || '').trim().slice(0, 200);
+      if (purpose.split(/\s+/).filter(Boolean).length < 3) {
+        return { error: 'A purpose of at least a few words is required, and it is recorded against this officer. State why the research is needed, e.g. "tracing absconding accused in FIR 118/2023".' };
+      }
+      const mode = research.MODES.includes(String(args.mode || '')) ? args.mode : 'standard';
+
+      // A run whose result has nowhere to go is worse than a refusal, because the officer
+      // waits for it. So the delivery address is resolved BEFORE the run is started.
+      const callbackUrl = waResearch.callbackUrl();
+      if (!callbackUrl) {
+        return { error: 'Open-source research cannot be delivered on this channel: neither RESEARCH_CALLBACK_URL nor WA_PROCESS_URL is configured. Use the desk workspace.' };
+      }
+      const phone = ctx.officer && ctx.officer.phone;
+      if (!phone) {
+        return { error: 'Open-source research needs a registered handset to deliver the findings to.' };
+      }
+
+      let out;
+      try {
+        // Started, not awaited to completion. A standard run is 35-70 seconds and a deep
+        // run up to five minutes; this function is killed at 30. The engine POSTs the
+        // finished result to /research/callback and lib/wa/research.js sends it on.
+        out = await research.start(ctx.app, {
+          subject, kind, purpose, mode,
+          crimeNo: args.crimeNo ? guard.sanitizeIdentifier(args.crimeNo, { max: 80 }) : '',
+          // The officer id, not the handset number: the engine writes this into its
+          // audit line on stdout, and a phone number does not need to be there.
+          role: ctx.officer.role, officer: ctx.officer.officerId || ctx.officer.name,
+          callbackUrl,
+          // Everything the callback needs to find this officer again and speak their
+          // language. The engine stores it opaquely and echoes it back untouched.
+          callbackContext: { channel: 'whatsapp', phone, language: ctx.language, subject }
+        });
+      } catch (e) {
+        return { error: 'Open-source research could not be started: ' + String((e && e.message) || e).slice(0, 160) };
+      }
+
+      // Terminal on purpose. The model has nothing to add to "it is running, I will send
+      // it" and everything to lose by improvising a summary of a run that has not
+      // happened — or worse, by promising to wait for it.
+      const m = ctx.messages;
+      return {
+        _TERMINAL: true,
+        reply: mode === 'deep' ? m.researchWaitDeep(subject) : m.researchWait(subject),
+        researchStarted: { id: out.id || '', mode: out.mode || mode, subject }
+      };
+    }
+  },
+
   whoami: {
     roles: ANY,
     args: '{"tool":"whoami"}',

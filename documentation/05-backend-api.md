@@ -108,6 +108,32 @@ stats, and an LLM‑generated summary + investigative leads. See framework #6.
 | GET | `/analytics/watchlist` | analyst+ | Reoffending watchlist with logistic reoffend probability. Query `?limit=`. |
 | GET | `/analytics/brief` | any | LLM‑written decision‑ready early‑warning brief (English/Kannada) from live forecast + alerts. |
 
+## Open-source research (`lib/research.js` → AppSail service)
+
+Full design notes: [16-research-engine.md](./16-research-engine.md). A run takes 40–300
+seconds and this function is killed at 30, so these routes start runs on the AppSail
+engine and poll it. The function's job on the way in is to **supply the identity anchors
+from our own Data Store** — district, station, age, FIR numbers, sections, co-accused —
+which is what lets the engine tell one Suresh Kumar from another.
+
+| Method | Path | Roles | Returns |
+|---|---|---|---|
+| POST | `/research` | any header role; the engine enforces the real rule | `{ id, state, mode, poll, stream, anchors, anchorNotes }`. Body: `subject`, `kind` (`person`\|`crime`\|`event`\|`organisation`\|`identifier`\|`topic`), `purpose` (**required**, ≥3 real words, recorded), `question?`, `mode?` (`standard`\|`deep`), `crimeNo?`, `callbackUrl?` + `callbackContext?` for channels that cannot poll. |
+| POST | `/research/callback` | internal (`x-research-callback-key`) | Where the engine POSTs a finished run. Dispatches on `context.channel` — today that means WhatsApp delivery. There is **no** `/research/sync`: it existed for a `quick` mode that read eight pages, which was answering a different question from the one the officer asked. Both were removed. |
+| GET | `/research/:id` | as above | `{ state, stage, message, events[], result? }`. `state` ∈ queued/running/done/failed/cancelled. |
+| DELETE | `/research/:id` | as above | cancels a running job |
+| GET | `/research/health` | any | engine reachability, which source tiers are live, whether a model is configured |
+
+Authorization is **not** duplicated in the function. `requireRole()` checks the header is a
+real role; the engine's `governance.py` owns which role may research what and which
+subjects are refused outright — two copies of that rule would drift, and the copy that
+drifts loose is the one that matters. The subject's role (victim / complainant / accused)
+is read from the Data Store and **never** from the caller.
+
+Research-specific statuses: `403` refused by governance (`purpose`, `role`,
+`subject_role`, `bad_kind`), `429` daily cap reached, `503` `research_unconfigured`,
+`504` `research_timeout`, `502` `research_unreachable`.
+
 ## Admin (seeding & maintenance) — `x-admin-key` required
 
 | Method | Path | Description |
