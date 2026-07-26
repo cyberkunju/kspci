@@ -410,6 +410,107 @@ async def mojeek(f: Fetcher, query: str, *, limit: int = 12) -> list[Hit]:
     return out
 
 
+#: Bing's news RSS output. The single highest-recall tier in this engine, and the one
+#: that fixes its worst blind spot: the on-site registry is Karnataka plus national
+#: English plus Kannada, so a Uttar Pradesh case covered by Hindi outlets was invisible.
+#: This reaches it, in whatever language it was published.
+#:
+#: Four properties make it usable where a metasearch engine is not:
+#:   * no key, no quota registration;
+#:   * it answers from a datacenter IP — verified from AWS, HTTP 200, no CAPTCHA;
+#:   * the item link embeds the PUBLISHER's url as a query parameter, so there is no
+#:     redirect to follow and no consent wall to negotiate;
+#:   * `pubDate` is the publisher's, not the crawl date.
+#:
+#: On robots: bing.com/robots.txt disallows `/search`, which does not match
+#: `/news/search`, and there is no `/news` rule. Google News RSS was rejected for
+#: exactly the opposite reason — `Disallow: /` with an allow-list that excludes `/rss` —
+#: and it also hides the publisher url behind an unresolvable redirect.
+BING_NEWS_URL = "https://www.bing.com/news/search?q={q}&format=RSS&mkt=en-IN&count=30"
+
+
+def _bing_publisher_url(link: str) -> str:
+    """Pull the publisher's url out of Bing's click-tracking wrapper."""
+    from urllib.parse import parse_qs, unquote, urlparse
+
+    link = (link or "").replace("&amp;", "&")
+    if "apiclick.aspx" not in link:
+        return canonical_url(link)
+    qs = parse_qs(urlparse(link).query)
+    target = (qs.get("url") or [""])[0]
+    return canonical_url(unquote(target)) if target else ""
+
+
+def _rss_items(body: bytes) -> list[dict]:
+    """Parse an RSS channel into plain dicts. Tolerant by design.
+
+    Feeds arrive with declared encodings that are wrong, stray ampersands and
+    occasionally a truncated tail. `recover` keeps whatever parsed rather than losing
+    thirty results to one malformed entity.
+    """
+    from lxml import etree
+
+    try:
+        root = etree.fromstring(body, parser=etree.XMLParser(recover=True, huge_tree=False))
+    except Exception:
+        return []
+    if root is None:
+        return []
+    out: list[dict] = []
+    for item in root.iter("item"):
+        row: dict[str, str] = {}
+        for child in item:
+            tag = etree.QName(child).localname if child.tag is not etree.Comment else ""
+            if tag and child.text:
+                row.setdefault(tag, child.text.strip())
+        if row:
+            out.append(row)
+    return out
+
+
+def _rss_date(raw: str) -> str:
+    """RFC-822 pubDate to YYYY-MM-DD. Empty when unparseable rather than guessed."""
+    from email.utils import parsedate_to_datetime
+
+    try:
+        return parsedate_to_datetime(raw).date().isoformat()
+    except Exception:
+        return ""
+
+
+async def bing_news(f: Fetcher, query: str, *, limit: int = 30) -> list[Hit]:
+    """Bing News RSS. Keyless, multilingual, publisher urls included."""
+    if not query.strip():
+        return []
+    url = BING_NEWS_URL.replace("{q}", quote_plus(query))
+    r = await f.get(url, respect_robots=True, timeout_s=settings.search_timeout_s,
+                    accept="application/rss+xml, application/xml, text/xml")
+    if r["error"] or r["status"] != 200 or not r["content"]:
+        _cool("bingnews", r["error"] or f"http {r['status']}")
+        return []
+    items = _rss_items(r["content"])
+    # A narrow query legitimately matches nothing, and reporting that as a source
+    # failure is how a working tier comes to look broken in the run report. Only a body
+    # that is not a feed at all is a failure.
+    if not items and b"<rss" not in r["content"][:400].lower():
+        _cool("bingnews", "response was not an RSS feed")
+        return []
+    STATUS.pop("bingnews", None)
+    out: list[Hit] = []
+    seen: set[str] = set()
+    for it in items[:limit]:
+        u = _bing_publisher_url(it.get("link", ""))
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        out.append(Hit(
+            url=u, title=" ".join((it.get("title") or "").split())[:200],
+            snippet=re.sub(r"<[^>]+>", "", it.get("description") or "")[:400],
+            published=_rss_date(it.get("pubDate", "")),
+            via="bingnews", tier=tier_for(u), query=query))
+    return out
+
+
 async def marginalia(f: Fetcher, query: str, *, limit: int = 10) -> list[Hit]:
     """Marginalia — an independent index that favours non-commercial pages.
 
@@ -440,6 +541,7 @@ def available() -> dict[str, bool]:
     """
     return {
         "gdelt": True,
+        "bingnews": True,
         "wikipedia": True,
         "wikidata": True,
         "wayback": True,

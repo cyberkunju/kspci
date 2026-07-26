@@ -47,6 +47,20 @@ NEWS_EN: set[str] = {
     "barandbench.com", "livelaw.in", "medianama.com",
 }
 
+# Hindi and north-Indian press. Added because the engine had a structural blind spot:
+# a wanted man in Baghpat, covered the same day by six Hindi outlets, graded as no
+# coverage at all — every source in the registry was Karnataka, national English or
+# Kannada. Crime reporting in India is local and vernacular first, so a registry that
+# only knows one language only knows one part of the country.
+NEWS_HI: set[str] = {
+    "amarujala.com", "jagran.com", "bhaskar.com", "divyabhaskar.co.in",
+    "aajtak.in", "abplive.com", "livehindustan.com", "patrika.com",
+    "navbharattimes.indiatimes.com", "jansatta.com", "naidunia.com",
+    "punjabkesari.in", "dainiktribuneonline.com", "prabhatkhabar.com",
+    "hindi.news18.com", "hindi.oneindia.com", "ndtv.in", "khabar.ndtv.com",
+    "zeenews.india.com", "tv9hindi.com", "amarujala.co.in",
+}
+
 NEWS_KN: set[str] = {
     "prajavani.net", "vijaykarnataka.com", "vijayakarnataka.com", "kannadaprabha.com",
     "udayavani.com", "vijayavani.net", "tv9kannada.com", "publictv.in",
@@ -97,6 +111,7 @@ def tier_for(url_or_host: str) -> Tier:
         (OFFICIAL, Tier.OFFICIAL),
         (NEWS_EN, Tier.NEWS),
         (NEWS_KN, Tier.NEWS),
+        (NEWS_HI, Tier.NEWS),
         (AGGREGATOR, Tier.AGGREGATOR),
         (REFERENCE, Tier.REFERENCE),
         (COMMUNITY, Tier.COMMUNITY),
@@ -161,4 +176,15 @@ ONSITE: list[dict] = [
      "url": "https://www.udayavani.com/?s={q}", "kind": "html"},
     {"name": "vijaykarnataka", "tier": Tier.NEWS, "lang": "kn",
      "url": "https://vijaykarnataka.com/search?q={q}", "kind": "html"},
+
+    # National English whose on-site search returns real article urls. Probed rather
+    # than assumed: of two dozen candidates tested against a live subject, most Indian
+    # newsrooms answer /search with a JavaScript shell and hand a crawler their front
+    # page. These two returned the actual story, so these two are here. The rest of the
+    # country is reached through the news-feed tier instead, which is the honest place
+    # for it — see sources.bing_news.
+    {"name": "theprint", "tier": Tier.NEWS, "lang": "en",
+     "url": "https://theprint.in/?s={q}", "kind": "html"},
+    {"name": "newindianexpress", "tier": Tier.NEWS, "lang": "en",
+     "url": "https://www.newindianexpress.com/search?q={q}", "kind": "html"},
 ]
