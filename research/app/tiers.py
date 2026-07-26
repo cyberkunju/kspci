@@ -138,44 +138,71 @@ def is_kannada_outlet(url_or_host: str) -> bool:
 
 # ── sources worth querying at source ────────────────────────────────────────────
 #
-# `{q}` is replaced with the URL-encoded query. `kind` tells the adapter how to read
-# the response. These are on-site search endpoints, which is both more accurate than
-# asking a search engine about the same site and more reliable from a datacenter.
+# `{q}` is replaced with the URL-encoded query and `{n}` with the per-site limit.
+# `kind` tells the adapter how to read the response:
 #
-# Every entry here is a public search form. Anything requiring a session, a CAPTCHA
-# or a bulk-data agreement is deliberately absent — where a source restricts
-# automated access, the run reports it as unreachable rather than working around it.
+#   "html"     — parse the search-results page and pick out the links that look like
+#                articles. Works anywhere, but it is a heuristic against a CMS template:
+#                no publication date, often no usable headline, and it breaks quietly
+#                when the template changes.
+#   "quintype" — the publisher's own search API. Six of the outlets below run Quintype,
+#                whose `/api/v1/advanced-search` returns headline, canonical url and
+#                publication timestamp as JSON. Preferred wherever it exists, because it
+#                replaces guesswork with the publisher's own answer: the date feeds the
+#                timeline and the headline feeds relevance ranking, and neither was
+#                available from link-scraping the same page.
+#
+# Every entry here is a public search endpoint the publisher's robots.txt permits.
+# Anything requiring a session, a CAPTCHA or a bulk-data agreement is deliberately
+# absent — where a source restricts automated access, the run reports it as unreachable
+# rather than working around it.
+#
+# LiveLaw is not here for exactly that reason. Its robots.txt disallows `/search`,
+# `/search?*` and `/*?q=`, so its search is closed to us by the publisher's own choice
+# and no amount of engineering makes that acceptable. LiveLaw articles still reach the
+# engine through the news-feed and GDELT tiers, where they are graded NEWS as usual.
+
+_QUINTYPE_SEARCH = "/api/v1/advanced-search?q={q}&fields=headline,url,last-published-at&limit={n}"
 
 ONSITE: list[dict] = [
     # Judgments and legal reporting.
     {"name": "indiankanoon", "tier": Tier.OFFICIAL, "lang": "en",
      "url": "https://indiankanoon.org/search/?formInput={q}", "kind": "html",
      "link_contains": "/doc/"},
-    {"name": "livelaw", "tier": Tier.NEWS, "lang": "en",
-     "url": "https://www.livelaw.in/search?q={q}", "kind": "html"},
-    {"name": "barandbench", "tier": Tier.NEWS, "lang": "en",
-     "url": "https://www.barandbench.com/search?q={q}", "kind": "html"},
+    {"name": "barandbench", "tier": Tier.NEWS, "lang": "en", "kind": "quintype",
+     "url": "https://www.barandbench.com" + _QUINTYPE_SEARCH},
 
     # English newsrooms with cooperative on-site search.
-    {"name": "thehindu", "tier": Tier.NEWS, "lang": "en",
-     "url": "https://www.thehindu.com/search/?q={q}", "kind": "html"},
-    {"name": "deccanherald", "tier": Tier.NEWS, "lang": "en",
-     "url": "https://www.deccanherald.com/search?q={q}", "kind": "html"},
-    {"name": "thenewsminute", "tier": Tier.NEWS, "lang": "en",
-     "url": "https://www.thenewsminute.com/search?q={q}", "kind": "html"},
+    #
+    # thehindu.com is NOT here, and its absence is the most expensive finding of this
+    # round. Its /search page returns HTTP 200 with 154 KB of front page and no results:
+    # the query is answered by JavaScript against an endpoint the served HTML does not
+    # reference, so there is nothing for a static client to read and nothing to ask
+    # politely. Three unrelated queries returned the same links. It was in this list for
+    # months, reported itself as a working source, and contributed six front-page promos
+    # per query to a budget of 48 reads. The Hindu remains in NEWS_EN and its articles
+    # still arrive through the news-feed and GDELT tiers.
+    {"name": "deccanherald", "tier": Tier.NEWS, "lang": "en", "kind": "quintype",
+     "url": "https://www.deccanherald.com" + _QUINTYPE_SEARCH},
+    {"name": "thenewsminute", "tier": Tier.NEWS, "lang": "en", "kind": "quintype",
+     "url": "https://www.thenewsminute.com" + _QUINTYPE_SEARCH},
     {"name": "indianexpress", "tier": Tier.NEWS, "lang": "en",
      "url": "https://indianexpress.com/?s={q}", "kind": "html"},
 
     # Kannada. The reason this engine can see a Mysuru case that never reached
     # English coverage.
-    {"name": "prajavani", "tier": Tier.NEWS, "lang": "kn",
-     "url": "https://www.prajavani.net/search?q={q}", "kind": "html"},
-    {"name": "kannadaprabha", "tier": Tier.NEWS, "lang": "kn",
-     "url": "https://www.kannadaprabha.com/search?q={q}", "kind": "html"},
-    {"name": "udayavani", "tier": Tier.NEWS, "lang": "kn",
-     "url": "https://www.udayavani.com/?s={q}", "kind": "html"},
-    {"name": "vijaykarnataka", "tier": Tier.NEWS, "lang": "kn",
-     "url": "https://vijaykarnataka.com/search?q={q}", "kind": "html"},
+    {"name": "prajavani", "tier": Tier.NEWS, "lang": "kn", "kind": "quintype",
+     "url": "https://www.prajavani.net" + _QUINTYPE_SEARCH},
+    {"name": "kannadaprabha", "tier": Tier.NEWS, "lang": "kn", "kind": "quintype",
+     "url": "https://www.kannadaprabha.com" + _QUINTYPE_SEARCH},
+    # Udayavani and Vijay Karnataka were here and were removed. Both were probed with two
+    # unrelated queries and returned the same links each time — Udayavani's search is a
+    # Next.js page whose results exist only inside an RSC payload, and Vijay Karnataka's
+    # returned its section index. Between them they injected ten guaranteed-irrelevant
+    # candidates per query into a run that can only read 48 pages, and reported themselves
+    # as working sources while doing it. Both domains stay in tiers.NEWS_KN, so their
+    # articles are still found and still graded NEWS when the news-feed or GDELT tiers
+    # surface them; only the useless direct query is gone.
 
     # National English whose on-site search returns real article urls. Probed rather
     # than assumed: of two dozen candidates tested against a live subject, most Indian
@@ -185,6 +212,6 @@ ONSITE: list[dict] = [
     # for it — see sources.bing_news.
     {"name": "theprint", "tier": Tier.NEWS, "lang": "en",
      "url": "https://theprint.in/?s={q}", "kind": "html"},
-    {"name": "newindianexpress", "tier": Tier.NEWS, "lang": "en",
-     "url": "https://www.newindianexpress.com/search?q={q}", "kind": "html"},
+    {"name": "newindianexpress", "tier": Tier.NEWS, "lang": "en", "kind": "quintype",
+     "url": "https://www.newindianexpress.com" + _QUINTYPE_SEARCH},
 ]
