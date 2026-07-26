@@ -52,13 +52,48 @@ const CANCEL_TOKENS = new Set([
  * answering. Any of these releases the frame and lets the message be handled as
  * a fresh request — a frame must never swallow real work.
  */
-const NEW_INTENT = /\b(fir|crimeno|ocr|status|history|alert|alerts|photo|identify|enrol|enroll|help)\b|\d{1,5}\s*\/\s*(?:19|20)\d{2}|[\u0C80-\u0CFF]{6,}/i;
+// `\d{10,}` is here because this corpus numbers cases with a 19-digit CrimeNo. Typed
+// while a question is open it matches no option, is one "word" long, and so counted as
+// an unusable answer — an officer who volunteered the exact record they wanted got
+// re-prompted for a number between 1 and 3.
+const NEW_INTENT = /\b(fir|crimeno|ocr|status|history|alert|alerts|photo|identify|enrol|enroll|help)\b|\d{1,5}\s*\/\s*(?:19|20)\d{2}|\d{10,}|[\u0C80-\u0CFF]{6,}|[\u0900-\u097F]{6,}/i;
 
-/** Ordinal words → zero-based option position, in both languages. */
+/** True ordinals → zero-based option position, in all three languages. */
 const ORDINALS = new Map([
   ['first', 0], ['second', 1], ['third', 2], ['fourth', 3], ['fifth', 4],
-  ['1st', 0], ['2nd', 1], ['3rd', 2],
-  ['ಮೊದಲ', 0], ['ಮೊದಲನೇ', 0], ['ಎರಡನೇ', 1], ['ಮೂರನೇ', 2], ['ನಾಲ್ಕನೇ', 3]
+  ['1st', 0], ['2nd', 1], ['3rd', 2], ['4th', 3], ['5th', 4],
+  ['ಮೊದಲ', 0], ['ಮೊದಲನೇ', 0], ['ಎರಡನೇ', 1], ['ಮೂರನೇ', 2], ['ನಾಲ್ಕನೇ', 3], ['ಐದನೇ', 4],
+  ['पहला', 0], ['पहले', 0], ['दूसरा', 1], ['दूसरे', 1], ['तीसरा', 2], ['तीसरे', 2],
+  ['चौथा', 3], ['चौथे', 3], ['पांचवा', 4], ['पाँचवाँ', 4]
+]);
+
+/**
+ * Number words, kept apart from the ordinals above because `one` is both.
+ *
+ * "number one" is a pick; "the third one" is also a pick, and there `one` is filler.
+ * Counting them together made the second case score two position words and get
+ * rejected. So a true ordinal wins when both appear, and a cardinal only decides when
+ * no ordinal is present.
+ */
+const CARDINALS = new Map([
+  ['one', 0], ['two', 1], ['three', 2], ['four', 3], ['five', 4],
+  ['ಒಂದು', 0], ['ಎರಡು', 1], ['ಮೂರು', 2], ['ನಾಲ್ಕು', 3], ['ಐದು', 4],
+  ['एक', 0], ['दो', 1], ['तीन', 2], ['चार', 3], ['पांच', 4], ['पाँच', 4]
+]);
+
+/**
+ * Words that may surround an ordinal without changing that the reply is a pick.
+ *
+ * This is what makes scanning for an ordinal safe. "the third one" and "number three"
+ * are picks; "third district stats" is a fresh request that merely starts with an
+ * ordinal, and matching on the ordinal alone would have swallowed it as option 3. So a
+ * scanned pick is accepted only when every other word is filler.
+ */
+const PICK_FILLER = new Set([
+  'the', 'one', 'ones', 'option', 'number', 'no', 'num', 'item', 'pick', 'choose',
+  'select', 'please', 'pls', 'that', 'this', 'give', 'me', 'want', 'take',
+  'ಸಂಖ್ಯೆ', 'ಅದು', 'ಅದನ್ನು', 'ಆಯ್ಕೆ',
+  'नंबर', 'वाला', 'वाले', 'यही', 'वही', 'चुनो', 'दो'
 ]);
 
 const now = () => Date.now();
@@ -129,7 +164,7 @@ function matchOption(body, options) {
   const raw = String(body || '').trim();
   const token = normalizeToken(raw);
 
-  const bare = raw.match(/^(?:option\s*|no\.?\s*|#)?(\d{1,2})[.)\s]*$/i);
+  const bare = raw.match(/^(?:option\s*|number\s*|item\s*|no\.?\s*|#)?(\d{1,2})[.)\s]*$/i);
   if (bare) {
     const n = Number(bare[1]);
     if (n >= 1 && n <= options.length) return options[n - 1];
@@ -138,8 +173,27 @@ function matchOption(body, options) {
 
   // Explicit word → position. An index-arithmetic version of this was correct but
   // silently wrong the moment a word was added to the list.
-  const ord = ORDINALS.get(token);
+  const ord = ORDINALS.has(token) ? ORDINALS.get(token) : CARDINALS.get(token);
   if (ord !== undefined && ord < options.length) return options[ord];
+
+  // A position word wrapped in filler: "number three", "the third one", "ಮೂರನೇ ಅದು".
+  // Officers phrase picks in words far more often than as a bare digit, and every one
+  // of those was landing as "I could not tell which one you meant".
+  const words = String(raw).toLowerCase().split(/[^\p{L}\p{M}\p{N}]+/u).filter(Boolean);
+  if (words.length >= 2 && words.length <= 4) {
+    const ordHits = words.filter((w) => ORDINALS.has(w));
+    const cardHits = words.filter((w) => CARDINALS.has(w));
+    let pos;
+    if (ordHits.length === 1) {
+      // A cardinal alongside an ordinal is filler ("the third one"), so it is allowed.
+      const rest = words.filter((w) => w !== ordHits[0]);
+      if (rest.every((w) => PICK_FILLER.has(w) || CARDINALS.has(w))) pos = ORDINALS.get(ordHits[0]);
+    } else if (!ordHits.length && cardHits.length === 1) {
+      const rest = words.filter((w) => w !== cardHits[0]);
+      if (rest.every((w) => PICK_FILLER.has(w))) pos = CARDINALS.get(cardHits[0]);
+    }
+    if (pos !== undefined && pos < options.length) return options[pos];
+  }
 
   const exact = options.find((o) => normalizeToken(o.label) === token);
   if (exact) return exact;
