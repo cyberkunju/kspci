@@ -256,6 +256,28 @@ difference between a four-second answer and a four-minute one.
 A Catalyst cron calls `/whatsapp/alerts/dispatch`, which reads the forecast, works out
 who is subscribed to which district, and pushes.
 
+**Free-form only — templates are off, and the refusal is structural.** A business-initiated
+message reaches an officer only while their 24-hour service window is open. Outside it Meta
+permits only an approved template, which is billable, so this deployment does not send one:
+the alert is **deferred**, not downgraded and not dropped. `client.js sendTemplate()` refuses
+outright unless `WA_ALLOW_TEMPLATES=true`, and the refusal lives at the transport every
+template send must pass through rather than at the single call site that exists today — a
+policy enforced only where it is currently needed is a policy the next feature silently breaks.
+Turning it back on later is one variable; the template path itself is unchanged and still works.
+
+**A deferred alert is not a lost one.** When the window is shut, nothing is written to the
+ledger, which is the whole point: the dedupe key stays unclaimed so a later cycle still
+delivers it. Recording a "blocked" row there would silently retire a genuine warning. The
+window check also runs before the advisory, so a deferred alert costs no model call.
+
+**The officer is the trigger, not just the clock.** A cron can only reach whoever happens to
+have an open window when it fires, and with a daily run that can mean holding a warning until
+tomorrow morning. But an officer who has just messaged us has, by definition, an open window —
+so `flushAlertsFor()` runs at the end of every turn and hands over whatever they are still
+owed. It is deliberately last, after the reply has been sent and the message completed: it must
+never delay an answer, and a failure there must not fail the turn. Dedupe is shared with the
+cron, so nothing arrives twice, and the turn result reports `alertsFlushed`.
+
 **It reads the batch-scored snapshot, not a live recompute.** `backtest.earlyWarningPreferSnapshot`
 exists for two reasons. Assembling a national panel inside the dispatch exceeds ZCQL's
 processing ceiling past a million rows in `Cases`, so the original direct call to
@@ -273,16 +295,18 @@ computation when no snapshot exists, so a fresh environment still works.
   3am alert because the previous run half-failed destroys the channel faster than a
   missed alert does. Max 3 pushes per officer per cycle, `WA_ALERT_MAX_SENDS` overall.
 - **Inside Meta's 24-hour service window** (the officer messaged us today) the push
-  is free-form and detailed. **Outside it**, Meta permits only an approved
-  template, so the template path is used — and if no template is configured, the
-  alert is skipped and reported, not silently dropped. Note that
-  `configured.alertTemplate` in `/whatsapp/health` means a *name is set*, not that
-  Meta has approved it; an unapproved template still fails at send time, per officer,
-  and lands a `alert-blocked` ledger row rather than being retried next cycle.
+  is free-form and detailed. **Outside it** the alert is deferred and reported as
+  `deferredWindowClosed`, and delivered by a later cycle or by the officer's next
+  message. `/whatsapp/health` reports `templatesEnabled: false`.
 - The AI advisory line is generated **once per district** and reused for every
   officer watching it, rather than once per recipient.
 
-### The alert template
+### The alert template — approved, and deliberately unused
+
+Kept for later. `WA_ALLOW_TEMPLATES` is `false`, so nothing can send it today; leaving it
+approved simply means the wait for Meta's review is already paid for when templates are
+switched on. Note the code reads `WA_ALERT_TEMPLATE` for the name, which is currently unset —
+set both to enable it.
 
 Created as `ksp_early_warning_v2`, category **Utility**, four body parameters:
 
@@ -354,7 +378,8 @@ new name, which is cheaper than waiting.
 | Catalyst SDK | **3.4.0** — required; see below |
 | WABA | `2306127019919794` — learned from `entry[0].id`, see below |
 | Webhook | all three levels point at KSP: app, **phone-number override**, and WABA `subscribed_apps` |
-| Alert template | `ksp_early_warning_v2` (UTILITY, four body parameters) |
+| Alert template | `ksp_early_warning_v2` (UTILITY, four body parameters) — **approved but disabled**, `WA_ALLOW_TEMPLATES=false` |
+| Alert delivery | free-form only, inside the 24-hour window; otherwise deferred and flushed on the officer's next message |
 
 **The number is exclusive to KSP now.** It had been wired into three projects at once — SellThat,
 Tia and Versifine — and a WhatsApp number delivers to exactly one webhook, so whichever project

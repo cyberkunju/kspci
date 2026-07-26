@@ -466,8 +466,19 @@ edge and phone→WABA expansion is rejected for a system-user token. It was reco
 now captures `entry[0].id` from any callback so a fresh environment never needs that
 archaeology (`lib/wa/inbound.js`, reported by `/whatsapp/health`).
 
-**Alert template.** `ksp_early_warning_v2`, UTILITY, four body parameters. The `_v2` is not
-cosmetic: deleting a template puts a short lock on that name and language, `POST` then fails
+**Templates are off by policy, and off structurally.** This deployment sends free-form only,
+inside Meta's 24-hour service window, because a template is billable. `sendTemplate()` refuses
+unless `WA_ALLOW_TEMPLATES=true` — the guard sits at the transport, not at the one call site
+that exists today, so a future code path cannot reintroduce a template send by accident. An
+alert for a closed window is **deferred**: nothing is written to the ledger, so the dedupe key
+stays unclaimed and a later cycle still delivers it. And because a cron only reaches whoever
+happens to be reachable when it fires, `flushAlertsFor()` runs at the end of every turn — an
+officer who has just messaged us definitionally has an open window, so their own message is the
+most reliable delivery trigger there is.
+
+**Alert template.** `ksp_early_warning_v2`, UTILITY, four body parameters — approved and kept,
+but unusable while the flag is off, so the review wait is already paid for whenever templates
+are switched on. The `_v2` is not cosmetic: deleting a template puts a short lock on that name and language, `POST` then fails
 with `Message template language is being deleted`, and re-issuing the `DELETE` restarts the
 clock — so a delete-then-create script can never succeed. Meta's own advice is to use a new
 name. The shape is dictated by the sender: `client.js sendTemplate()` emits a single `body`
