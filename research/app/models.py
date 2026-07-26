@@ -93,7 +93,11 @@ class Anchors:
         if self.sections:
             score += 1
         if len(self.names) > 1:
-            score += 1
+            # An alias is a genuinely discriminating fact, worth about as much as
+            # knowing the district. Scoring it at 1 held a report that named both the
+            # legal name AND the alias down to `possible`, because the ceiling this
+            # function sets was computed as though we knew almost nothing.
+            score += 3
         return score
 
 
@@ -156,6 +160,11 @@ class Story:
     attribution: Attribution = "possible"
     attribution_reasons: list[str] = field(default_factory=list)
     matched_anchors: list[str] = field(default_factory=list)
+    #: The raw evidence score behind the band. Kept so stories can be ordered WITHIN a
+    #: band by how much actually matched. Ordering by source authority alone put a
+    #: tier-1 court record that shared only a name above the one report that named both
+    #: the subject and his alias — and the summary reads from the top of the list.
+    score: int = 0
 
     @property
     def lead(self) -> Document:
@@ -200,4 +209,10 @@ class Finding:
     language: str
     snippet: str
     via: list[str]
+    #: Which anchors this source actually matched, and how many independent outlets
+    #: carried the same story. Both are shown in the officer's table: "confirmed" earned
+    #: on an FIR number and a co-accused deserves different trust from "confirmed"
+    #: earned on a name and a district, and the table should let them see which.
+    matched: list[str] = field(default_factory=list)
+    outlet_count: int = 1
     error: str = ""

@@ -61,6 +61,12 @@ class GdeltPlan:
     """
 
     must: list[str] = field(default_factory=list)
+    #: Corroborating alternatives. ANDed with `must` by GDELT's query language, so this
+    #: is a FILTER, not a boost — which is why it now carries only real anchors. It used
+    #: to carry event words ("arrested OR chargesheet OR FIR"), and on an unanchored
+    #: subject that turned the whole call into "report must contain one of these five
+    #: words". A live test lost the one article GDELT held about a wanted man because the
+    #: report said he was killed in an encounter and never used the word "arrest".
     any_of: list[str] = field(default_factory=list)
     #: GDELT DOC 2.0 searches a ROLLING THREE-MONTH WINDOW. `timespan` can only narrow
     #: it — a larger value is silently clamped, so asking for "24months" is a statement
@@ -70,6 +76,9 @@ class GdeltPlan:
     #: GDELT's three months, because the API rejects anything older.
     start: str = ""
     end: str = ""
+    #: Aliases worth a GDELT leg of their own. A nickname in a headline is often the
+    #: only form a wire index has indexed.
+    aliases: list[str] = field(default_factory=list)
     #: True when the case predates GDELT's window entirely. GDELT is still queried —
     #: a chargesheet or a verdict reported this month about a 2019 offence is inside the
     #: window and is exactly what an officer wants — but the run must SAY that the
@@ -93,6 +102,33 @@ _TITLES = re.compile(
     r"psi|si|asi|ci|dysp|sp|dcp|acp|ips|ias)\.?\s+", re.I)
 
 _KANNADA = re.compile(r"[\u0C80-\u0CFF]")
+
+# How an alias is written in Indian police records and reporting. Splitting on these
+# matters more than any spelling heuristic: an alias is the single most discriminating
+# thing a caller can hand us — "Khooni" narrows a search that "Vipul Singh" cannot —
+# and treating "Vipul alias Khooni" as one quoted phrase searches for a string almost
+# nobody prints, while generating variants of it produces junk like "VipulaliasKhooni".
+_ALIAS_SPLIT = re.compile(
+    r"\s*(?:\balias\b|\baka\b|\ba/k/a\b|\burf\b|\bupanaam\b|\bcalled\b|@|\bor\b\s+(?=['\"]))\s*",
+    re.I)
+
+
+def split_aliases(raw: str) -> list[str]:
+    """Turn one name string into the separate names it actually contains.
+
+    "Vipul Singh alias Khooni" -> ["Vipul Singh", "Khooni"]. Quotes around a nickname
+    are stripped, because a newsroom writes Khooni and a charge sheet writes 'Khooni'.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    parts = [p.strip(" '\"“”‘’-–—") for p in _ALIAS_SPLIT.split(text)]
+    out: list[str] = []
+    for p in parts:
+        p = " ".join(p.split())
+        if len(p) >= 2 and p.lower() not in {x.lower() for x in out}:
+            out.append(p)
+    return out or [text]
 
 
 _KEEP_PUNCT = set(" .@'-")
@@ -247,6 +283,23 @@ def gdelt_window(date_from: str, date_to: str = "") -> tuple[str, str, str]:
     return start.strftime("%Y%m%d") + "000000", "", ""
 
 
+def resolve_names(subject: str, kind: str, anchors: Anchors) -> list[str]:
+    """Every name the caller actually gave us, with aliases separated out.
+
+    Shared by the planner and the attribution stage on purpose. When only the planner
+    split aliases, the scorer went on looking for the literal string "Vipul Singh alias
+    Khooni" — which no document contains — and graded every source unrelated even when
+    the alias was in the headline. The two stages must agree on who they are looking for.
+    """
+    out: list[str] = []
+    for raw in ([subject] if kind == "person" else []) + [n for n in anchors.names if n]:
+        for n in split_aliases(raw):
+            n = normalise_name(n)
+            if n and n.lower() not in {x.lower() for x in out}:
+                out.append(n)
+    return out[:4]
+
+
 def plan_queries(*, subject: str, kind: str, anchors: Anchors,
                  max_queries: int = 14) -> tuple[list[Query], GdeltPlan]:
     """Build the query set and the GDELT plan for one run.
@@ -256,15 +309,20 @@ def plan_queries(*, subject: str, kind: str, anchors: Anchors,
     found the right person rather than on the broadest ones.
     """
     subject = " ".join(str(subject or "").split())
-    names = [subject] if kind == "person" else []
-    names += [n for n in anchors.names if n]
-    variants: list[str] = []
-    for n in names:
-        for v in name_variants(n):
-            if v.lower() not in {x.lower() for x in variants}:
-                variants.append(v)
-    variants = variants[:5]
-    primary = variants[0] if variants else neutralise(subject)
+
+    # Names the caller actually gave us, with aliases separated out. These are
+    # authoritative and must never be displaced by a machine-generated spelling: the old
+    # code merged both into one list, capped it at five and then only queried positions
+    # 1-3, so a supplied alias could fall off the end while a v-to-w swap got its own
+    # query. That is exactly what happened in testing.
+    given = resolve_names(subject, kind, anchors)
+
+    # Spelling variants of the primary name only, ranked strictly below every supplied
+    # name. "Khooni" is worth more than "wipul Singh".
+    generated = [v for v in name_variants(given[0] if given else subject)
+                 if v.lower() not in {x.lower() for x in given}][:3]
+    primary = given[0] if given else neutralise(subject)
+    aliases = given[1:]
 
     q: list[Query] = []
 
@@ -283,8 +341,7 @@ def plan_queries(*, subject: str, kind: str, anchors: Anchors,
         add(f'"{subject}"', ALL_NEWS, "the identifier itself", ("identifier",), 3.0)
         add(f'"{subject}" complaint', WEB + ONSITE_ONLY, "complaints naming it", ("identifier",), 2.0)
         start, end, note = gdelt_window(anchors.date_from, anchors.date_to)
-        gdelt = GdeltPlan(must=[subject], any_of=list(_EVENT_TERMS[:6]),
-                          start=start, end=end, out_of_range=note)
+        gdelt = GdeltPlan(must=[subject], start=start, end=end, out_of_range=note)
         return q[:max_queries], gdelt
 
     # ── most discriminating first: an identifier we already hold ────────────────
@@ -314,6 +371,17 @@ def plan_queries(*, subject: str, kind: str, anchors: Anchors,
         add(f'"{primary}" {anchors.state}', ALL_NEWS, "subject in the state",
             ("name", "state"), 1.5)
 
+    # ── every alias the caller gave us, in its own right ───────────────────────
+    # An alias is often how a person is actually named in reporting — the nickname
+    # appears in the headline and the legal name only in the body, or not at all.
+    place = anchors.district or anchors.state
+    for a in aliases:
+        add(f'"{primary}" "{a}"', ALL_NEWS, f"the subject with the alias {a}",
+            ("name", "alias"), 3.5)
+        add(f'"{a}" {place}'.strip(), ALL_NEWS, f"the alias {a} in place",
+            ("alias",), 2.2)
+        add(f'"{a}"', ALL_NEWS, f"the alias {a}, neutrally", ("alias",), 1.6)
+
     # ── the neutral baseline, always present ───────────────────────────────────
     # Run even when anchors are rich: it is the only query that can reveal coverage
     # nobody thought to look for, and it is what makes an empty result honest.
@@ -322,16 +390,17 @@ def plan_queries(*, subject: str, kind: str, anchors: Anchors,
         add(f'"{primary}"', REFERENCE, "is this a publicly known person", ("name",), 1.0)
 
     # ── event-shaped queries, clearly labelled as such ─────────────────────────
-    place = anchors.district or anchors.state
     add(f'"{primary}" arrested {place}'.strip(), ALL_NEWS, "reports of an arrest",
         ("name",), 1.4)
     add(f'"{primary}" court case {place}'.strip(), ALL_NEWS, "court reporting",
         ("name",), 1.3)
+    add(f'"{primary}" police case {place}'.strip(), ALL_NEWS, "police reporting",
+        ("name",), 1.25)
 
-    # ── remaining spelling variants, at lower weight ───────────────────────────
-    for v in variants[1:4]:
+    # ── generated spelling variants, last and lowest ───────────────────────────
+    for v in generated:
         add(f'"{v}" {place}'.strip(), ALL_NEWS, f"alternative spelling: {v}",
-            ("name_variant",), 1.0)
+            ("name_variant",), 0.9)
 
     # ── a crime or event subject is not a person ───────────────────────────────
     if kind in {"crime", "event", "organisation"}:
@@ -343,14 +412,20 @@ def plan_queries(*, subject: str, kind: str, anchors: Anchors,
 
     # GDELT gets ONE broad query carrying the whole subject: the required term plus
     # every corroborating fact as alternatives. One call, up to 250 records.
+    # GDELT gets TWO legs, and the split is the fix for a real recall failure.
+    #
+    # `any_of` is ANDed by GDELT's query language, so it filters rather than boosts.
+    # It therefore now carries only facts we actually hold about this subject — never
+    # event words. And the bare leg runs regardless, because the whole point of the
+    # neutral baseline is to find coverage nobody predicted the shape of.
     start, end, note = gdelt_window(anchors.date_from, anchors.date_to)
     gdelt = GdeltPlan(
         must=[primary],
         any_of=[x for x in (
             anchors.district, anchors.state, anchors.station,
             *anchors.crime_numbers[:2], *anchors.associates[:2], *anchors.organisations[:2],
-            *_EVENT_TERMS[:5],
         ) if x],
+        aliases=aliases[:2],
         start=start, end=end, out_of_range=note,
     )
     return q[:max_queries], gdelt
