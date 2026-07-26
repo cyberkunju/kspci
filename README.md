@@ -11,10 +11,24 @@ the same platform on a field officer's phone in English, Kannada or Hindi.
 
 | | |
 |---|---|
-| Web console | `https://ksp.cyberkunju.com/app` |
+| Web console | **https://ksp.cyberkunju.com/app** |
+| WhatsApp field channel | **+91 94002 45958** — [open a chat](https://wa.me/919400245958) |
 | API | `https://ksp.cyberkunju.com/server/api` |
 | Forecast service | `https://kspforecast-50044266480.development.catalystappsail.in` |
 | Catalyst project | Project-Rainfall · `51589000000013024` · India DC · Asia/Kolkata |
+
+The web console is open — pick a role in the sidebar and ask it something. The WhatsApp number
+answers **only numbers on the `Officers` roster**, which is that channel's entire trust boundary, so
+an unenrolled number receives a bilingual "not registered" notice and nothing else. That is the
+intended behaviour, not a fault. To enrol a demo handset:
+
+```bash
+curl -X POST "https://ksp.cyberkunju.com/server/api/admin/officers" \
+  -H "x-admin-key: $ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"phone":"91XXXXXXXXXX","name":"Demo Officer","rank":"PSI","district":"Mysuru","role":"analyst"}'
+```
+
+Then send `reset` to the number to choose a language and an access context.
 
 All case data is synthetic, generated from real NCRB and Census aggregates. No real FIR, person or
 case is represented anywhere in this repository.
@@ -226,6 +240,10 @@ for decision support, never automated enforcement. Full report and reproduction 
 The console assumes a desk. A constable at a checkpoint has a phone and no app.
 `functions/api/lib/wa/` implements a Meta Cloud API bot over the same tools the console uses —
 natural language only, no command syntax, in **English, Kannada or Hindi**, typed or spoken.
+
+Live on **+91 94002 45958** ([open a chat](https://wa.me/919400245958)) over the Meta Cloud API,
+Graph v25.0, with Catalyst Stratus holding the photo blobs, a Catalyst job pool processing turns
+asynchronously and a cron dispatching alerts. Enrolment is at the top of this file.
 
 | The officer sends | What happens |
 |---|---|
