@@ -11,6 +11,6 @@
   },
   "dependencies": {
     "express": "^4.19.2",
-    "zcatalyst-sdk-node": "^2.1.1"
+    "zcatalyst-sdk-node": "^3.4.0"
   }
 }
