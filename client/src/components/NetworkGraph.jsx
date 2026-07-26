@@ -79,6 +79,13 @@ export default function NetworkGraph({ data, kind = 'crime', height, onSelect })
   }, []);
 
   const fit = useCallback(() => fgRef.current && fgRef.current.zoomToFit(500, 48), []);
+  // Explicit zoom, because wheel zoom is disabled below.
+  const nudgeZoom = useCallback((factor) => {
+    const g = fgRef.current;
+    if (!g) return;
+    const next = Math.min(6, Math.max(0.4, (g.zoom() || 1) * factor));
+    g.zoom(next, 250);
+  }, []);
 
   const paintNode = useCallback((node, ctx, scale) => {
     const r = radiusOf(node);
@@ -167,17 +174,24 @@ export default function NetworkGraph({ data, kind = 'crime', height, onSelect })
         backgroundColor={CANVAS_BG}
         nodeRelSize={5}
         nodeVal={(n) => (n.degree || 1)}
-        autoPauseRedraw={false}
+        // Let the canvas go idle once the layout settles. With redraw forced on, the graph
+        // repainted every frame forever — burning CPU on a static picture, and keeping the page
+        // permanently busy (which is also why automated screenshots of this view timed out).
+        autoPauseRedraw
         nodeCanvasObject={paintNode}
         nodePointerAreaPaint={paintPointer}
         linkColor={(l) => (hlLinks.has(l) ? 'rgba(170,190,230,0.7)' : (hlNodes.size ? 'rgba(120,130,150,0.05)' : 'rgba(140,155,185,0.20)'))}
         linkWidth={(l) => (hlLinks.has(l) ? 2 : 0.7)}
-        linkDirectionalParticles={kind === 'money' ? 2 : 0}
-        linkDirectionalParticleWidth={(l) => (hlLinks.has(l) ? 2.6 : 1.6)}
-        linkDirectionalParticleSpeed={0.006}
-        linkDirectionalArrowLength={kind === 'money' ? 3 : 0}
+        // Arrows, not flowing particles. Particles animate indefinitely, which forces a repaint
+        // every frame for the life of the page; the arrowhead carries the same direction
+        // information on a still canvas.
+        linkDirectionalArrowLength={kind === 'money' ? 3.5 : 0}
         linkDirectionalArrowRelPos={1}
         enableNodeDrag={false}
+        // Wheel zoom off. The canvas swallowed the page's scroll, so scrolling with the pointer
+        // over a graph silently zoomed it instead of moving the page — which reads as the panel
+        // growing on its own. Pan by dragging still works; zoom is on the buttons beside Fit.
+        enableZoomInteraction={false}
         minZoom={0.4}
         maxZoom={6}
         cooldownTicks={120}
@@ -196,9 +210,17 @@ export default function NetworkGraph({ data, kind = 'crime', height, onSelect })
             aria-label="Search the network"
           />
         </form>
-        <button type="button" className="ng-fit" onClick={fit} aria-label="Fit graph to view" title="Fit to view">
-          <Scan size={15} /><span>Fit</span>
-        </button>
+        <div className="ng-zoom">
+          <button type="button" className="ng-fit" onClick={() => nudgeZoom(1.4)} aria-label="Zoom in" title="Zoom in">
+            <span aria-hidden="true">+</span>
+          </button>
+          <button type="button" className="ng-fit" onClick={() => nudgeZoom(1 / 1.4)} aria-label="Zoom out" title="Zoom out">
+            <span aria-hidden="true">−</span>
+          </button>
+          <button type="button" className="ng-fit" onClick={fit} aria-label="Fit graph to view" title="Fit to view">
+            <Scan size={15} /><span>Fit</span>
+          </button>
+        </div>
       </div>
 
       {legend.length > 0 && (

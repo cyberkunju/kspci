@@ -255,8 +255,14 @@ async function readSnapshot(app, route, opts, { maxAgeHours = 0 } = {}) {
   try { context = JSON.parse(meta.Payload || '{}'); } catch (_) { context = {}; }
   // Early-warning clients read `alerts`, forecast clients read `forecasts`. The rows are the
   // same shape, so the route decides the key rather than the storage duplicating them.
+  const SEV_RANK = { critical: 0, elevated: 1, watch: 2 };
   const keyed = route === 'earlywarning'
-    ? { alerts: forecasts.filter((f) => f.severity),
+    // Severity first, then volume at stake. The rows were sorted by predicted volume above,
+    // which is right for the forecast list and wrong here — it buried the elevated districts
+    // below higher-volume ones that are merely being watched.
+    ? { alerts: forecasts.filter((f) => f.severity).sort((a, b) =>
+          ((SEV_RANK[a.severity] ?? 3) - (SEV_RANK[b.severity] ?? 3))
+          || ((b.predicted || 0) - (a.predicted || 0))),
         critical: forecasts.filter((f) => f.severity === 'critical').length,
         elevated: forecasts.filter((f) => f.severity === 'elevated').length }
     : { forecasts };

@@ -28,6 +28,9 @@ export default function Analytics({ role }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get('view');
   const tab = TABS.some((item) => item.id === requestedTab) ? requestedTab : 'overview';
+  // Districts by default. The map used to only ever request the state roll-up, so individual
+  // districts — Bengaluru among them — simply had no circle, which reads as missing data.
+  const [mapLevel, setMapLevel] = useState('district');
   const [overview, setOverview] = useState(null);
   const [trends, setTrends] = useState(null);
   const [hotspots, setHotspots] = useState(null);
@@ -58,7 +61,7 @@ export default function Analytics({ role }) {
     setErr(null);
     if (tab === 'map') {
       setTabLoading(true); setHotspots(null);
-      api.hotspots(role).then((data) => current && setHotspots(data)).catch((error) => current && setErr(error)).finally(() => current && setTabLoading(false));
+      api.hotspots(role, mapLevel).then((data) => current && setHotspots(data)).catch((error) => current && setErr(error)).finally(() => current && setTabLoading(false));
     } else if (tab === 'network') {
       setTabLoading(true); setNet(null); setRing('');
       api.network(role).then((data) => current && setNet(data)).catch((error) => current && setErr(error)).finally(() => current && setTabLoading(false));
@@ -72,7 +75,7 @@ export default function Analytics({ role }) {
       setTabLoading(false);
     }
     return () => { current = false; };
-  }, [tab, role, refreshKey]);
+  }, [tab, role, refreshKey, mapLevel]);
 
   const changeTab = (nextTab) => setSearchParams(nextTab === 'overview' ? {} : { view: nextTab });
   const selectRing = (nextRing) => {
@@ -106,7 +109,7 @@ export default function Analytics({ role }) {
           <Kpi label="Heinous crimes" value={fmtInt(overview.heinous)} sub={`${overview.heinousPct}% of all cases`} tone="error" share={overview.heinousPct} />
           <Kpi label="Chargesheeted" value={`${overview.chargesheetRate}%`} sub={`${fmtInt(overview.chargesheeted)} cases filed`} tone="success" share={overview.chargesheetRate} />
           <Kpi label="High-risk offenders" value={fmtInt(overview.highRiskOffenders)} sub="risk band: high" tone="warning" />
-          <Kpi label="Districts covered" value={overview.districts} sub="across Karnataka" />
+          <Kpi label="Districts covered" value={overview.districts} sub={`across ${overview.states || 36} states & UTs`} />
         </Grid>
       )}
 
@@ -134,7 +137,25 @@ export default function Analytics({ role }) {
         )}
 
         {!tabLoading && !err && tab === 'map' && (
-          <VizCard title="Crime hotspots across Karnataka">
+          <VizCard
+            title="Crime hotspots across India"
+            action={
+              <Stack direction="horizontal" gap={2} vAlign="center">
+                <Text type="supporting" color="tertiary">
+                  {(hotspots?.districts || []).length} {mapLevel === 'district' ? 'districts' : 'states & UTs'}
+                </Text>
+                <Selector
+                  label="Map detail" isLabelHidden value={mapLevel} width={200}
+                  onChange={(v) => setMapLevel(v || 'district')}
+                  options={[
+                    { value: 'district', label: 'District detail' },
+                    { value: 'state', label: 'State / UT roll-up' },
+                  ]}
+                />
+              </Stack>
+            }
+            note="Circle area is proportional to recorded case volume. Switch to the roll-up for a national comparison."
+          >
             <HotspotMap data={hotspots} />
           </VizCard>
         )}

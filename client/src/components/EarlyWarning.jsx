@@ -4,7 +4,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Chart, registerables } from 'chart.js';
 import {
-  Grid, Stack, Text, Badge, Button, Card, Table, Banner, StatusDot,
+  Grid, Stack, Text, Badge, Button, Card, Table, Banner, StatusDot, EmptyState,
   Spinner, Icon, Collapsible, Markdown, proportional, pixel, Sparkles, ArrowUp, ArrowDown, Server,
 } from '../ui';
 import { BarCell, Kpi, MetricSkeletons, PageHeader, ViewError, VizCard } from './Cards';
@@ -147,6 +147,7 @@ export default function EarlyWarning({ role, language }) {
   const [ew, setEw] = useState(null);
   const [bt, setBt] = useState(null);
   const [wl, setWl] = useState(null);
+  const [wlDenied, setWlDenied] = useState(false);
   const [brief, setBrief] = useState(null);
   const [briefLoading, setBriefLoading] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -155,7 +156,8 @@ export default function EarlyWarning({ role, language }) {
 
   useEffect(() => {
     let current = true;
-    setLoading(true); setErr(null); setFc(null); setEw(null); setBt(null); setWl(null); setBrief(null);
+    setLoading(true); setErr(null); setFc(null); setEw(null); setBt(null); setWl(null);
+    setWlDenied(false); setBrief(null);
     // Forecast + early-warning are open to every role; backtest + watchlist are
     // role-gated (analyst+). Settle independently so a lower role still sees the
     // sections it's allowed instead of the whole page failing on one 403.
@@ -167,6 +169,10 @@ export default function EarlyWarning({ role, language }) {
         if (ewR.status === 'fulfilled') setEw(ewR.value);
         if (btR.status === 'fulfilled') setBt(btR.value);
         if (wlR.status === 'fulfilled') setWl((wlR.value && wlR.value.watchlist) || []);
+        // Distinguish "not permitted" from "nothing to show". Both rendered as an empty table
+        // reading "No data", which tells a lower-privileged user their data is missing rather
+        // than restricted.
+        else setWlDenied(true);
       })
       .finally(() => current && setLoading(false));
     return () => { current = false; };
@@ -214,20 +220,23 @@ export default function EarlyWarning({ role, language }) {
 
       {!loading && !err && <Grid columns={{ minWidth: 440, max: 2 }} gap={3}>
         <VizCard title="Predicted crime concentration · next month"
-          action={fc && !fc.error && <Text type="supporting" color="tertiary">Statewide: <b>{fc.statewide?.predicted}</b> · circles sized by forecast, coloured by alert severity</Text>}
+          action={fc && !fc.error && <Text type="supporting" color="tertiary">National total: <b>{(fc.statewide?.predicted || 0).toLocaleString('en-IN')}</b> across <b>{(fc.forecasts || []).length}</b> districts · circles sized by forecast, coloured by alert severity</Text>}
           full>
           <ForecastMap forecasts={fc && fc.forecasts} alerts={ew && ew.alerts} />
         </VizCard>
 
-        <VizCard title="Backtest — predicted vs actual (statewide)" note="Expanding-window walk-forward. Dashed = ensemble forecast, solid = ground truth.">
-          {bt && bt.statewide
-            ? <LineChart statewide={bt.statewide} />
+        {/* The live backtest cannot assemble a national panel inside the function's execution
+            ceiling, so the batch-scored snapshot carries the same curve and model table — falling
+            back to it shows real held-out numbers instead of an empty card. */}
+        <VizCard title="Backtest — predicted vs actual (national)" note="Expanding-window walk-forward on held-out months. Dashed = ensemble forecast, solid = ground truth.">
+          {(bt?.statewide || fc?.backtestSeries?.length)
+            ? <LineChart statewide={bt?.statewide || fc.backtestSeries} />
             : <Stack hAlign="center" padding={6}><Text type="supporting" color="tertiary">Backtest metrics are available to the Analyst role and higher.</Text></Stack>}
         </VizCard>
 
         <VizCard title="Model comparison (learned ensemble)">
           <Table
-            data={bt?.modelComparison || []} density="compact" dividers="rows" hasHover
+            data={bt?.modelComparison || fc?.modelComparison || []} density="compact" dividers="rows" hasHover
             columns={[
               { key: 'model', header: 'Model', width: proportional(1.4, 150), renderCell: (m) => <Text type="body" weight={m.model?.startsWith('ENSEMBLE') ? 'semibold' : 'regular'} color={m.model?.startsWith('ENSEMBLE') ? 'accent' : (m.model?.includes('naive') ? 'tertiary' : 'primary')}>{m.model}</Text> },
               { key: 'mase', header: 'MASE', width: pixel(72), align: 'end', renderCell: (m) => <Text type="body" weight="semibold" color={m.mase != null && m.mase < 1 ? 'success' : 'secondary'} hasTabularNumbers>{m.mase ?? '—'}</Text> },
@@ -272,6 +281,14 @@ export default function EarlyWarning({ role, language }) {
         <VizCard title="Reoffending watchlist">
           <Table
             data={wl || []} density="compact" dividers="rows" hasHover
+            emptyState={
+              <EmptyState
+                title={wlDenied ? 'Restricted for this access context' : 'No offenders on the watchlist'}
+                description={wlDenied
+                  ? 'The reoffending watchlist is available to the Analyst role and higher. Switch the access context to view it.'
+                  : 'No scored offenders match the current filters.'}
+              />
+            }
             columns={[
               { key: 'name', header: 'Offender', width: proportional(1.3, 130) },
               { key: 'riskScore', header: 'Risk score', width: proportional(1, 105), renderCell: (o) => <BarCell value={o.riskScore} max={100} tone={(o.band || '').toLowerCase() === 'high' ? 'error' : 'warning'} /> },

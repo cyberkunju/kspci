@@ -207,6 +207,8 @@ body {
   display: flex; gap: 8px; align-items: center; justify-content: space-between;
   pointer-events: none;
 }
+/* Zoom controls sit with Fit, since wheel zoom is disabled so the page can scroll. */
+.ng-zoom { display: flex; gap: 6px; align-items: center; pointer-events: auto; }
 .ng-search {
   pointer-events: auto; display: inline-flex; align-items: center; gap: 7px;
   background: color-mix(in srgb, var(--bg-1) 88%, transparent); border: 1px solid var(--line-2);

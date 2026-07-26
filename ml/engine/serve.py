@@ -154,6 +154,17 @@ def forecast_next(
     accuracy["intervals"] = scored
     accuracy["intervalChosen"] = chosen
     accuracy["coverage"] = scored[chosen]["coverage"]
+    # Aggregate predicted-vs-actual per held-out origin. The dashboard plots this as the backtest
+    # curve; producing it here means the chart shows the same run the metrics describe, rather
+    # than a separately computed backtest that could disagree with them.
+    accuracy["series"] = [
+        {
+            "label": str(panel.labels[t]),
+            "actual": float(actual[i].sum()),
+            "predicted": round(float((np.stack([P[m][i] for m in members], axis=1) @ w).sum()), 1),
+        }
+        for i, t in enumerate(range(t_calib, T))
+    ]
     accuracy["spatial"] = MT.aggregate_spatial([
         MT.spatial_metrics((np.stack([P[m][i] for m in members], axis=1) @ w), actual[i],
                            (0.01, 0.05, 0.10, 0.20))

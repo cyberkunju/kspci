@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// Karnataka crime hotspot map — district circles sized/coloured by case volume,
+// All-India crime hotspot map — state or district circles sized/coloured by case volume,
 // plus a sampled incident scatter layer.
 export default function HotspotMap({ data }) {
   const elRef = useRef(null);
@@ -41,15 +41,25 @@ export default function HotspotMap({ data }) {
       }).addTo(group);
     });
 
-    // district volume circles
+    // district (or state) volume circles
+    const bounds = [];
     (data.districts || []).forEach((d) => {
-      const r = 10 + (d.count / max) * 34;
+      if (d.lat == null || d.lng == null) return;
+      bounds.push([d.lat, d.lng]);
+      // Square-root scaling: with linear radius the largest unit covered several states at
+      // national zoom, hiding everything under it.
+      const r = 5 + Math.sqrt(d.count / max) * 24;
       const c = L.circleMarker([d.lat, d.lng], {
         radius: r, color: heat(d.count), weight: 2, fillColor: heat(d.count), fillOpacity: 0.35
       }).addTo(group);
-      c.bindPopup(`<b>${d.district || d.name}</b><br>${d.count} cases`);
-      c.bindTooltip(`${d.name}: ${d.count}`, { direction: 'top' });
+      c.bindPopup(`<b>${d.district || d.name}</b><br>${d.count.toLocaleString('en-IN')} cases`);
+      c.bindTooltip(`${d.name}: ${d.count.toLocaleString('en-IN')}`, { direction: 'top' });
     });
+
+    // Fit to the data. The view was pinned to Karnataka at zoom 7, so on national coverage most
+    // of the country — including Bengaluru's own neighbours — sat outside the viewport and the
+    // map looked like it was missing data.
+    if (bounds.length) map.fitBounds(bounds, { padding: [26, 26], maxZoom: 9 });
   }, [data]);
 
   return <div className="hotspot-map" ref={elRef} />;

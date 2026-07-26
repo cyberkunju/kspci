@@ -80,9 +80,44 @@ def build_panel(csv: Path, max_rows: int) -> Panel:
                  meta={"level": "district", "source": "datastore-seed-prefix"})
 
 
+MODEL_LABEL = {
+    "ENSEMBLE": "ENSEMBLE (NNLS stacked)",
+    "seasonal_naive": "Seasonal-naive (baseline)",
+    "historical_pattern": "Historical pattern (police baseline)",
+    "poisson_gbm": "Poisson gradient boosting",
+    "persistence": "Persistence",
+    "ma3": "Moving average (3)",
+    "holt": "Holt (exp-smooth)",
+}
+# Order the table so the ensemble leads and the two baselines that matter are adjacent to it.
+MODEL_ORDER = ["ENSEMBLE", "poisson_gbm", "historical_pattern", "seasonal_naive",
+               "holt", "ma3", "persistence"]
+
+
+def _model_table(acc: dict) -> list[dict]:
+    """Rows for the dashboard's model-comparison table, from the held-out window."""
+    mase = acc.get("mase") or {}
+    weights = acc.get("weights") or {}
+    out = []
+    for key in MODEL_ORDER:
+        if key not in mase:
+            continue
+        out.append({
+            "model": MODEL_LABEL.get(key, key),
+            "mase": round(float(mase[key]), 3),
+            # MAE is only measured for the ensemble; showing a blank is honest where a per-model
+            # figure was not computed, and better than inventing one.
+            "mae": round(float(acc["mae"]), 2) if key == "ENSEMBLE" and acc.get("mae") else None,
+            "rmse": None,
+            "weight": 1 if key == "ENSEMBLE" else (weights.get(key) or None),
+        })
+    return out
+
+
 def to_payload(res: dict) -> dict:
     """Shape the engine result like the API's forecast payload."""
-    acc = res.get("accuracy") or {}
+    acc = dict(res.get("accuracy") or {})
+    acc["weights"] = res.get("weights") or {}
     out = {
         "horizon": res.get("horizon"),
         "generatedAt": __import__("datetime").datetime.now(
@@ -102,6 +137,12 @@ def to_payload(res: dict) -> dict:
         },
         # The dashboard header reads statewide.predicted; without it the card renders a blank.
         "statewide": {"predicted": round(sum(f["predicted"] for f in res["forecasts"]))},
+        # The backtest curve and model table. The live /analytics/backtest cannot assemble a
+        # national panel inside a Function's execution ceiling, so these travel with the snapshot
+        # and the dashboard falls back to them — same run as the reported accuracy, by
+        # construction.
+        "backtestSeries": acc.get("series") or [],
+        "modelComparison": _model_table(acc),
         "coverageTarget": 90,
         "units": res.get("units"),
         "periods": res.get("periods"),
@@ -123,11 +164,25 @@ def to_payload(res: dict) -> dict:
     return out
 
 
+# A district must be forecasting at least this many cases before a percentage swing counts as an
+# alert. Without a floor the list is dominated by micro-volume districts: a place predicting 0.42
+# cases against a baseline of 0.08 registers as "+400%, critical" when it is one incident either
+# way. Those are the least actionable rows possible and they crowd out real signal.
+MIN_ALERT_VOLUME = 5.0
+MIN_ALERT_BASELINE = 3.0
+
+
 def early_warning(payload: dict) -> dict:
     """Derive the early-warning payload from the forecast, matching the API's thresholds."""
     alerts = []
     for f in payload["forecasts"]:
         z, tr = f.get("z") or 0, f.get("trendPct") or 0
+        pred, base = f.get("predicted") or 0, f.get("baseline") or 0
+        # Percentage-change flags need a volume floor to mean anything. A z-score is computed
+        # against the model's own interval width, so it stays meaningful at lower volume — but
+        # not at fractions of a case, hence the baseline floor applies to both.
+        if pred < MIN_ALERT_VOLUME or base < MIN_ALERT_BASELINE:
+            continue
         sev = "watch"
         if z >= 1.5 or tr >= 50:
             sev = "critical"
@@ -135,7 +190,10 @@ def early_warning(payload: dict) -> dict:
             sev = "elevated"
         if z >= 0.3 or tr >= 8:
             alerts.append({**f, "severity": sev})
-    alerts.sort(key=lambda a: -(a.get("z") or 0))
+    # Rank by severity first, then by how much volume is actually at stake — a commander cares
+    # about the biggest credible movement, not the largest percentage.
+    rank = {"critical": 0, "elevated": 1, "watch": 2}
+    alerts.sort(key=lambda a: (rank.get(a["severity"], 3), -(a.get("predicted") or 0)))
     return {
         **{k: v for k, v in payload.items() if k != "forecasts"},
         "method": "Ensemble forecast vs 12-month control baseline (z-score / EWMA-style expectation)",

@@ -422,13 +422,21 @@ async function computeEarlyWarning(app, { level, state } = {}) {
   const fc = await computeForecast(app, { level, state });
   if (fc.error) return fc;
   // Expectation-based flags: forecast exceeds baseline by control-chart threshold.
-  const alerts = fc.forecasts.map((f) => {
-    let severity = 'watch';
-    if (f.z >= 1.5 || f.trendPct >= 50) severity = 'critical';
-    else if (f.z >= 0.8 || f.trendPct >= 25) severity = 'elevated';
-    return { ...f, severity };
-  }).filter((f) => f.z >= 0.3 || f.trendPct >= 8)
-    .sort((a, b) => b.z - a.z);
+  // Volume floor before a percentage swing counts. Without it the list fills with micro-volume
+  // districts — a district predicting 0.42 cases against a baseline of 0.08 reads as "+400%,
+  // critical" when it is one incident either way, and those crowd out anything actionable.
+  const MIN_VOL = 5, MIN_BASE = 3;
+  const rank = { critical: 0, elevated: 1, watch: 2 };
+  const alerts = fc.forecasts
+    .filter((f) => (f.predicted || 0) >= MIN_VOL && (f.baseline || 0) >= MIN_BASE)
+    .map((f) => {
+      let severity = 'watch';
+      if (f.z >= 1.5 || f.trendPct >= 50) severity = 'critical';
+      else if (f.z >= 0.8 || f.trendPct >= 25) severity = 'elevated';
+      return { ...f, severity };
+    }).filter((f) => f.z >= 0.3 || f.trendPct >= 8)
+    // Severity first, then volume at stake rather than largest percentage.
+    .sort((a, b) => (rank[a.severity] - rank[b.severity]) || (b.predicted - a.predicted));
   return {
     horizon: fc.horizon, generatedAt: fc.generatedAt,
     // Carried through so an operator can tell which engine produced the flags, and see the

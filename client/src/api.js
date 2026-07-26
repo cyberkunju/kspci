@@ -29,7 +29,8 @@ export const api = {
   tts: ({ text, language, role }) =>
     req('/voice/tts', { method: 'POST', role, body: { text, language } }),
   overview: (role) => req('/analytics/overview', { role }),
-  hotspots: (role) => req('/analytics/hotspots', { role }),
+  // level=district returns all 640 districts; level=state rolls up to 36 states/UTs.
+  hotspots: (role, level) => req(`/analytics/hotspots${level ? `?level=${level}` : ''}`, { role }),
   trends: (role) => req('/analytics/trends', { role }),
   network: (role, ring) => req(`/analytics/network${ring ? `?ring=${ring}` : ''}`, { role }),
   offenders: (role, band) => req(`/analytics/offenders${band ? `?band=${band}` : ''}`, { role }),

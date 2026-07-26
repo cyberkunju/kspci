@@ -263,8 +263,11 @@ async function network(app, { ring, limit = 250 } = {}) {
   return { nodes: [...nodeMap.values()], links, rings };
 }
 
-async function offenders(app, { band, limit = 50 } = {}) {
-  const lim = Math.min(Number(limit) || 50, 200);
+// 200 rather than 50. There are 94,814 scored offenders; the top fifty are all within a point of
+// each other, so a short list looked both sparse and flat. 200 spans roughly 100 down to 95, which
+// gives the risk-score column visible variation and the table something to scroll.
+async function offenders(app, { band, limit = 200 } = {}) {
+  const lim = Math.min(Number(limit) || 200, 300);
   const where = band ? `WHERE RiskBand='${String(band).replace(/'/g, '')}'` : '';
   const rows = await q(app, `SELECT AccusedName, TotalCases, ViolentCases, RingID, RiskScore, RiskBand, Factors FROM OffenderRisk ${where} ORDER BY RiskScore DESC LIMIT ${lim}`);
   return rows.map((r) => ({
@@ -273,8 +276,8 @@ async function offenders(app, { band, limit = 50 } = {}) {
   }));
 }
 
-async function financial(app, { limit = 25 } = {}) {
-  const lim = Math.min(Number(limit) || 25, 100);
+async function financial(app, { limit = 100 } = {}) {
+  const lim = Math.min(Number(limit) || 100, 300);
   const rows = await q(app, `SELECT AccusedName, Counterparty, Amount, TxnDate, AccountRef FROM FinancialTxns ORDER BY Amount DESC LIMIT ${lim}`);
   return rows.map((r) => ({
     accused: r.AccusedName, counterparty: r.Counterparty, amount: Number(r.Amount),
@@ -333,9 +336,40 @@ async function sociology(app) {
 // ============================ Money-trail network (framework #7) ============================
 // Builds a financial-flow graph (accused ↔ counterparty) from transactions and flags
 // suspicious hubs (counterparties linked to many distinct accused = potential mules/layering).
+/**
+ * Money trail, built around the counterparties that actually connect people.
+ *
+ * This used to take the 300 largest transactions and look for shared counterparties in that
+ * sample. Layering hubs are not the largest transfers, so the sample was 300 unrelated pairs:
+ * the graph rendered as disconnected dots and the "suspicious hubs" table was always empty,
+ * even though the data does contain hubs — 9 counterparties link 4 or more distinct accused.
+ *
+ * So the hubs are found by aggregation first, and only their transactions are fetched. The graph
+ * is then connected by construction and the table has something in it.
+ */
 async function moneytrail(app, { limit = 300 } = {}) {
   const lim = Math.min(Number(limit) || 300, 300); // ZCQL LIMIT max is 300
-  const rows = await q(app, `SELECT AccusedName, Counterparty, Amount, TxnDate, AccountRef FROM FinancialTxns ORDER BY Amount DESC LIMIT ${lim}`);
+
+  // Counterparties ranked by how many transactions they receive. Cheap: one grouped query.
+  const ranked = await q(app,
+    `SELECT Counterparty, COUNT(ROWID) FROM FinancialTxns GROUP BY Counterparty ORDER BY COUNT(ROWID) DESC LIMIT ${lim}`);
+  const hubNames = ranked.map((r) => r.Counterparty).filter(Boolean).slice(0, 70);
+
+  let rows = [];
+  if (hubNames.length) {
+    const list = hubNames.map((n) => `'${String(n).replace(/'/g, "''")}'`).join(',');
+    rows = await q(app,
+      `SELECT AccusedName, Counterparty, Amount, TxnDate, AccountRef FROM FinancialTxns WHERE Counterparty IN (${list}) LIMIT ${lim}`);
+  }
+  // Top transfers by value, for context alongside the hub subgraph. Kept separate so the graph
+  // stays connected while the largest flows are still represented.
+  const big = await q(app,
+    `SELECT AccusedName, Counterparty, Amount, TxnDate, AccountRef FROM FinancialTxns ORDER BY Amount DESC LIMIT 120`);
+  const seen = new Set(rows.map((r) => `${r.AccusedName}|${r.Counterparty}|${r.Amount}`));
+  for (const r of big) {
+    const k = `${r.AccusedName}|${r.Counterparty}|${r.Amount}`;
+    if (!seen.has(k)) { rows.push(r); seen.add(k); }
+  }
   const nodes = new Map(); const edges = [];
   const cpAccused = {}; // counterparty -> set of accused (mule detection)
   for (const r of rows) {
@@ -351,7 +385,7 @@ async function moneytrail(app, { limit = 300 } = {}) {
   const hubs = Object.entries(cpAccused).map(([cp, set]) => ({
     counterparty: cp, linkedAccused: set.size,
     totalAmount: (nodes.get(cp) || {}).total || 0
-  })).filter((h) => h.linkedAccused >= 2).sort((a, b) => b.linkedAccused - a.linkedAccused || b.totalAmount - a.totalAmount).slice(0, 15);
+  })).filter((h) => h.linkedAccused >= 2).sort((a, b) => b.linkedAccused - a.linkedAccused || b.totalAmount - a.totalAmount).slice(0, 20);
   return { nodes: [...nodes.values()], links: edges, hubs, totalFlows: edges.length };
 }
 
