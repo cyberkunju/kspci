@@ -221,11 +221,23 @@ source list; no GDELT means less breadth, named in the report. Nothing cascades.
 
 Stage notes worth knowing:
 
+- **fuse** — discovery returns 120–130 candidates and the budget reads 48, so the ordering
+  of that list decides what the run sees. Weighted reciprocal-rank fusion (`fuse.py`):
+  `score = Σ(source weight / position) × number of sources`. Agreement between independent
+  tiers is the strongest relevance signal available before a single page is fetched, and it
+  used to be computed and discarded — duplicates were deduped by keeping whichever copy
+  arrived first. Duplicates are now merged field by field, because sources are good at
+  different things: a news feed carries a real publication date and often no title, a
+  newsroom's own search carries a title and no date. Technique from SearXNG; see
+  [18-engine-techniques.md](./18-engine-techniques.md).
 - **prefilter** — asked for something it has no match for, a newsroom's search page
   returns its *latest* articles rather than nothing. Fetch in discovery order and thirty
   reads get spent on today's front page while a real match sits unread at position forty.
-  So hits are ordered by apparent relevance first. Nothing is discarded; a title is weak
-  evidence and the relevance decision belongs to attribution, which has the full text.
+  So hits are ordered by title match, then by whether we can read the publisher at all
+  (`verdict.py` — a domain that has failed repeatedly and never once yielded article text
+  goes last, since a read spent on a page that renders empty is spent on nothing), then by
+  fused score. Nothing is discarded; a title is weak evidence and the relevance decision
+  belongs to attribution, which has the full text.
 - **cluster** — simhash over 3-word shingles, threshold 10, **measured**: boilerplate
   variants of one page land at 2–8, truncation at 13–17, independent reporting at 36. A
   wire report republished by twelve outlets is one fact carried twelve times, not twelve
@@ -535,9 +547,12 @@ control here is the internal key, and that is what is actually enforcing.
   word will return coverage of unrelated things at `possible`. That is the requested
   tradeoff: everything found is shown, labelled, and left to the officer. The summary is
   protected from it by preferring `probable` and above.
-- **Some publishers cannot be read even when they are found.** MSN, for example, is a
-  JavaScript shell — its copies of the correct story appear in the table with "could not be
-  read: no article text found" and a working link, but they cannot earn a band or a claim.
+- **Some publishers cannot be read even when they are found.** MSN, for example, serves a
+  JavaScript shell — its copies of the correct story appear in the table with a working link
+  and the reason *"this publisher serves a page our reader cannot open (it needs a browser)"*,
+  but they cannot earn a band or a claim. The instance learns these domains as it runs
+  (`verdict.py`, reported by `/health` under `publishers`) and stops spending reads on them;
+  the browser tier that would actually read them is not built yet.
 - **The on-site article detector is a heuristic.** It requires the link to be on the
   searched site, to avoid known navigation paths, and to carry a long slug or a numeric id.
   Per-site templates change; a miss costs one source's hits for one run and the run says so,
