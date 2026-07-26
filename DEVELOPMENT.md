@@ -313,3 +313,60 @@ Coverage of all 36 states and 640 districts is preserved at any `--cases` value;
 per district shrinks. The forecast engine needs district-month history, not raw volume, so a
 smaller corpus still exercises every code path — and `ml/RESULTS.md` is measured offline on the
 full 27.4M-incident corpus regardless of what the Data Store holds.
+
+---
+
+## 11. ZCQL limits at scale, measured
+
+At around a million rows in `Cases`, several dashboard endpoints started failing with a bare
+`400 ... ZCQL QUERY ERROR, message: Error occurred during query processing`. That message names
+neither the query nor the cause, so the limits were mapped by bisection through
+`POST /admin/zcql` (admin-only, SELECT-only — it exists because there is no other scriptable way
+to see what the store answers).
+
+What was measured on 1,016,380 rows:
+
+| Query | Result |
+|---|---|
+| `COUNT(ROWID) FROM Cases` | 330 ms |
+| `GROUP BY Gravity` (3 groups) | 1.0 s |
+| `GROUP BY Year` (3 groups) | 436 ms |
+| `GROUP BY StateName` (36 groups) | **fails** |
+| `GROUP BY StateName WHERE Year=2024` (36 groups, 512k rows) | 1.2 s |
+| `GROUP BY StateName, DistrictName WHERE Year=…` (640 groups, 512k rows) | **fails** |
+| `GROUP BY StateName, DistrictName WHERE StateName=…` (≤71 groups) | 1.1 s |
+| 12 of those concurrently | **fails** |
+| 4 of those concurrently | fine |
+
+So there are two separate ceilings, and neither is about indexing: one scales with **rows scanned
+× groups produced**, the other limits **concurrent query processing**. Both surface as the same
+opaque error.
+
+Consequences, applied in `analytics.js` and `forecast.js`:
+
+- National aggregates are **partitioned and merged in process** — by `Year` where a few dozen
+  groups suffice, and by `StateName` for district roll-ups, which also puts every partition under
+  the 300-row `LIMIT` cap so no pagination is needed at all.
+- Partitions run **4 at a time**: 36 sequential queries overshoot the function's execution
+  ceiling, 12 concurrent ones trip the concurrency limit.
+- `overview`'s KPI counts run **sequentially**. In parallel they failed intermittently, and a
+  header that breaks one load in three is worse than one that takes four seconds.
+- The 300-district cap on `hotspots` is gone. It existed because the roll-up was a single
+  `LIMIT 300` query; now that the aggregate is assembled in process, all 640 districts are
+  returned.
+
+### Do not trust OFFSET or ORDER BY for pagination
+
+Reading 640 stored forecast rows back was harder than writing them. `LIMIT offset, n` returned
+**overlapping pages**, so a read produced one district twice and silently dropped another. Keyset
+paging on `ROWID` then skipped rows, because Catalyst `ROWID`s are **not monotonic across insert
+batches**. Both failures lost data without erroring.
+
+The working pattern is a sequence column assigned at write time (`Forecasts.Seq`), read back in
+explicit half-open ranges — which depends on neither `ORDER BY` nor `OFFSET`. Where a partition
+naturally fits under 300 rows, prefer no pagination at all.
+
+Inserts are also not exactly-once: a request can fail at the client after succeeding at the
+server, and its retry writes a duplicate. `POST /admin/forecast/dedupe` repairs that; it refuses
+to treat a row as its own duplicate, because under the old offset paging the same physical row
+appeared on two pages and "removing the older copy" deleted real districts.

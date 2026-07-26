@@ -202,6 +202,33 @@ app.post('/admin/insert', adminGuard, async (req, res) => {
   }
 });
 
+/**
+ * Run a read-only ZCQL query. Admin-only, SELECT-only.
+ *
+ * Exists because there is no other way to see what the Data Store actually answers at scale: an
+ * analytics endpoint failing with "Error occurred during query processing" says nothing about
+ * which of its six queries failed, and the console's ZCQL console cannot be scripted.
+ *
+ * Deliberately narrow. Only SELECT is accepted, and anything containing a statement separator or
+ * a mutating keyword is rejected rather than escaped — this is a diagnostic tool, so the safe
+ * behaviour is to refuse anything it does not need to support.
+ */
+app.post('/admin/zcql', adminGuard, async (req, res) => {
+  try {
+    const sql = String((req.body && req.body.query) || '').trim();
+    if (!/^select\s/i.test(sql)) return res.status(400).json({ error: 'only SELECT is allowed' });
+    if (/;|\b(insert|update|delete|drop|alter|create|truncate)\b/i.test(sql)) {
+      return res.status(400).json({ error: 'query rejected', reason: 'mutation or statement separator' });
+    }
+    const adminApp = catalyst.initialize(req, { scope: 'admin' });
+    const started = Date.now();
+    const rows = await adminApp.zcql().executeZCQLQuery(sql);
+    res.json({ ms: Date.now() - started, count: (rows || []).length, rows: (rows || []).slice(0, 50) });
+  } catch (e) {
+    res.status(400).json({ error: 'zcql_failed', message: String((e && e.message) || e) });
+  }
+});
+
 // Row counts per table (verification).
 app.get('/admin/status', adminGuard, async (req, res) => {
   try {

@@ -154,6 +154,32 @@ async function pagedQuery(app, base, maxPages = 200) {
  * 0.929 for district x day). Weekly and daily panels need an incident-date-derived column on
  * Cases; until that exists this reads Year and CrimeMonth, which is what the table has.
  */
+/**
+ * Assemble the panel aggregate one year at a time.
+ *
+ * ZCQL has a processing ceiling that scales with rows scanned times groups produced. A national
+ * district-month roll-up is ~640 x 24 groups over a million rows and fails outright with a 400
+ * that names neither the query nor the reason; the same query restricted to a single year
+ * succeeds. Year is the natural partition because it is already one of the grouping columns, so
+ * the partitions are disjoint and need no merging — only concatenation.
+ */
+async function panelQuery(app, groupCols, where) {
+  const yearRows = await app.zcql().executeZCQLQuery(
+    `SELECT Year, COUNT(ROWID) FROM Cases ${where} GROUP BY Year LIMIT 300`);
+  const years = (yearRows || []).map(flatten).map((r) => Number(r.Year)).filter(Boolean).sort();
+  const out = [];
+  let truncated = false;
+  for (const y of years) {
+    const scope = where ? `${where} AND Year=${y}` : `WHERE Year=${y}`;
+    const rows = await pagedQuery(app,
+      `SELECT ${groupCols}, Year, CrimeMonth, COUNT(ROWID) FROM Cases ${scope} GROUP BY ${groupCols}, Year, CrimeMonth`);
+    if (rows.truncated) truncated = true;
+    out.push(...rows);
+  }
+  out.truncated = truncated;
+  return out;
+}
+
 async function fetchPanel(app, { level = 'district', state = null } = {}) {
   const scoped = state ? String(state).replace(/'/g, "''") : null;
   let byDistrict = level === 'district' || !!scoped;
@@ -168,14 +194,12 @@ async function fetchPanel(app, { level = 'district', state = null } = {}) {
   let rows;
   let stateless = false;
   try {
-    rows = await pagedQuery(app,
-      `SELECT ${groupCols}, Year, CrimeMonth, COUNT(ROWID) FROM Cases ${where} GROUP BY ${groupCols}, Year, CrimeMonth ORDER BY Year, CrimeMonth`);
+    rows = await panelQuery(app, groupCols, where);
   } catch (e) {
     if (scoped || !/StateName/i.test(String((e && e.message) || e))) throw e;
     stateless = true;
     byDistrict = true;
-    rows = await pagedQuery(app,
-      `SELECT DistrictName, Year, CrimeMonth, COUNT(ROWID) FROM Cases GROUP BY DistrictName, Year, CrimeMonth ORDER BY Year, CrimeMonth`);
+    rows = await panelQuery(app, 'DistrictName', '');
   }
   const panelTruncated = !!rows.truncated;
   // crime-head split (for narrative + per-head early warning)

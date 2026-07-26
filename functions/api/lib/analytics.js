@@ -53,28 +53,86 @@ async function q(app, query) {
   return (res || []).map(flatten);
 }
 
+/**
+ * Run a grouped aggregate over Cases one year at a time and merge the results.
+ *
+ * ZCQL has a processing ceiling that scales with rows scanned times groups produced, and it is
+ * reached between half a million and a million rows: measured on this data, `GROUP BY Gravity`
+ * (3 groups) succeeds over 1,016,380 rows, `GROUP BY StateName` (36 groups) fails over the same
+ * rows, and the identical query restricted to one year (512,054 rows) succeeds. The failure is a
+ * 400 reading "Error occurred during query processing" — it names neither the cause nor the
+ * query, so at national scale the dashboards simply broke.
+ *
+ * Partitioning on Year is the natural split: it is already an indexed-cardinality-3 column here,
+ * every aggregate below is additive across it, and it keeps each partition well inside the
+ * ceiling. Grows to a handful of queries instead of one, which costs a few paise per call.
+ *
+ * `cols` are the grouping columns, `merge` folds one row into the accumulator keyed by `keyOf`.
+ */
+async function groupedOverYears(app, { cols, where = '', extra = '', years = null }) {
+  const yrs = years || await q(app, 'SELECT Year, COUNT(ROWID) FROM Cases GROUP BY Year LIMIT 300')
+    .then((rows) => rows.map((r) => Number(r.Year)).filter(Boolean).sort());
+  const clause = (y) => {
+    const parts = [`Year=${y}`];
+    if (where) parts.push(where.replace(/^\s*WHERE\s+/i, ''));
+    return `WHERE ${parts.join(' AND ')}`;
+  };
+  const out = [];
+  for (const y of yrs) {
+    const rows = await q(app,
+      `SELECT ${cols}, COUNT(ROWID) FROM Cases ${clause(y)} GROUP BY ${cols} ${extra}`.trim());
+    out.push(...rows);
+  }
+  return out;
+}
+
+/** Fold year-partitioned rows into one row per group, summing the counts. */
+function mergeCounts(rows, keyOf) {
+  const acc = new Map();
+  for (const r of rows) {
+    const k = keyOf(r);
+    const cur = acc.get(k);
+    if (cur) cur.count += countOf(r);
+    else acc.set(k, { row: r, count: countOf(r) });
+  }
+  return [...acc.values()].sort((a, b) => b.count - a.count);
+}
+
 async function overview(app) {
   const one = async (query) => { const r = await q(app, query); return r.length ? countOf(r[0]) : 0; };
-  const [cases, accused, heinous, chargesheeted, highRisk, , stateRows] = await Promise.all([
-    one('SELECT COUNT(ROWID) FROM Cases'),
-    one('SELECT COUNT(ROWID) FROM Accused'),
-    one("SELECT COUNT(ROWID) FROM Cases WHERE Gravity='Heinous'"),
-    // Anything past investigation has been chargesheeted at some point.
-    one("SELECT COUNT(ROWID) FROM Cases WHERE CaseStatus IN ('Chargesheet Filed','Pending Trial','Convicted','Acquitted')"),
-    one("SELECT COUNT(ROWID) FROM OffenderRisk WHERE RiskBand='High'"),
+  // Sequential, deliberately. Run as five parallel counts these intermittently returned
+  // "Error occurred during query processing" at a million rows — each query is fine alone, so the
+  // limit is on concurrent query processing. A KPI header that fails one load in three is worse
+  // than one that takes four seconds.
+  const [cases, accused, heinous, chargesheeted, highRisk, , stateRows] = [
+    await one('SELECT COUNT(ROWID) FROM Cases'),
+    await one('SELECT COUNT(ROWID) FROM Accused'),
+    await one("SELECT COUNT(ROWID) FROM Cases WHERE Gravity='Heinous'"),
+    // Anything past investigation has been chargesheeted at some point. Partitioned by year: a
+    // four-value IN scan across the whole table is the heaviest query on this page.
+    await (async () => {
+      const rows = await groupedOverYears(app, {
+        cols: 'CaseStatus',
+        where: "CaseStatus IN ('Chargesheet Filed','Pending Trial','Convicted','Acquitted')",
+      });
+      return rows.reduce((s, r) => s + countOf(r), 0);
+    })(),
+    await one("SELECT COUNT(ROWID) FROM OffenderRisk WHERE RiskBand='High'"),
     // ZCQL caps LIMIT at 300 and the data covers ~640 districts, so counting the rows
     // returned here would report 300 and understate coverage. The district universe is
     // a property of the reference data, not of a paged query.
     Promise.resolve(null),
-    q(app, 'SELECT StateName, COUNT(ROWID) FROM Cases GROUP BY StateName LIMIT 300'),
-  ]);
+    // Same reasoning for states, and it also avoids a national GROUP BY that exceeds ZCQL's
+    // processing ceiling past ~1M rows.
+    null,
+  ];
   return {
     totalCases: cases, totalAccused: accused, heinous,
     heinousPct: cases ? Math.round((heinous / cases) * 100) : 0,
     chargesheeted, chargesheetRate: cases ? Math.round((chargesheeted / cases) * 100) : 0,
     highRiskOffenders: highRisk,
     districts: DISTRICT_REF.length,
-    states: stateRows.filter((r) => r.StateName).length,
+    states: STATE_CENTROIDS.size,
   };
 }
 
@@ -83,8 +141,11 @@ async function overview(app) {
  * far too many to read on one map, so the default view rolls up to state/UT and
  * callers can drill into districts (optionally within one state).
  */
-async function hotspots(app, { level = 'state', state, limit = 300 } = {}) {
-  const lim = Math.min(Number(limit) || 300, 300); // ZCQL caps LIMIT at 300
+async function hotspots(app, { level = 'state', state, limit = 0 } = {}) {
+  // The old 300 ceiling existed because ZCQL caps LIMIT at 300 and the roll-up was one query.
+  // The aggregates are now partitioned and merged in process, so every district is already in
+  // hand and capping the response would hide two thirds of the country for no reason.
+  const lim = Math.min(Number(limit) || 700, 700);
   const safeState = state ? String(state).replace(/'/g, "''") : null;
 
   let districts = [];
@@ -93,7 +154,28 @@ async function hotspots(app, { level = 'state', state, limit = 300 } = {}) {
     const where = safeState ? `WHERE StateName='${safeState}'` : '';
     // Grouping by StateName as well keeps the six duplicated district names apart, and
     // gives the centroid lookup the state it needs to resolve them.
-    const rows = await q(app, `SELECT StateName, DistrictName, COUNT(ROWID) FROM Cases ${where} GROUP BY StateName, DistrictName ORDER BY COUNT(ROWID) DESC LIMIT ${lim}`);
+    // Partitioned by state, one query each.
+    //
+    // Year partitioning is not enough here: ~640 district groups over a single year's ~512,000
+    // rows still exceeds ZCQL's ceiling. Per state it is at most 71 groups over a few tens of
+    // thousands of rows, which also brings every partition under the 300-row LIMIT cap — so this
+    // needs no pagination, and therefore does not depend on OFFSET or ORDER BY, both of which
+    // proved unreliable on this store.
+    const targets = safeState ? [safeState] : [...STATE_CENTROIDS.keys()];
+    // In parallel, in bounded waves: 36 partitions run sequentially at roughly a second each
+    // overshoot the function's execution ceiling, and the work is entirely waiting on the store.
+    const rows = [];
+    // Four at a time. Each partition takes about a second, so 36 sequential queries overshoot the
+    // function's execution ceiling — but twelve concurrent ones come back as a ZCQL processing
+    // error, which is a concurrency limit rather than the row ceiling (each query succeeds alone).
+    const WAVE = 4;
+    for (let i = 0; i < targets.length; i += WAVE) {
+      const parts = await Promise.all(targets.slice(i, i + WAVE).map((st) => q(app,
+        `SELECT StateName, DistrictName, COUNT(ROWID) FROM Cases WHERE StateName='${String(st).replace(/'/g, "''")}' GROUP BY StateName, DistrictName`)));
+      for (const p of parts) rows.push(...p);
+    }
+    rows.sort((a, b) => countOf(b) - countOf(a));
+    rows.length = Math.min(rows.length, lim);
     districts = rows.map((r) => {
       const c = DISTRICT_CENTROIDS.get(r.StateName + '|' + r.DistrictName)
         || DISTRICT_CENTROIDS.get(r.DistrictName) || [null, null];
@@ -106,7 +188,8 @@ async function hotspots(app, { level = 'state', state, limit = 300 } = {}) {
     }).filter((d) => d.lat != null);
   }
   if (level !== 'district') {
-    const rows = await q(app, `SELECT StateName, COUNT(ROWID) FROM Cases GROUP BY StateName ORDER BY COUNT(ROWID) DESC LIMIT ${lim}`);
+    const rows = mergeCounts(await groupedOverYears(app, { cols: 'StateName' }), (r) => r.StateName)
+      .slice(0, lim).map((x) => ({ ...x.row, 'COUNT(ROWID)': x.count }));
     states = rows.map((r) => {
       const c = STATE_CENTROIDS.get(r.StateName) || [null, null];
       return { name: r.StateName, state: r.StateName, count: countOf(r), lat: c[0], lng: c[1] };
@@ -130,17 +213,30 @@ async function hotspots(app, { level = 'state', state, limit = 300 } = {}) {
 }
 
 async function trends(app) {
-  const [byMonth, byHead, byStatus, byGravity] = await Promise.all([
-    q(app, 'SELECT Year, CrimeMonth, COUNT(ROWID) FROM Cases GROUP BY Year, CrimeMonth ORDER BY Year, CrimeMonth LIMIT 60'),
-    q(app, 'SELECT CrimeHead, COUNT(ROWID) FROM Cases GROUP BY CrimeHead ORDER BY COUNT(ROWID) DESC LIMIT 20'),
-    q(app, 'SELECT CaseStatus, COUNT(ROWID) FROM Cases GROUP BY CaseStatus ORDER BY COUNT(ROWID) DESC LIMIT 20'),
-    q(app, 'SELECT Gravity, COUNT(ROWID) FROM Cases GROUP BY Gravity ORDER BY COUNT(ROWID) DESC LIMIT 10')
+  // Every grouping here except Gravity exceeds ZCQL's processing ceiling nationally, so they run
+  // per year and are merged. Gravity would survive a single query, but goes through the same path
+  // for consistency — one code path is worth more than saving two queries.
+  const years = (await q(app, 'SELECT Year, COUNT(ROWID) FROM Cases GROUP BY Year LIMIT 300'))
+    .map((r) => Number(r.Year)).filter(Boolean).sort();
+
+  const [byMonthRows, byHeadRows, byStatusRows, byGravityRows] = await Promise.all([
+    groupedOverYears(app, { cols: 'Year, CrimeMonth', years }),
+    groupedOverYears(app, { cols: 'CrimeHead', years }),
+    groupedOverYears(app, { cols: 'CaseStatus', years }),
+    groupedOverYears(app, { cols: 'Gravity', years }),
   ]);
+
+  const byMonth = mergeCounts(byMonthRows, (r) => `${r.Year}-${r.CrimeMonth}`)
+    .map((x) => ({ year: Number(x.row.Year), month: Number(x.row.CrimeMonth), count: x.count }))
+    .sort((a, b) => (a.year - b.year) || (a.month - b.month));
+  const label = (rows, field, limit) => mergeCounts(rows, (r) => r[field])
+    .slice(0, limit).map((x) => ({ label: x.row[field], count: x.count }));
+
   return {
-    byMonth: byMonth.map((r) => ({ year: Number(r.Year), month: Number(r.CrimeMonth), count: countOf(r) })),
-    byHead: byHead.map((r) => ({ label: r.CrimeHead, count: countOf(r) })),
-    byStatus: byStatus.map((r) => ({ label: r.CaseStatus, count: countOf(r) })),
-    byGravity: byGravity.map((r) => ({ label: r.Gravity, count: countOf(r) }))
+    byMonth,
+    byHead: label(byHeadRows, 'CrimeHead', 20),
+    byStatus: label(byStatusRows, 'CaseStatus', 20),
+    byGravity: label(byGravityRows, 'Gravity', 10),
   };
 }
 
