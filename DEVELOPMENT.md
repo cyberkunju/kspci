@@ -394,14 +394,50 @@ All three steps are idempotent and re-runnable. Verify with:
 curl -s https://ksp.cyberkunju.com/server/api/whatsapp/health -H "x-admin-key: $ADMIN_KEY"
 ```
 
-### Still pending — only a Meta account can supply these
+### Meta credentials — wired, and the one thing still blocked
 
-`WA_PHONE_NUMBER_ID` and `WA_ACCESS_TOKEN` (permanent System User token, not the 24-hour test
-one), the real `WA_APP_SECRET` from the Meta app, the `WA_VERIFY_TOKEN` pasted into Meta's
-webhook form against `https://ksp.cyberkunju.com/server/api/whatsapp/webhook` with the
-`messages` field subscribed, and an approved Utility template named `ksp_early_warning`.
-Until the token exists, `configured.send` is `false` and every outbound send fails loudly —
-which is correct, and is how the send path was verified.
+Real credentials are in place, taken from the same Meta app this machine's other WhatsApp
+projects use (`Projects/Tia`, `Projects/Versifine`, `sellthat`):
+
+| | |
+|---|---|
+| Meta app | `2592724907814162` ("Versifine") |
+| Sender | `+91 94002 45958` · phone id `1079257601947704` · APPROVED · quality GREEN · `account_mode: LIVE` |
+| Token | SYSTEM_USER, **never expires**, scopes `whatsapp_business_management`, `whatsapp_business_messaging`, `business_management` |
+| `WA_APP_SECRET` | the app's real secret, so genuine Meta signatures verify |
+| `DATA_WINDOW` | `2023-07..2025-06` — see below, this one is not cosmetic |
+
+**Outbound works and is verified live.** A signed inbound webhook, an agent turn, a Kannada
+turn and two early-warning alerts were all delivered to a real handset, and a second dispatch
+suppressed both alerts as duplicates.
+
+**Inbound from Meta is the blocked part, and it is a contention problem, not a credential
+problem.** There is exactly one phone number on this app, and a number delivers to exactly one
+webhook. The app-level callback currently points at `https://tia.cyberkunju.com/webhook/whatsapp`
+(live, answering the handshake), and `sellthat.in` is deployed against the same number too.
+Pointing it at KSP takes inbound away from whichever workload holds it:
+
+```bash
+# App-level flip — one command, and one command back. Displaces Tia.
+curl -X POST "https://graph.facebook.com/v23.0/2592724907814162/subscriptions" \
+  -d "object=whatsapp_business_account" -d "callback_url=https://ksp.cyberkunju.com/server/api/whatsapp/webhook" \
+  -d "verify_token=$WA_VERIFY_TOKEN" -d "fields=messages" -d "access_token=2592724907814162|$WA_APP_SECRET"
+```
+
+The surgical alternative (`POST /<WABA_ID>/subscribed_apps` with `override_callback_uri`) does
+not help here: with a single number the override and the app default govern the same delivery,
+so still only one workload can receive. The real fix is a second number — a free Meta test
+number is enough for a demo — which needs the Meta UI.
+
+The **WABA id is not obtainable with this token**: `me/businesses` is empty, and
+`owned_whatsapp_business_accounts`, `client_whatsapp_business_accounts` and a phone→WABA field
+expansion are all rejected. It comes from WhatsApp Manager, or from `entry[0].id` on the first
+inbound webhook. That id is also what blocks creating the `ksp_early_warning` template, so
+cold-window alerts fail with `#132001` until it exists. In-window alerts need no template and
+work today.
+
+Testing inbound needs no Meta routing at all — with the real app secret you can sign a webhook
+yourself, which is how the whole channel was verified end to end.
 
 ### Traps, all of which cost real time
 
@@ -428,6 +464,24 @@ from a dead button. Both rules are encoded in the steps, which now surface the A
 identifiable people, and Public sits one radio button from the default while encryption and
 PII/ePHI are off unless ticked. `create-bucket.js` sets all three and refuses to create a public
 bucket, which is why it is a step and not a docs instruction.
+
+**A job retry can answer an officer twice, and the guard was on the wrong path.** Catalyst decides
+a webhook job failed from the HTTP response it sees, so a turn slower than that timeout is
+re-dispatched whatever status code the function eventually returns — `processEvent`'s "retry only
+if the agent had not started" rule never gets consulted. Meanwhile duplicate suppression lived
+only in `acceptWebhook`, because `claimMessage` also writes the inbound ledger row and so can run
+once per message; the job POSTs straight to `/whatsapp/process` and skipped it. The first real turn
+was answered twice, 60 seconds apart. `processEvent` now refuses a message already marked
+complete, which is also what makes the documented promise about not enrolling a photo twice true.
+
+**A gap in the data must never read as an absence of crime.** Asked "how many cases in Hoshiarpur
+this year", the bot answered *"No cases in Hoshiarpur this year (2026). The database shows 0
+records for that district in 2026."* — true of the table, and to an officer it says there is no
+crime in their district. Putting the coverage in the system prompt was not enough: asked directly
+the model reports the window correctly and still answered from the 2026 query. `lib/wa/window.js`
+therefore attaches a note to any query filtered outside `DATA_WINDOW`, in the observation the
+model reasons over. Note the first version of that check keyed on an empty result and never fired
+once, because the model asked `COUNT(ROWID)`, which returns one row containing zero.
 
 **Alerts must read the snapshot, not recompute.** `dispatchAlerts` originally called
 `computeEarlyWarning`, which assembles a national panel and therefore hits the §11 ZCQL ceiling at

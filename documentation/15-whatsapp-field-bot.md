@@ -316,6 +316,8 @@ individual. Reply to this message for detail.
 | Request body size | Capped at 1 MiB **before** the HMAC is computed, so an unauthenticated caller cannot make us hash their payload |
 | Media provenance | Hop two carries our bearer token, so the download URL must be https on a Meta CDN host, and the size is checked three ways: Meta's declared `file_size`, the CDN `Content-Length`, and the bytes received. The allowlist has to include `fbsbx.com` — that is where Cloud API actually serves media from, and an allowlist built from the obvious names (fbcdn, facebook.com) rejects every real photo while looking correct |
 | Retry after a failure | A retry is offered only when the failure happened **before** the agent ran. After that the turn may already have enrolled a photo, and re-running it would enrol twice. A silent duplicate write is worse than a turn the officer can see failed |
+| A retry we did not ask for | The above governs only the status code we return, and Catalyst decides a webhook job failed from the HTTP response *it* sees — so a turn slower than its timeout is re-dispatched regardless. `claimMessage` could not catch it because the job calls `/whatsapp/process` directly, bypassing the webhook where the claim is made. `processEvent` now refuses any message already marked complete. Until it did, one officer's question was answered twice, 60 seconds apart |
+| A gap in the data | A query filtered outside `DATA_WINDOW` comes back with a note saying the result describes missing data, not missing cases (`lib/wa/window.js`). The system prompt alone did not hold: the model reports the coverage correctly when asked and still answered "no cases in Hoshiarpur this year (2026)". In a policing tool that is the most damaging wrong answer available, so the correction sits in the observation rather than in an instruction the model has to recall |
 | Lost conversational state | One turn per officer at a time (`acquireTurnLock`, 90-second ceiling, fails open). Without it, two messages seconds apart both read the pending blob and the second write erases the first |
 | Abuse / cost | Per-number hourly cap in Catalyst Cache, capped agent steps, capped face comparisons, capped media size (8 MB) |
 | Audit | Every inbound message, reply, alert, biometric use and write lands in `WaMessages` against the officer's identity |
@@ -332,8 +334,27 @@ individual. Reply to this message for detail.
 | Stratus bucket `ksp-field-photos` | permission **authenticated**, data encryption **on**, PII/ePHI **on**, versioning off |
 | Job pool `kspwaturns` | type Webhook, max concurrent 5 — `WA_JOBPOOL` set, turns verified queueing |
 | Cron `ksp_wa_early_warning` | daily 06:30 IST → `POST /whatsapp/alerts/dispatch` with `x-wa-internal-key` |
-| `WA_APP_SECRET`, `WA_VERIFY_TOKEN`, `WA_INTERNAL_KEY` | generated into the gitignored function config |
+| `WA_VERIFY_TOKEN`, `WA_INTERNAL_KEY` | generated into the gitignored function config |
+| Meta credentials | real: app `2592724907814162`, sender `+91 94002 45958` (phone id `1079257601947704`, APPROVED, GREEN), never-expiring SYSTEM_USER token, real `WA_APP_SECRET` |
+| Sending | **verified live** — a signed inbound turn, a Kannada turn and two early-warning alerts delivered to a real handset; a second dispatch suppressed both as duplicates |
+| `DATA_WINDOW` | `2023-07..2025-06`, the period the case records actually cover |
 | Catalyst SDK | **3.4.0** — required; see below |
+
+**Inbound from Meta is the one part still blocked, and it is contention, not credentials.** The app
+has a single phone number, a number delivers to exactly one webhook, and the app-level callback
+currently serves another live workload (`tia.cyberkunju.com`, with `sellthat.in` deployed against
+the same number as well). Pointing it at KSP takes inbound from whoever holds it; a per-WABA
+override does not help with one number. A second number — a free Meta test number is enough for a
+demo — is the real fix, and needs the Meta UI. The exact flip command and the reasoning are in
+`DEVELOPMENT.md` §12.
+
+The same UI dependency blocks the alert template: creating it needs the WABA id, which this token
+cannot read (`me/businesses` is empty and every WABA edge is rejected). It arrives as `entry[0].id`
+on the first inbound webhook. Cold-window alerts therefore fail with `#132001`; in-window alerts
+need no template and work today.
+
+None of that blocks testing. With the real app secret a webhook can be signed locally, which is how
+the whole channel was verified end to end.
 
 Each console resource has an idempotent step in `tools/steps/`: `create-bucket.js`,
 `create-jobpool.js`, `create-cron.js`. Rerunning one reports what it found rather
