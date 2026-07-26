@@ -37,6 +37,16 @@ const frames = require('./frames');
 const guard = require('./waGuard');
 
 const ANY = ['investigator', 'analyst', 'supervisor', 'policymaker', 'admin'];
+
+/**
+ * Words that make a message about alert *settings* rather than about a district.
+ *
+ * "alert" and "notification" are English inside all three copy packs by design, so
+ * officers write them in English whatever language they are typing; the Kannada and
+ * Devanagari forms are here for the ones who do not. Subscription verbs are included
+ * because "unsubscribe me" and "mute this" carry the intent without the noun.
+ */
+const ALERT_INTENT = /alert|notif|subscrib|unsubscrib|mute|unmute|remind|ಅಲರ್ಟ್|ಸೂಚನೆ|ಎಚ್ಚರಿಕೆ|अलर्ट|सूचना|चेतावनी/i;
 const ANALYST_PLUS = ['analyst', 'supervisor', 'policymaker', 'admin'];
 // Field-write and biometric actions: everyone operational, minus the read-only
 // policymaker role. Mirrors /ingest/* on the web API.
@@ -372,12 +382,55 @@ const TOOLS = {
     }
   },
 
+  set_language: {
+    roles: ANY,
+    writes: true,
+    args: '{"tool":"set_language","language":"en|kn|hi"}',
+    describe: 'Switch the language this officer is answered in, when they ask for it in any phrasing ("reply in Hindi", "ಕನ್ನಡದಲ್ಲಿ ಹೇಳಿ", "अंग्रेज़ी में बताओ"). Sticks until they change it again.',
+    async run(ctx, args) {
+      const code = require('./lang').normalize(args.language);
+      if (!code) {
+        return { error: 'language must be one of en, kn, hi. Ask which of the three the officer wants.' };
+      }
+      const before = ctx.officer.language;
+      await officers.setLanguage(ctx.app, ctx.officer, code);
+      ctx.officer.language = code;
+
+      // Take effect on THIS turn, not the next one. Confirming a switch to Hindi in
+      // English is the exact failure the copy pack exists to prevent, and the officer
+      // would reasonably conclude the switch had not worked.
+      ctx.pending.langLock = code;
+      ctx.language = code;
+      ctx.messages = require('./copy').messages(code);
+      ctx.wrote = true;
+
+      const token = officers.recordUndo(ctx.pending, {
+        action: 'undo_language', payload: { language: before }, describe: 'the language change'
+      });
+      ctx.undoToken = token;
+      return { updated: true, language: code, name: require('./copy').languageName(code), undoToken: token };
+    }
+  },
+
   set_alerts: {
     roles: ANY,
     writes: true,
     args: '{"tool":"set_alerts","districts":["District A"],"severity":"critical|elevated|watch|none"}',
-    describe: "Change which districts this officer receives push alerts for, and at what severity. Use when the officer asks to subscribe, unsubscribe or change alerts. Reversible.",
+    describe: "Change which districts this officer receives push alerts for, and at what severity. ONLY when the officer explicitly asks to subscribe, unsubscribe or change alerts — a question about what is happening in a district is NOT a request to subscribe to it; answer that with area_alerts. Reversible.",
     async run(ctx, args) {
+      // An alert subscription may only change when the officer's own words mention
+      // alerts. This is not belt-and-braces: asked "ಬಳ್ಳಾರಿಯಲ್ಲಿ ಮುಂದಿನ ತಿಂಗಳು ಏನು
+      // ಅಪಾಯ ಇದೆ" — what is the risk in Ballari next month — the model called this
+      // tool twice and silently resubscribed the officer to Ballari before answering.
+      //
+      // The epistemic write gate cannot catch that: the phrasing is a plain question,
+      // and questions are deliberately treated as permissible requests there so a
+      // politely-asked enrolment is not refused. So the check has to be about topic,
+      // not mood, and it has to read the officer's words rather than the model's
+      // reading of them — a model that misidentified the intent will happily assert it.
+      if (!ALERT_INTENT.test(String(ctx.officerText || ''))) {
+        return { error: 'Refused: the officer did not ask to change alert settings. If they asked what is happening in a district, use area_alerts instead.' };
+      }
       const before = { districts: ctx.officer.alertDistricts.join(','), severity: ctx.officer.alertSeverity };
       // Three distinct cases, and conflating them was a bug: not supplied (leave
       // alone), supplied empty (the officer wants the list cleared), and supplied
@@ -527,6 +580,17 @@ async function performUndo(ctx, record) {
   try {
     if (record.action === 'undo_enroll') {
       await photo.deleteEnrollment(ctx.app, record.payload || {});
+      return { ok: true, describe: record.describe };
+    }
+    if (record.action === 'undo_language') {
+      const back = require('./lang').normalize(record.payload && record.payload.language) || 'en';
+      await officers.setLanguage(ctx.app, ctx.officer, back);
+      ctx.officer.language = back;
+      // Reverse the lock and the reply language too, otherwise the confirmation that
+      // the change was undone arrives in the language it was undone from.
+      ctx.pending.langLock = back;
+      ctx.language = back;
+      ctx.messages = require('./copy').messages(back);
       return { ok: true, describe: record.describe };
     }
     if (record.action === 'undo_alerts') {

@@ -29,6 +29,7 @@
 
 const wa = require('./client');
 const officers = require('./officers');
+const { messages } = require('./copy');
 const { chatLLM } = require('../llm');
 
 const RANK = { watch: 1, elevated: 2, critical: 3 };
@@ -56,17 +57,21 @@ function wants(officer, alert) {
  * identical content. Falls back to a plain factual line, because an alert that
  * arrives without the advisory is still an alert.
  */
-async function advisoryFor(app, alert, cache) {
-  const key = alert.district + '|' + alert.severity;
+async function advisoryFor(app, alert, cache, language = 'en') {
+  // Language is part of the key, not a separate cache: two officers watching the same
+  // district in different languages need different lines, and one watching it alone
+  // should still only cost one call.
+  const key = alert.district + '|' + alert.severity + '|' + language;
   if (cache.has(key)) return cache.get(key);
 
+  const languageName = { kn: 'Kannada', hi: 'Hindi', en: 'English' }[language] || 'English';
   let line = `${alert.severity === 'critical' ? 'Sharp' : 'Rising'} deviation from the 12-month baseline (${alert.baseline} to ${alert.predicted}).`;
   try {
     const out = await chatLLM(app, {
       messages: [
         {
           role: 'system',
-          content: 'You brief police field supervisors. Given one district forecast signal, write ONE sentence, at most 22 words, stating what to watch and one concrete proactive step (patrol timing, visibility, coordination). No preamble, no district name, no statistics restated, no enforcement action against individuals.'
+          content: `You brief police field supervisors. Given one district forecast signal, write ONE sentence, at most 22 words, stating what to watch and one concrete proactive step (patrol timing, visibility, coordination). No preamble, no district name, no statistics restated, no enforcement action against individuals. Write it in ${languageName}, keeping policing vocabulary (FIR, CrimeNo, district, patrol) in English the way Indian officers write it.`
         },
         {
           role: 'user',
@@ -83,14 +88,16 @@ async function advisoryFor(app, alert, cache) {
   return line;
 }
 
-function freeFormBody(alert, advisory, horizon) {
-  return [
-    `*${alert.severity.toUpperCase()} — ${alert.district}*`,
-    `Forecast for ${horizon}: *${alert.predicted}* cases vs baseline ${alert.baseline} (${alert.trendPct >= 0 ? '+' : ''}${alert.trendPct}%, z=${alert.z}).`,
-    advisory,
-    '',
-    '_Decision support for deployment planning only — not grounds for action against any individual. Reply for detail, or send "alerts off" to unsubscribe._'
-  ].join('\n');
+/**
+ * The push body, in the officer's language.
+ *
+ * Taken from the copy pack like every other officer-facing string. An alert used to be
+ * assembled inline in English regardless of who received it, which meant the one
+ * unsolicited message the channel sends — the one an officer reads at 6am without
+ * context — was the single place the bilingual promise was broken.
+ */
+function freeFormBody(alert, advisory, horizon, language) {
+  return messages(language).alertBody(alert, horizon, advisory);
 }
 
 /**
@@ -143,13 +150,16 @@ async function dispatchAlerts(app, { dryRun = false, only = null } = {}) {
         continue;
       }
 
-      const advisory = await advisoryFor(app, alert, advisoryCache);
+      const advisory = await advisoryFor(app, alert, advisoryCache, officer.language);
       if (dryRun) {
-        report.detail.push({ phone: officer.phone, district: alert.district, severity: alert.severity, via: 'free-form', advisory });
+        report.detail.push({
+          phone: officer.phone, district: alert.district, severity: alert.severity,
+          via: 'free-form', language: officer.language, advisory
+        });
         continue;
       }
 
-      const res = await wa.sendText(officer.phone, freeFormBody(alert, advisory, ew.horizon));
+      const res = await wa.sendText(officer.phone, freeFormBody(alert, advisory, ew.horizon, officer.language));
 
       if (res.ok) {
         // Write the ledger row under the dedupe key, so this exact alert can never
