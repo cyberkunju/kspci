@@ -239,12 +239,64 @@ test('summary: only names the anchors that exist', async () => {
 
 const waTools = require('../lib/wa/tools');
 
-test('wa tool: read-only policymaker cannot research a person over WhatsApp', () => {
-  // Mirrors the engine's own role gate. A field channel must not be a way round the
-  // rule that person-level research needs an operational role.
-  assert.ok(!waTools.allowedToolNames('policymaker').includes('open_source_research'));
-  for (const role of ['investigator', 'analyst', 'supervisor', 'admin']) {
+test('wa tool: the role gate is on the subject kind, not on the tool', async () => {
+  // Mirrors the engine's own rule: person-level research needs an operational role,
+  // aggregate kinds do not. A field channel must not be a way round that.
+  //
+  // This previously asserted the tool was absent from the policymaker's catalogue,
+  // which is a coarser rule than the one it was mirroring — it denied them the
+  // aggregate research the engine permits. It also made the capability invisible to
+  // the model, so the officer was told the system could not search the internet at
+  // all rather than that their access level did not cover it.
+  for (const role of ['investigator', 'analyst', 'supervisor', 'admin', 'policymaker']) {
     assert.ok(waTools.allowedToolNames(role).includes('open_source_research'), role);
+  }
+
+  const original = research.configured;
+  research.configured = () => true;
+  try {
+    const person = await waTools.TOOLS.open_source_research.run(
+      { app: null, officer: { role: 'policymaker', officerId: 'off_p', phone: '919000000000' } },
+      { subject: 'Suresh Kumar', kind: 'person', purpose: 'checking his antecedents properly' }
+    );
+    assert.match(person.error, /operational role/i, 'a policymaker must not research a person');
+    assert.match(person.error, /aggregate/i, 'and must be told what they can do instead');
+  } finally {
+    research.configured = original;
+  }
+});
+
+test('wa tool: a second run on a subject already reported is refused, not started', async () => {
+  // "Do not call it twice for the same subject" was advice in the tool description and
+  // nothing enforced it: asked about one source in a delivered report, the model started
+  // the whole search again — a minute of waiting and paid search calls, for something the
+  // officer was already holding.
+  const original = research.configured;
+  research.configured = () => true;
+  const history = [
+    { role: 'user', content: 'search the internet for the Karnataka Lokayukta' },
+    { role: 'assistant', content: '*Karnataka Lokayukta organisation* — open-source research complete\n\nThe Registrar is the First Appellant Authority [S1].' }
+  ];
+  const ctx = (officerText) => ({
+    app: null, history, officerText,
+    officer: { role: 'investigator', officerId: 'off_i', phone: '919000000000' }
+  });
+  try {
+    const again = await waTools.TOOLS.open_source_research.run(
+      ctx('what did the second source say'),
+      { subject: 'Karnataka Lokayukta', kind: 'organisation', purpose: 'following up on the briefing note' });
+    assert.match(again.error, /already delivered/i);
+    assert.match(again.error, /answer the officer's question from that report/i);
+
+    // And an officer who explicitly wants it re-run is not blocked. It gets past the
+    // guard; it stops later for want of a callback address in this test environment.
+    const fresh = await waTools.TOOLS.open_source_research.run(
+      ctx('run that search again, I want the latest'),
+      { subject: 'Karnataka Lokayukta', kind: 'organisation', purpose: 'checking for newer coverage' });
+    assert.ok(!/already delivered/i.test(String(fresh.error || '')),
+      'an explicit request for a fresh search is not treated as a duplicate');
+  } finally {
+    research.configured = original;
   }
 });
 
@@ -539,6 +591,35 @@ test('wa delivery: with only weak matches, they are shown rather than nothing', 
   const weak = { ...RESULT, findings: [RESULT.findings[1]] };
   const all = waResearch.format(weak, { subject: 'Suresh Kumar' }).join('\n');
   assert.match(all, /Unrelated column/);
+});
+
+test('wa delivery: the source list is labelled with the markers the summary cites', () => {
+  // The summary says [S2]; the officer must be able to find S2 in the list. Numbering the
+  // list 1, 2, 3 by band gave two orderings in one message, and asked about "the sixth
+  // source" the model answered about whichever document happened to be sixth by band.
+  const marked = {
+    ...RESULT,
+    summary: 'He was arrested in Mysuru [S2]. A later report clears him [S1].',
+    findings: [
+      { ...RESULT.findings[0], marker: 'S2' },
+      { attribution: 'confirmed', marker: 'S1', title: 'Acquitted on appeal', outlet: 'deccanherald.com', url: 'https://deccanherald.com/a' },
+      { attribution: 'probable', title: 'Uncited but strong', outlet: 'thenewsminute.com', url: 'https://thenewsminute.com/b' }
+    ]
+  };
+  const all = waResearch.format(marked, { subject: 'Suresh Kumar' }).join('\n');
+  assert.match(all, /S1\. Acquitted on appeal/, 'cited sources are labelled by their marker');
+  assert.match(all, /S2\. Man held in Mysuru/);
+  assert.ok(all.indexOf('S1. Acquitted') < all.indexOf('S2. Man held'),
+    'and listed in marker order, not band order');
+  assert.match(all, /—\. Uncited but strong/,
+    'a strong source the summary does not cite is still listed, and not given a number that would read as a marker');
+});
+
+test('wa delivery: an engine that reports no markers still numbers the list', () => {
+  // Forward compatibility runs both ways: a function deployed ahead of the engine must
+  // not produce a list of dashes.
+  const all = waResearch.format(RESULT, { subject: 'Suresh Kumar' }).join('\n');
+  assert.match(all, /1\. Man held in Mysuru/);
 });
 
 test('wa delivery: a no-match run is labelled as one', () => {
