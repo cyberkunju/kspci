@@ -745,6 +745,27 @@ app.post('/admin/officers', adminGuard, async (req, res) => {
   }
 });
 
+// Deregister an officer. Body: { phone, purgeLedger?: true }.
+//
+// Revoking access day-to-day is POST with { active: false } — the roster lookup
+// refuses an inactive row and the row remains as the record that this number held
+// access. This route is for a number that should never have been registered, where
+// an inactive row would leave a live police roster listing a number nobody owns.
+app.delete('/admin/officers', adminGuard, async (req, res) => {
+  try {
+    const { deleteOfficer } = require('./lib/wa/officers');
+    const adminApp = catalyst.initialize(req, { scope: 'admin' });
+    const body = req.body || {};
+    const out = await deleteOfficer(adminApp, {
+      phone: body.phone,
+      purgeLedger: body.purgeLedger === true
+    });
+    res.status(out.deleted ? 200 : 404).json(out);
+  } catch (e) {
+    res.status(400).json({ error: 'officer_delete_failed', message: String((e && e.message) || e) });
+  }
+});
+
 // Admin: clear tables before a fresh re-seed (guarded).
 app.post('/admin/reset', adminGuard, async (req, res) => {
   try {

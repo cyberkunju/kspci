@@ -178,6 +178,51 @@ async function upsertOfficer(app, input) {
   return { phone, created: true, officerId: row.OfficerID };
 }
 
+/**
+ * Remove an officer from the roster entirely.
+ *
+ * The normal way to revoke access is `upsertOfficer({ active: false })` — the
+ * lookup refuses an inactive row, and the row stays as the record that this number
+ * once held access. Deletion exists for the other case: a number that should never
+ * have been on the roster at all (a typo, a test registration), where leaving an
+ * inactive row means a live police roster permanently lists a number nobody owns.
+ *
+ * The message ledger is kept by default. Those rows are the audit trail for data
+ * this number was shown, and an audit trail that disappears when the account does
+ * is not an audit trail. `purgeLedger` is for traffic that was never real — the
+ * same typo-or-test case — and says how many rows it removed so the deletion is
+ * itself visible in the response.
+ */
+async function deleteOfficer(app, { phone, purgeLedger = false } = {}) {
+  const p = normalizePhone(phone);
+  if (!p) throw new Error('a valid E.164 phone number is required');
+
+  const ds = app.datastore();
+  const rows = await q(app, `SELECT ROWID, OfficerID FROM Officers WHERE Phone='${p}' LIMIT 1`);
+  if (!rows.length) return { phone: p, deleted: false, reason: 'not on the roster' };
+
+  await ds.table('Officers').deleteRow(rows[0].ROWID);
+  // Invalidate after the delete, not before: a cached row re-read between the two
+  // would put the officer straight back into the cache for another hour.
+  await invalidateOfficer(app, p);
+
+  const out = { phone: p, deleted: true, officerId: rows[0].OfficerID || null };
+
+  if (purgeLedger) {
+    let removed = 0;
+    // deleteRows caps at 200 ids per call, so page rather than assuming one pass.
+    for (let pass = 0; pass < 25; pass++) {
+      const ledger = await q(app, `SELECT ROWID FROM WaMessages WHERE Phone='${p}' LIMIT 200`);
+      if (!ledger.length) break;
+      await ds.table('WaMessages').deleteRows(ledger.map((r) => r.ROWID));
+      removed += ledger.length;
+      if (ledger.length < 200) break;
+    }
+    out.ledgerRowsPurged = removed;
+  }
+  return out;
+}
+
 /** Persist an officer's own alert preferences (set by the officer over WhatsApp). */
 async function setAlertPrefs(app, officer, { districts, severity }) {
   if (!officer || !officer.rowId) throw new Error('officer record not found');
@@ -586,7 +631,7 @@ async function releaseTurnLock(app, phone) {
 
 module.exports = {
   ROLES, normalizePhone, getOfficer, invalidateOfficer, alertRecipients,
-  upsertOfficer, setAlertPrefs, touchOfficer, withinServiceWindow,
+  upsertOfficer, deleteOfficer, setAlertPrefs, touchOfficer, withinServiceWindow,
   checkRate, claimMessage, completeMessage, releaseMessage, logMessage,
   alertAlreadySent, recentTurns, shapeOfficer, dtNow, genId,
   getPending, parsePending, serializePending, rowIdLiteral,
