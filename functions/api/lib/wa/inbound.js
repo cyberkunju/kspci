@@ -156,9 +156,16 @@ async function acceptWebhook(app, body) {
       // away. Deliberately not awaited — it must never delay the 200.
       wa.markRead(e.msgId).catch(() => {});
 
-      const queued = await enqueue(app, e);
-      if (queued) out.queued++;
-      else { await processEvent(app, e); out.inline++; }
+      const q = await enqueue(app, e);
+      if (q.ok) out.queued++;
+      else {
+        // Report why the queue was not used. Falling back inline is correct, but a
+        // fallback that happens on every single turn means the queue is broken, and
+        // without this the only difference is a few hundred milliseconds nobody sees.
+        if (q.error) out.enqueueError = q.error;
+        await processEvent(app, e);
+        out.inline++;
+      }
     } catch (err) {
       out.error = String((err && err.message) || err).slice(0, 200);
     }
@@ -167,17 +174,26 @@ async function acceptWebhook(app, body) {
 }
 
 /**
- * Hand the turn to a Catalyst webhook job. Returns false when job scheduling is
- * not configured or the submission fails, so the caller falls back inline —
- * losing the queue must never lose the officer's message.
+ * Hand the turn to a Catalyst webhook job.
+ *
+ * Returns `{ ok: false, error }` when job scheduling is unconfigured or the
+ * submission fails, so the caller falls back inline — losing the queue must never
+ * lose the officer's message. The reason travels with the result because a queue
+ * that fails on every turn is otherwise indistinguishable from one that works:
+ * both answer 200 and both eventually reply to the officer.
  */
 async function enqueue(app, event) {
   const pool = process.env.WA_JOBPOOL;
   const url = process.env.WA_PROCESS_URL;
-  if (!pool || !url) return false;
+  if (!pool || !url) return { ok: false };
   try {
     await app.jobScheduling().JOB.submitJob({
-      job_name: 'wa_turn_' + String(event.msgId).slice(-18),
+      // Catalyst caps job_name at 20 characters and rejects the whole submission
+      // otherwise ("job_name should be within 1-20 char length"). Non-alphanumerics
+      // are stripped as well: a real wamid is base64 and ends in '=' padding, which
+      // is not worth discovering the same way. The tail is kept rather than the head
+      // because a wamid's leading bytes are a constant prefix across every message.
+      job_name: ('wa' + String(event.msgId).replace(/[^A-Za-z0-9]/g, '')).slice(-20),
       jobpool_name: pool,
       target_type: 'Webhook',
       request_method: 'POST',
@@ -186,10 +202,11 @@ async function enqueue(app, event) {
       request_body: JSON.stringify({ event }),
       job_config: { number_of_retries: 2, retry_interval: 60 }
     });
-    return true;
+    return { ok: true };
   } catch (e) {
-    console.error('wa job submit failed, processing inline:', String((e && e.message) || e));
-    return false;
+    const error = String((e && e.message) || e).slice(0, 300);
+    console.error('wa job submit failed, processing inline:', error);
+    return { ok: false, error };
   }
 }
 
