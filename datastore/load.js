@@ -34,6 +34,19 @@ const BATCH = Number(process.env.BATCH || 200);
 // parallel inserts, not this machine; 8 was chosen by measurement and backs off on failure via
 // insert()'s retry. Raise with CONCURRENCY= if the function scales further.
 const CONCURRENCY = Math.max(1, Number(process.env.CONCURRENCY || 8));
+/**
+ * Hard ceiling on the row index loaded per table, and the reason it exists.
+ *
+ * Catalyst bills Data Store inserts **per row** at ₹0.006, not per API call. Sizing a load
+ * against the API call budget makes 8.24M rows look free when it is about ₹49,000, and
+ * exhausting the plan blocks every resource in the environment — the app goes down with the
+ * load. So spend is bounded by an explicit stop, not by watching a dashboard.
+ *
+ *   MAX_ROWS=1016380 node datastore/load.js --only Cases
+ *
+ * Combined with the checkpoint, this also makes a load resumable in priced instalments.
+ */
+const MAX_ROWS = Number(process.env.MAX_ROWS || 0) || Infinity;
 const SEED_DIR = path.join(__dirname, 'seed');
 const STATE_FILE = path.join(SEED_DIR, '.load-state.json');
 const TABLES = ['Cases', 'Accused', 'Victims', 'Complainants', 'Arrests', 'CoAccusedLinks', 'OffenderRisk', 'FinancialTxns'];
@@ -159,6 +172,7 @@ async function loadTable(table, total = 0) {
       batchStart = index;
       batch = [];
     }
+    if (index >= MAX_ROWS) break;
   }
   if (batch.length) post(batch, batchStart);
   await Promise.all(inflight.values());
@@ -167,7 +181,8 @@ async function loadTable(table, total = 0) {
 }
 
 (async () => {
-  console.log(`Seeding via ${BASE}  (batch=${BATCH}, concurrency=${CONCURRENCY})`);
+  console.log(`Seeding via ${BASE}  (batch=${BATCH}, concurrency=${CONCURRENCY}` +
+    (MAX_ROWS === Infinity ? ')' : `, max rows/table=${MAX_ROWS.toLocaleString('en-IN')})`));
   if (Object.keys(state).length) {
     console.log(`Resuming from checkpoint: ${Object.entries(state).map(([t, n]) => `${t}=${n}`).join(', ')}`);
     console.log('Pass --restart to ignore it.');

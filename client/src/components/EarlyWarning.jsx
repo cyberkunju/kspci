@@ -31,13 +31,21 @@ function ForecastMap({ forecasts, alerts }) {
     const map = mapRef.current, group = layerRef.current;
     if (!map || !group || !forecasts) return;
     group.clearLayers();
-    const sevOf = {}; (alerts || []).forEach((a) => (sevOf[a.district] = a.severity));
+    // Severity is keyed on the state-qualified unit where available: six district names exist
+    // in two states each, so keying on the bare name would paint the wrong district's alert.
+    const sevOf = {};
+    (alerts || []).forEach((a) => { sevOf[a.unit || a.district] = a.severity; });
     const max = Math.max(1, ...forecasts.map((f) => f.predicted));
+    const bounds = [];
     forecasts.forEach((f) => {
-      if (f.lat == null) return;
-      const sev = sevOf[f.district];
+      if (f.lat == null || f.lng == null) return;
+      bounds.push([f.lat, f.lng]);
+      const sev = sevOf[f.unit || f.district];
       const col = sev ? SEV_COLOR[sev] : '#6d93f5';
-      const r = 8 + (f.predicted / max) * 32;
+      // Radius scales with the square root of volume, so a district with ten times the
+      // predicted count reads as ten times the *area* rather than ten times the width — at
+      // national scale linear radius made Delhi swallow half of north India.
+      const r = 4 + Math.sqrt(f.predicted / max) * 20;
       const c = L.circleMarker([f.lat, f.lng], { radius: r, color: col, weight: 2, fillColor: col, fillOpacity: sev ? 0.45 : 0.22 }).addTo(group);
       c.bindTooltip(`${f.district}: predicted ${f.predicted} (${f.trendPct >= 0 ? '+' : ''}${f.trendPct}%)`, { direction: 'top' });
       const popup = document.createElement('div');
@@ -56,6 +64,11 @@ function ForecastMap({ forecasts, alerts }) {
       });
       c.bindPopup(popup);
     });
+    // Fit to whatever the forecast actually covers. The initial view was fixed on Karnataka,
+    // which left a national forecast mostly off-screen and looked like missing data.
+    if (bounds.length) {
+      map.fitBounds(bounds, { padding: [24, 24], maxZoom: 9 });
+    }
   }, [forecasts, alerts]);
   return <div className="hotspot-map" ref={elRef} />;
 }

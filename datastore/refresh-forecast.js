@@ -22,6 +22,7 @@ const arg = (name, dflt) => {
   const i = process.argv.indexOf('--' + name);
   return i > -1 ? process.argv[i + 1] : dflt;
 };
+const has = (name) => process.argv.includes('--' + name);
 
 const BASE = (arg('base', process.env.KSP_API_BASE || 'https://ksp.cyberkunju.com/server/api')).replace(/\/$/, '');
 const ADMIN_KEY = arg('key', process.env.ADMIN_KEY || '');
@@ -66,7 +67,25 @@ async function refreshState(state) {
   return { state, error: String((lastErr && lastErr.message) || lastErr) };
 }
 
+async function purge() {
+  const r = await fetch(`${BASE}/admin/forecast/purge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-admin-key': ADMIN_KEY },
+    body: JSON.stringify({ level: 'district' }),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`purge failed: ${JSON.stringify(body).slice(0, 200)}`);
+  return body;
+}
+
 (async () => {
+  // Rebuild from empty when asked. Per-state writes cannot clear rows left by an earlier
+  // national run (their StateName is null) or duplicates from a timed-out request whose inserts
+  // landed late, and both show up as extra units on the map.
+  if (has('purge')) {
+    console.log('purging both district scopes first');
+    console.log('  ' + JSON.stringify((await purge()).purged));
+  }
   console.log(`refreshing ${STATES.length} states via ${BASE} (concurrency ${CONCURRENCY})`);
   const queue = [...STATES];
   const done = [];
