@@ -296,6 +296,11 @@ one fails on its own terms:
 | Mojeek | `robots.txt` disallows `/search`. Kept behind a flag for a licensed API. |
 | Marginalia | Free key, given out on request. Adapter written, unkeyed. |
 | SearXNG | Has no index of its own. It scrapes the engines above, which CAPTCHA datacenter ranges — self-hosting relocates the failure rather than fixing it. |
+| Gemini's Google Search grounding | Would have worked — Google runs the search and the grounding metadata carries the source URLs, which is all we need. The available key is dead (HTTP 401 on every auth style). A live one reopens this route. |
+| **Asking the LLM we already run** | Tested, and it is the most dangerous option on this list. Catalyst's QuickML route rejects a `tools` parameter outright (HTTP 400 `PATTERN_NOT_MATCHED`) — it is a model server, not an agent runtime, so there is no index to attach. Asked for sources regardless, GLM-4.7-Flash returned six citations and **all six 404'd**: it had taken one invented slug and pasted it onto six real newsroom domains. Confident, plausible, entirely fictional. For a police tool that is the worst failure mode available, because it looks exactly like coverage. |
+
+The last row is the reason the model in this engine never supplies a URL. It only ever
+summarises text we fetched ourselves, with every claim verified against the stored page.
 
 So the choice was a paid index or no general web at all, and `available()` reports `web:
 false` rather than letting a press-only run look like an internet-wide one.
