@@ -129,6 +129,39 @@ def _name_present(text: str, title: str, anchors_names: list[str], subject: str)
     return hit_body, hit_title
 
 
+def names_matched(text: str, title: str, names: list[str]) -> list[str]:
+    """Which of the DISTINCT names we were given actually appear in this document.
+
+    The count is the signal, and it is a strong one. A person handed to us as "Vipul
+    Singh alias Khooni" gives two independent handles; a document carrying both is far
+    more likely to be about them than one carrying either alone. On a live test, three
+    Bollywood columns titled "Khooni Monday" matched the alias and scored exactly the
+    same as the report that was actually about the subject — because matching one name
+    and matching two were indistinguishable.
+
+    Distinctness is checked on the name, not on its spelling variants, so "Vipul Singh"
+    and "Vipulsingh" count once.
+    """
+    hay = (title or "") + "\n" + (text or "")
+    out: list[str] = []
+    for raw in names:
+        raw = str(raw or "").strip()
+        if not raw or raw in out:
+            continue
+        if _find_any(hay, name_variants(raw)):
+            out.append(raw)
+            continue
+        # Fall back to every substantial token appearing somewhere, in any order.
+        # Reporting drops a middle name, or writes "Vipul alias Khooni" and never the
+        # full legal name, so requiring the exact phrase misses the document that is
+        # most clearly about the subject. Two tokens minimum, four characters each, so
+        # this cannot fire on a single common given name.
+        tokens = [t for t in re.findall(r"\w{4,}", raw)]
+        if len(tokens) >= 2 and all(_find_any(hay, [t]) for t in tokens):
+            out.append(raw)
+    return out
+
+
 # Words that carry no discriminating power in a subject phrase. A topical subject is
 # matched on its distinctive terms, and "market" or "case" are not distinctive.
 _GENERIC_TERMS = {
@@ -267,6 +300,16 @@ def score(story: Story, anchors: Anchors, *, subject: str,
     else:
         reasons.append("the name appears in the text")
 
+    # Two of the caller's distinct names in one document — a legal name and an alias —
+    # is the strongest identity evidence available when we hold no case anchors at all,
+    # and it is what separates a report about the subject from a coincidental match on
+    # the alias alone.
+    present_names = names_matched(text, title, anchors.names)
+    if len(present_names) >= 2:
+        points += 4
+        matched.append("alias")
+        reasons.append("names both " + " and ".join(present_names[:2]))
+
     # ── discriminating anchors ──────────────────────────────────────────────────
     hits_cn = _find_any(text, anchors.crime_numbers)
     if hits_cn:
@@ -323,20 +366,33 @@ def score(story: Story, anchors: Anchors, *, subject: str,
                 break
 
     # ── evidence against ────────────────────────────────────────────────────────
-    ours = anchors.district.lower() if anchors.district else ""
-    elsewhere = [p for p in _find_any(text[:6000], sorted(_OTHER_PLACES))
-                 if p.lower() != ours]
-    # Kannada script included: a local report saying ಬೆಂಗಳೂರು is a Karnataka
-    # connection, and reading it as absent would push genuine local coverage toward
-    # "different person".
-    kn_forms = {f for place in _KARNATAKA_HINTS for f in _place_forms(place)}
-    karnataka_present = bool(_find_any(text[:6000], sorted(kn_forms)))
+    # A place only CONTRADICTS if we hold a place to contradict. This used to assume
+    # every subject was a Karnataka subject and penalised any document located
+    # elsewhere — so a correct report about a wanted man in Baghpat, retrieved on a
+    # search with no place anchor at all, was graded `different_person` for the crime of
+    # being about Uttar Pradesh. You cannot contradict a claim you never made.
+    ours_forms: set[str] = set()
+    if anchors.district:
+        ours_forms.update(_place_forms(anchors.district))
+    if anchors.state:
+        ours_forms.update(_place_forms(anchors.state))
+        if anchors.state.strip().lower() == "karnataka":
+            ours_forms.update(f for p in _KARNATAKA_HINTS for f in _place_forms(p))
     contradicted = False
-    if elsewhere and not karnataka_present and "crime_number" not in matched:
-        contradicted = True
-        points -= 3
-        reasons.append(
-            f"located in {elsewhere[0].title()} with no Karnataka connection mentioned")
+    if ours_forms and "crime_number" not in matched:
+        ours_lower = {f.lower() for f in ours_forms}
+        elsewhere = [p for p in _find_any(text[:6000], sorted(_OTHER_PLACES))
+                     if p.lower() not in ours_lower]
+        # Kannada script included: a local report saying ಬೆಂಗಳೂರು is a Karnataka
+        # connection, and reading it as absent would push genuine local coverage toward
+        # "different person".
+        ours_present = bool(_find_any(text[:6000], sorted(ours_forms)))
+        if elsewhere and not ours_present:
+            contradicted = True
+            points -= 3
+            where = anchors.district or anchors.state
+            reasons.append(
+                f"located in {elsewhere[0].title()} with no {where} connection mentioned")
 
     namesake_role = _NAMESAKE_HINT.search(title) or _NAMESAKE_HINT.search(text[:1500])
     if namesake_role and len(matched) == 1:
@@ -385,6 +441,7 @@ def score(story: Story, anchors: Anchors, *, subject: str,
         band = "possible"
         reasons.append(f"{namesakes} different public figures share this name")
 
+    story.score = points
     return band, reasons, sorted(set(matched))
 
 
@@ -405,24 +462,50 @@ def apply(stories: list[Story], anchors: Anchors, *, subject: str,
         s.attribution = band
         s.attribution_reasons = reasons
         s.matched_anchors = matched
-    stories.sort(key=lambda s: (-ATTRIBUTION_RANK[s.attribution], int(s.tier),
-                                s.lead.published or "0000"))
+    # Band first, then how much actually matched, then authority, then recency. The
+    # score has to come before the tier: the summary reads from the top of this list, and
+    # ordering by authority alone let a court record sharing nothing but a name outrank
+    # the one report that named both the subject and his alias.
+    stories.sort(key=lambda s: (-ATTRIBUTION_RANK[s.attribution], -s.score,
+                                int(s.tier), s.lead.published or "0000"))
     return stories
 
 
 def admissible(story: Story, *, independent_outlets: int) -> tuple[bool, str]:
     """May this story's claims enter the AI summary?
 
-    Deliberately strict, and separate from whether the story is SHOWN. Everything
-    retrieved appears in the officer's source list with its band and reasoning; this
-    gate only governs what the engine is willing to assert in prose. The officer can
-    always read a `possible` source and judge it — the engine may not summarise it as
-    fact.
+    Deliberately generous, and that is a change of posture. It used to require
+    `probable` plus corroboration, which meant a subject with only weak matches got an
+    EMPTY summary — the engine had found and read material about a similarly-named
+    person and said nothing about it. For a research tool whose user cross-checks
+    everything, silence is the least useful of the available answers.
+
+    So the rule is now: anything the engine believes could be this subject is
+    summarisable, and its confidence travels with it into the prose (see
+    `claims.confidence_label`), where every sentence must state how strongly it is
+    attributed. What remains excluded is only what is positively about somebody else —
+    summarising that as though it were the subject is not caution, it is error.
     """
-    if ATTRIBUTION_RANK[story.attribution] < ATTRIBUTION_RANK["probable"]:
+    if story.attribution in {"different_person", "unrelated"}:
         return False, f"attribution is {story.attribution}"
-    if int(story.tier) <= 2:
-        return True, ""
-    if independent_outlets >= 2:
-        return True, ""
-    return False, "single lower-tier outlet with no independent corroboration"
+    return True, ""
+
+
+def confidence_note(story: Story, *, independent_outlets: int) -> str:
+    """One short phrase telling the model how much to trust this story.
+
+    This is what replaces the old gate. The information the gate used to act on — band,
+    source authority, whether anyone else reported it independently — is not thrown
+    away, it is handed to the summariser so it can qualify each sentence instead of the
+    sentence being deleted.
+    """
+    band = {
+        "confirmed": "confirmed as this subject",
+        "probable": "probably this subject",
+        "possible": "POSSIBLY this subject, unverified",
+    }.get(story.attribution, story.attribution)
+    authority = "official source" if int(story.tier) == 1 else (
+        "established newsroom" if int(story.tier) == 2 else "lower-authority source")
+    corroboration = (f"{independent_outlets} independent outlets"
+                     if independent_outlets >= 2 else "single outlet, uncorroborated")
+    return f"{band}; {authority}; {corroboration}"
