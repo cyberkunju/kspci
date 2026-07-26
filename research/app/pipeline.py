@@ -26,9 +26,9 @@ from . import attribute, cluster, llm, sources
 from .config import Budget, settings
 from .extract import extract
 from .governance import DISCLAIMER
-from .models import Anchors, Document, Finding, Hit, Story, Tier
+from .models import ATTRIBUTION_RANK, Anchors, Document, Finding, Hit, Story, Tier
 from .net import Fetcher, canonical_url
-from .plan import GdeltPlan, Query, plan_queries
+from .plan import GdeltPlan, Query, plan_queries, resolve_names
 from .tiers import tier_for
 
 Progress = Callable[[str, str, dict], Awaitable[None] | None]
@@ -42,6 +42,10 @@ class RunResult:
     partial: bool = False
     stages: list[str] = field(default_factory=list)
     summary: str = ""
+    #: "findings" when the summary rests on cited claims about the subject, "no_match"
+    #: when nothing could be attributed and the text describes what was found instead.
+    #: The UI must not present the second as though it were the first.
+    summary_kind: str = "findings"
     warnings: list[str] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     claims: list[dict] = field(default_factory=list)
@@ -104,12 +108,40 @@ async def _discover(f: Fetcher, queries: list[Query], gdelt_plan: GdeltPlan,
     notes: list[str] = [gdelt_plan.out_of_range] if gdelt_plan.out_of_range else []
 
     async def gdelt_leg() -> list[Hit]:
-        q = sources.gdelt_query(gdelt_plan.must, gdelt_plan.any_of)
-        got = await sources.gdelt(f, q, limit=min(budget.max_hits, 250),
-                                  timespan=gdelt_plan.timespan,
-                                  start=gdelt_plan.start, end=gdelt_plan.end)
-        if not got and "gdelt" in sources.STATUS:
+        """The bare subject first, then anchored and alias variants.
+
+        Sequential on purpose: GDELT's own rate limiter serialises these anyway, and the
+        BARE query must go first so that if the budget runs out we have spent the call
+        that cannot filter anything out. Sending only the anchored query was a real
+        recall bug — `any_of` is ANDed, so an unanchored subject got "must contain one of
+        five event words" and lost the one article GDELT held.
+        """
+        queries = [sources.gdelt_query(gdelt_plan.must)]
+        if gdelt_plan.any_of:
+            queries.append(sources.gdelt_query(gdelt_plan.must, gdelt_plan.any_of))
+        for a in gdelt_plan.aliases:
+            queries.append(sources.gdelt_query([a]))
+
+        out: list[Hit] = []
+        for q in queries:
+            if dl.remaining < 8:
+                break
+            got = await sources.gdelt(f, q, limit=min(budget.max_hits, 250),
+                                      timespan=gdelt_plan.timespan,
+                                      start=gdelt_plan.start, end=gdelt_plan.end)
+            out.extend(got)
+            if "gdelt" in sources.STATUS:
+                break  # rate-limited or refused; further legs would only burn the clock
+        if not out and "gdelt" in sources.STATUS:
             failed.append(f"gdelt ({sources.STATUS['gdelt']})")
+        return out
+
+    async def news_leg(text: str) -> list[Hit]:
+        got = await sources.bing_news(f, text)
+        if not got and "bingnews" in sources.STATUS:
+            note = f"bingnews ({sources.STATUS['bingnews']})"
+            if note not in failed:
+                failed.append(note)
         return got
 
     async def onsite_leg(text: str) -> list[Hit]:
@@ -131,6 +163,12 @@ async def _discover(f: Fetcher, queries: list[Query], gdelt_plan: GdeltPlan,
     for q in queries[:4]:
         if "onsite" in q.routes:
             legs.append(onsite_leg(q.text.replace('"', "")))
+
+    # The news-feed tier carries the breadth: it reaches outlets in languages and
+    # regions the on-site registry does not cover at all. Given the strongest queries,
+    # because it is one cheap request each.
+    for q in queries[:5]:
+        legs.append(news_leg(q.text))
     for q in queries[:budget.max_queries]:
         if "searxng" in q.routes and settings.searxng_url:
             legs.append(sources.searxng(f, q.text))
@@ -256,6 +294,13 @@ async def run(*, subject: str, kind: str, anchors: Anchors, budget: Budget,
 
     try:
         # 1. PLAN
+        # Aliases are separated here, once, so the planner and the attribution stage are
+        # looking for the same set of names. Doing it only in the planner meant the
+        # scorer hunted for the literal string "Vipul Singh alias Khooni".
+        resolved = resolve_names(subject, kind, anchors)
+        if resolved:
+            anchors.names = resolved
+
         queries, gdelt_plan = plan_queries(subject=subject, kind=kind, anchors=anchors,
                                            max_queries=budget.max_queries)
         out.queries = [{"text": q.text, "purpose": q.purpose, "pins": list(q.pins)}
@@ -331,14 +376,36 @@ async def run(*, subject: str, kind: str, anchors: Anchors, budget: Budget,
                 "no model is configured, so there is no summary — every source below is "
                 "still retrieved, graded and citable")
         elif not admitted:
+            # Nothing could be tied to the subject. Say what WAS found and who it was
+            # about, rather than returning an empty summary an officer cannot read the
+            # meaning of.
             out.warnings.append(
-                "no source met the bar for summarising: everything found is either "
-                "unattributed to this subject or uncorroborated")
+                "no retrieved source could be attributed to this subject; the note below "
+                "describes what was found instead")
+            text, warns = await claims_mod.synthesise_coverage(
+                stories, subject=subject, anchors=anchors,
+                aliases=[n for n in anchors.names if n.lower() != subject.lower()])
+            out.summary = text
+            out.summary_kind = "no_match"
+            out.warnings.extend(warns)
+            out.stages.append("summary")
         elif dl.expired:
             out.partial = True
             out.warnings.append("deadline reached before the summary stage")
         else:
-            picked = admitted[:min(9, budget.llm_calls)]
+            # Summarise the strong matches when there are any, and fall back to the weak
+            # ones only when there is nothing better. Admission is generous on purpose —
+            # every retrieved source reaches the officer's table — but a summary that
+            # mixes the report which named the subject and his alias together with three
+            # columns that merely share a word is worse than either alone.
+            strong = [s for s in admitted
+                      if ATTRIBUTION_RANK[s.attribution] >= ATTRIBUTION_RANK["probable"]]
+            picked = (strong or admitted)[:min(9, budget.llm_calls)]
+            if strong and len(strong) < len(admitted):
+                out.warnings.append(
+                    f"the summary rests on the {len(strong)} source(s) attributed at "
+                    f"'probable' or better; {len(admitted) - len(strong)} weaker match(es) "
+                    "are listed below but not summarised")
             all_claims: list = []
             try:
                 all_claims = await asyncio.wait_for(
@@ -385,6 +452,7 @@ def _findings(stories: list[Story], docs: list[Document]) -> list[Finding]:
     officer may want to open, and silently dropping it would misrepresent how much was
     actually found.
     """
+    ind = cluster.independence(stories)
     out: list[Finding] = []
     for s in stories:
         d = s.lead
@@ -393,7 +461,8 @@ def _findings(stories: list[Story], docs: list[Document]) -> list[Finding]:
             published=d.published, tier=int(d.tier), attribution=s.attribution,
             why=s.attribution_reasons, outlets=s.outlets, language=d.language,
             snippet=(d.text or "")[:280],
-            via=sorted({v for x in s.documents for v in x.via})))
+            via=sorted({v for x in s.documents for v in x.via}),
+            matched=list(s.matched_anchors), outlet_count=ind.get(s.id, 1)))
     for d in docs:
         if d.ok:
             continue

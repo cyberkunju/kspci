@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 
 from . import llm
-from .attribute import admissible
+from .attribute import admissible, confidence_note
 from .cluster import independence
 from .models import Claim, Story
 
@@ -194,17 +194,42 @@ async def extract_all(stories: list[Story], *, batch: int = CLAIM_BATCH) -> list
 
 _SUMMARY_SYSTEM = (
     "You write the summary of an open-source research file for a Karnataka State Police "
-    "officer. You are summarising ONLY the numbered claims given to you.\n"
+    "officer. The officer will cross-check everything; your job is to report what the "
+    "sources say and how strongly each one is tied to the subject.\n"
     "Rules, all of them absolute:\n"
     "- Every sentence must end with the source markers it rests on, like [S1] or [S1][S3].\n"
     "- Use ONLY the claims provided. Add no fact, name, number, date or place that is "
     "not in them. If the claims do not answer something, say so plainly.\n"
+    "- Each claim carries a confidence note. CARRY IT INTO THE PROSE. A claim marked "
+    "'POSSIBLY this subject, unverified' must be written as unverified — 'a report that "
+    "may refer to the same person says…' — never as established fact. A claim from a "
+    "single uncorroborated outlet must say so.\n"
     "- Open-source material is not evidence. Never write that something is proven, and "
     "never recommend action against a person.\n"
     "- Where claims disagree, say they disagree and give both with their markers. Where a "
     "later claim supersedes an earlier one (an acquittal after an arrest), say so.\n"
     "- Never mention caste, religion, community or political affiliation.\n"
-    "- Plain prose, at most 180 words, no markdown headings, no bullet characters."
+    "- Plain prose, at most 220 words, no markdown headings, no bullet characters."
+)
+
+#: Written when NOTHING retrieved could be tied to the subject. Deliberately a separate
+#: prompt rather than a blank summary: the old behaviour returned an empty string, and an
+#: officer reading nothing cannot tell "we found no coverage" from "the engine failed".
+#: This says which details were searched for, what came back instead, and that none of it
+#: is the subject — which on a common name is itself the finding.
+_COVERAGE_SYSTEM = (
+    "You are writing the 'no match' note for an open-source research file for a police "
+    "officer. Sources were retrieved and read, and NONE of them could be tied to the "
+    "subject.\n"
+    "Write at most 110 words of plain prose that:\n"
+    "1. states plainly that no retrieved source could be attributed to this subject, and "
+    "that this is not the same as the subject having no online presence;\n"
+    "2. says what was searched for — the subject's name, aliases and any place or case "
+    "details listed;\n"
+    "3. names, briefly, who the retrieved coverage was actually about, if the outlet and "
+    "headline list makes that clear (for example other people sharing the name);\n"
+    "4. does not speculate about the subject, and asserts nothing about them.\n"
+    "No markdown headings, no bullet characters, no source markers."
 )
 
 
@@ -227,11 +252,14 @@ async def synthesise(stories: list[Story], claims: list[Claim], *, subject: str,
     marker = {sid: f"S{i + 1}" for i, sid in enumerate(order)}
     by_id = {s.id: s for s in stories}
 
+    ind = independence(stories)
     lines = []
     for c in usable:
         s = by_id.get(c.story_id)
         outlet = (s.lead.outlet if s else "") or "source"
-        lines.append(f"[{marker[c.story_id]}] ({outlet}, {c.date or 'date unknown'}) {c.text}")
+        note = confidence_note(s, independent_outlets=ind.get(s.id, 1)) if s else "unknown"
+        lines.append(f"[{marker[c.story_id]}] ({outlet}, {c.date or 'date unknown'} — "
+                     f"{note}) {c.text}")
 
     prompt = (f"SUBJECT: {subject}\n"
               + (f"QUESTION: {question}\n" if question else "")
@@ -269,6 +297,47 @@ async def synthesise(stories: list[Story], claims: list[Claim], *, subject: str,
         warnings.append("summary withheld: it referenced a protected attribute")
 
     return text.strip(), warnings
+
+
+async def synthesise_coverage(stories: list[Story], *, subject: str, anchors=None,
+                             aliases: list[str] | None = None) -> tuple[str, list[str]]:
+    """The note written when nothing retrieved could be tied to the subject.
+
+    No claim extraction and no markers: there is nothing about the subject to cite. What
+    the officer needs instead is confirmation that the search happened, what it looked
+    for, and what it turned up in place of the subject.
+    """
+    if not stories:
+        return "", []
+    listed = []
+    for s in stories[:14]:
+        d = s.lead
+        if not (d.title or d.url):
+            continue
+        listed.append(f"- {d.outlet or 'unknown outlet'} ({d.published or 'undated'}): "
+                      f"{(d.title or d.url)[:120]}")
+    searched = [f"name: {subject}"]
+    if aliases:
+        searched.append("aliases: " + ", ".join(aliases))
+    if anchors is not None:
+        for label, value in (("district", anchors.district), ("state", anchors.state),
+                             ("station", anchors.station)):
+            if value:
+                searched.append(f"{label}: {value}")
+        if anchors.crime_numbers:
+            searched.append("case numbers: " + ", ".join(anchors.crime_numbers[:3]))
+        if anchors.associates:
+            searched.append("associates: " + ", ".join(anchors.associates[:3]))
+
+    prompt = ("SEARCHED FOR:\n" + "\n".join(searched)
+              + "\n\nRETRIEVED COVERAGE (none of it attributable to the subject):\n"
+              + "\n".join(listed) + "\n\nWrite the note now.")
+    text = await llm.chat(_COVERAGE_SYSTEM, prompt, max_tokens=400, temperature=0.1)
+    if not text:
+        return "", ["the model did not return a coverage note"]
+    if _PROTECTED.search(text):
+        return "", ["coverage note withheld: it referenced a protected attribute"]
+    return text.strip(), []
 
 
 def marker_map(claims: list[Claim]) -> dict[str, str]:

@@ -47,14 +47,18 @@ class Budget:
 BUDGETS: dict[str, Budget] = {
     # Voice/WhatsApp: an officer standing somewhere. Discovery only, no LLM
     # claim work — the summary comes from one synthesis call.
-    "quick": Budget("quick", wall_s=25, max_queries=6, max_hits=40, max_fetch=8,
-                    max_rounds=1, fetch_concurrency=8, llm_calls=3),
-    # The default desk mode.
-    "standard": Budget("standard", wall_s=90, max_queries=14, max_hits=150, max_fetch=30,
-                       max_rounds=1, fetch_concurrency=10, llm_calls=12),
+    "quick": Budget("quick", wall_s=25, max_queries=6, max_hits=60, max_fetch=10,
+                    max_rounds=1, fetch_concurrency=10, llm_calls=3),
+    # The default desk mode. `max_fetch` is what decides how many of the discovered
+    # links are actually READ rather than merely listed, and reading is what earns an
+    # attribution band — an unread link can only ever be a link. Raised from 30 because
+    # discovery now routinely returns 70-100 candidates and stopping at 30 left real
+    # matches unexamined at position 40.
+    "standard": Budget("standard", wall_s=90, max_queries=16, max_hits=250, max_fetch=48,
+                       max_rounds=1, fetch_concurrency=12, llm_calls=12),
     # Follows leads discovered in round 1 into a second round of queries.
-    "deep": Budget("deep", wall_s=300, max_queries=40, max_hits=400, max_fetch=80,
-                   max_rounds=2, fetch_concurrency=12, llm_calls=40),
+    "deep": Budget("deep", wall_s=300, max_queries=40, max_hits=500, max_fetch=120,
+                   max_rounds=2, fetch_concurrency=14, llm_calls=40),
 }
 
 DEFAULT_MODE = _env("RESEARCH_DEFAULT_MODE", "standard")
