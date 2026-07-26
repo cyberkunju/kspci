@@ -85,11 +85,15 @@ export function exportResearchPdf({ result, role }) {
     (anchors.associates || []).length && `associates ${(anchors.associates || []).map(esc).join(', ')}`
   ].filter(Boolean).join(' · ') || 'the name only — attribution is capped accordingly';
 
+  const tierName = ['', 'Official', 'Newsroom', 'Syndicated', 'Unvetted', 'Social'];
   const rows = (r.findings || []).map((f) => `<tr>
-    <td class="band band-${esc(f.attribution)}">${esc(bandLabel(f.attribution))}</td>
+    <td class="band band-${esc(f.attribution)}">${esc(bandLabel(f.attribution))}
+      ${(f.matched || []).length ? `<div class="meta">matched: ${esc((f.matched || []).join(', '))}</div>` : ''}</td>
     <td>${esc(f.title || f.url)}<div class="meta">${esc((f.why || []).join('; '))}</div></td>
-    <td>${esc(f.outlet || '')}${f.language === 'kn' ? ' <b>(ಕನ್ನಡ)</b>' : ''}</td>
-    <td>${esc((f.published || '').slice(0, 10))}</td>
+    <td>${esc(f.outlet || '')}
+      <div class="meta">${esc(tierName[f.tier] || 'tier ' + f.tier)}${f.language && f.language !== 'en' ? ' · ' + esc(f.language) : ''}${f.outlet_count > 1 ? ' · ' + esc(f.outlet_count) + ' outlets' : ''}</div></td>
+    <td>${esc((f.published || '').slice(0, 10)) || 'undated'}</td>
+    <td>${esc((f.via || []).join(', '))}</td>
     <td><a href="${esc(f.url)}">${esc(f.url)}</a></td>
   </tr>`).join('');
 
@@ -104,15 +108,22 @@ export function exportResearchPdf({ result, role }) {
     + `<div class="meta">Mode: ${esc(r.mode)} &middot; ${esc(r.elapsed_s)}s`
     + `${r.partial ? ' &middot; <b>partial: the run hit its time limit</b>' : ''}</div></div>`,
 
-    r.summary ? `<h2>Summary</h2><div class="atext">${esc(r.summary)}</div>` : '',
+    r.summary
+      ? (r.summary_kind === 'no_match'
+        ? `<h2>No match</h2><div class="warn">Nothing retrieved could be attributed to this `
+          + `subject. The note below describes what came back instead.</div>`
+          + `<div class="atext">${esc(r.summary)}</div>`
+        : `<h2>Summary</h2><div class="atext">${esc(r.summary)}</div>`)
+      : '',
 
     `<h2>Coverage</h2><div class="meta">`
     + `${esc(counts.candidates || 0)} candidate sources found, ${esc(counts.readable || 0)} read, `
     + `${esc(counts.stories || 0)} distinct stories after de-duplicating syndication. `
     + `${esc(counts.kannada_sources || 0)} Kannada, ${esc(counts.official_sources || 0)} official.</div>`,
 
-    rows ? `<h2>Sources</h2><table><thead><tr><th>Confidence</th><th>Source</th>`
-      + `<th>Outlet</th><th>Date</th><th>Link</th></tr></thead><tbody>${rows}</tbody></table>` : '',
+    rows ? `<h2>Sources (${(r.findings || []).length}, every one retrieved)</h2>`
+      + `<table><thead><tr><th>Confidence</th><th>Source</th><th>Site</th>`
+      + `<th>Published</th><th>Found by</th><th>Link</th></tr></thead><tbody>${rows}</tbody></table>` : '',
 
     timeline ? `<h2>Dated claims</h2><table><thead><tr><th>Date</th><th>Claim</th>`
       + `<th></th></tr></thead><tbody>${timeline}</tbody></table>` : '',

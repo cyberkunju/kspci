@@ -34,6 +34,33 @@ const BANDS = {
   unrelated: { label: 'Unrelated', variant: 'neutral' },
 };
 
+const TIERS = {
+  1: { label: 'Official', variant: 'success' },
+  2: { label: 'Newsroom', variant: 'info' },
+  3: { label: 'Syndicated', variant: 'neutral' },
+  4: { label: 'Unvetted', variant: 'warning' },
+  5: { label: 'Social', variant: 'warning' },
+};
+
+const LANGS = { kn: 'ಕನ್ನಡ', hi: 'हिन्दी', ta: 'தமிழ்', te: 'తెలుగు', ml: 'മലയാളം', mr: 'मराठी' };
+
+// Which tier found the link. Worth showing: a hit from a court's own search and a hit
+// from a news aggregator deserve different amounts of trust before you even open them.
+const VIA = {
+  gdelt: 'wire index (GDELT)',
+  bingnews: 'news feed',
+  'wikipedia:en': 'Wikipedia',
+  searxng: 'metasearch',
+  marginalia: 'metasearch',
+  mojeek: 'metasearch',
+};
+
+const viaLabel = (v) => VIA[v] || (v.startsWith('onsite:') ? `${v.slice(7)}'s own search` : v);
+
+const hostOf = (url) => {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return '—'; }
+};
+
 const POLL_MS = 1500;
 
 export default function Research({ role }) {
@@ -185,8 +212,15 @@ export default function Research({ role }) {
           )}
 
           <Grid columns={{ minWidth: 440, max: 2 }} gap={3}>
-            <VizCard title="What the engine concluded"
+            <VizCard
+              title={result.summary_kind === 'no_match'
+                ? 'No source could be tied to this subject'
+                : 'What the engine concluded'}
               action={<Badge variant="neutral" label={`${result.mode} · ${result.elapsed_s}s`} />}>
+              {result.summary_kind === 'no_match' && (
+                <Banner status="warning" title="This is not a finding about the subject"
+                  description="Nothing retrieved could be attributed to them. The note below describes what came back instead — often coverage of other people sharing the name." />
+              )}
               {result.summary ? (
                 <Markdown density="compact" headingLevelStart={3} contentWidth="100%">{result.summary}</Markdown>
               ) : (
@@ -262,39 +296,70 @@ export default function Research({ role }) {
                 data={shown} density="compact" dividers="rows" hasHover
                 columns={[
                   {
-                    key: 'attribution', header: 'Confidence', width: pixel(140),
+                    key: 'attribution', header: 'Confidence', width: pixel(132),
                     renderCell: (f) => (
-                      <Badge variant={(BANDS[f.attribution] || {}).variant || 'neutral'}
-                        label={(BANDS[f.attribution] || {}).label || f.attribution} />
+                      <Stack gap={0.5}>
+                        <Badge variant={(BANDS[f.attribution] || {}).variant || 'neutral'}
+                          label={(BANDS[f.attribution] || {}).label || f.attribution} />
+                        {(f.matched || []).length > 0 && (
+                          <Text type="supporting" color="tertiary">
+                            matched: {(f.matched || []).join(', ')}
+                          </Text>
+                        )}
+                      </Stack>
                     )
                   },
                   {
-                    key: 'title', header: 'Source', width: proportional(3, 260),
+                    key: 'title', header: 'Source', width: proportional(3, 240),
                     renderCell: (f) => (
                       <Stack gap={0.5}>
                         <Text type="body" weight="semibold" maxLines={2}>{f.title || f.url}</Text>
-                        <Text type="supporting" color="tertiary" maxLines={2}>{(f.why || []).join(' · ')}</Text>
+                        {/* The reasons are the audit trail. An identification an officer
+                            cannot check is one they should not act on. */}
+                        <Text type="supporting" color="tertiary" maxLines={3}>{(f.why || []).join(' · ')}</Text>
                       </Stack>
                     )
                   },
                   {
-                    key: 'outlet', header: 'Outlet', width: proportional(1, 130),
+                    key: 'outlet', header: 'Site', width: proportional(1, 132),
                     renderCell: (f) => (
                       <Stack gap={0.5}>
-                        <Text type="supporting">{f.outlet || '—'}</Text>
-                        {f.language === 'kn' && <Badge variant="info" label="ಕನ್ನಡ" />}
-                        {f.tier === 1 && <Badge variant="success" icon={<Icon icon={BadgeCheck} size="xsm" />} label="Official" />}
+                        <Text type="supporting" weight="semibold">{f.outlet || hostOf(f.url)}</Text>
+                        <Stack direction="horizontal" gap={1} wrap="wrap">
+                          <Badge variant={TIERS[f.tier] ? TIERS[f.tier].variant : 'neutral'}
+                            label={(TIERS[f.tier] || {}).label || `tier ${f.tier}`}
+                            icon={f.tier === 1 ? <Icon icon={BadgeCheck} size="xsm" /> : undefined} />
+                          {f.language && f.language !== 'en' && (
+                            <Badge variant="info" label={LANGS[f.language] || f.language} />
+                          )}
+                        </Stack>
                       </Stack>
                     )
                   },
                   {
-                    key: 'published', header: 'Date', width: pixel(100),
-                    renderCell: (f) => <Text type="supporting">{(f.published || '').slice(0, 10) || '—'}</Text>
+                    key: 'published', header: 'Published', width: pixel(104),
+                    renderCell: (f) => <Text type="supporting">{(f.published || '').slice(0, 10) || 'undated'}</Text>
                   },
                   {
-                    key: 'url', header: '', width: pixel(64),
+                    key: 'via', header: 'Found by', width: pixel(150),
                     renderCell: (f) => (
-                      <a href={f.url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${f.title || f.url} in a new tab`}>
+                      <Stack gap={0.5}>
+                        {(f.via || []).slice(0, 3).map((v) => (
+                          <Text key={v} type="supporting" color="tertiary">{viaLabel(v)}</Text>
+                        ))}
+                        {f.outlet_count > 1 && (
+                          <Text type="supporting" color="secondary">
+                            {f.outlet_count} independent outlets
+                          </Text>
+                        )}
+                      </Stack>
+                    )
+                  },
+                  {
+                    key: 'url', header: 'Open', width: pixel(56),
+                    renderCell: (f) => (
+                      <a href={f.url} target="_blank" rel="noopener noreferrer"
+                        aria-label={`Open ${f.title || f.url} in a new tab`}>
                         <Icon icon={ArrowUpRight} size="sm" />
                       </a>
                     )
