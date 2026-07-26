@@ -199,15 +199,23 @@ async function deleteOfficer(app, { phone, purgeLedger = false } = {}) {
 
   const ds = app.datastore();
   const rows = await q(app, `SELECT ROWID, OfficerID FROM Officers WHERE Phone='${p}' LIMIT 1`);
-  if (!rows.length) return { phone: p, deleted: false, reason: 'not on the roster' };
+  const out = { phone: p, deleted: false, officerId: null };
 
-  await ds.table('Officers').deleteRow(rows[0].ROWID);
-  // Invalidate after the delete, not before: a cached row re-read between the two
-  // would put the officer straight back into the cache for another hour.
-  await invalidateOfficer(app, p);
+  if (rows.length) {
+    await ds.table('Officers').deleteRow(rows[0].ROWID);
+    // Invalidate after the delete, not before: a cached row re-read between the two
+    // would put the officer straight back into the cache for another hour.
+    await invalidateOfficer(app, p);
+    out.deleted = true;
+    out.officerId = rows[0].OfficerID || null;
+  } else {
+    out.reason = 'not on the roster';
+  }
 
-  const out = { phone: p, deleted: true, officerId: rows[0].OfficerID || null };
-
+  // The purge runs whether or not there was a roster row. The number that most needs
+  // its ledger cleared is one that was never an officer — a wrong number, or an
+  // unknown caller whose rejected attempts we logged — and refusing to touch those
+  // would leave the one case this is for unreachable.
   if (purgeLedger) {
     let removed = 0;
     // deleteRows caps at 200 ids per call, so page rather than assuming one pass.

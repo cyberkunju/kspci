@@ -631,16 +631,23 @@ app.post('/whatsapp/webhook', async (req, res) => {
   // id and submits the job, so it returns in well under a second anyway. Without
   // one it processes inline and takes longer; Meta may then redeliver, but the id is
   // claimed exactly once, so the redelivery is discarded rather than answered twice.
+  let accepted = null;
   try {
     const adminApp = catalyst.initialize(req, { scope: 'admin' });
-    const out = await acceptWebhook(adminApp, req.body);
-    if (out && out.error) console.error('wa webhook partial failure:', out.error);
+    accepted = await acceptWebhook(adminApp, req.body);
+    if (accepted && accepted.error) console.error('wa webhook partial failure:', accepted.error);
   } catch (e) {
     console.error('wa webhook failed:', String((e && e.message) || e));
   }
   // Always 200. A non-2xx makes Meta redeliver, and a redelivery cannot help with a
   // failure on our side — it only re-enters a code path that just failed.
-  if (!res.headersSent) res.sendStatus(200);
+  //
+  // The body reports counts only — how many events arrived, how many were queued,
+  // deduplicated or handled inline — and never message content. Meta ignores it, but
+  // it is the only way to tell from outside whether the queue is actually carrying
+  // turns or whether every one is silently falling back inline, and this endpoint is
+  // HMAC-gated so no unauthenticated caller ever sees it.
+  if (!res.headersSent) res.status(200).json(accepted || { received: 0 });
 });
 
 // Internal: process one normalized turn. Called by the Catalyst job, never by Meta.
@@ -681,6 +688,24 @@ app.post('/whatsapp/alerts/dispatch', internalGuard, async (req, res) => {
   }
 });
 
+/**
+ * Whether the installed SDK actually exposes a namespace.
+ *
+ * Probed against the prototype so it costs nothing and needs no request context.
+ */
+function hasSdkNamespace(name) {
+  try {
+    const proto = catalyst.initialize && Object.getPrototypeOf(catalyst);
+    if (proto && typeof proto[name] === 'function') return true;
+  } catch (_) { /* fall through */ }
+  try {
+    require.resolve('zcatalyst-sdk-node/lib/' + (name === 'jobScheduling' ? 'job-scheduling' : name));
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 // Channel diagnostics. Reports whether each piece is configured, never the values.
 //
 // Admin-guarded, because the answers are useful to the wrong person too: row counts
@@ -691,16 +716,39 @@ app.get('/whatsapp/health', adminGuard, async (req, res) => {
   const out = {
     channel: 'whatsapp-field-officer',
     graphVersion: process.env.WA_GRAPH_VERSION || 'v25.0',
+    sdk: (() => { try { return require('zcatalyst-sdk-node/package.json').version; } catch (_) { return 'unknown'; } })(),
     configured: {
       send: set('WA_PHONE_NUMBER_ID') && set('WA_ACCESS_TOKEN'),
       webhookSignature: set('WA_APP_SECRET'),
       webhookVerifyToken: set('WA_VERIFY_TOKEN'),
-      asyncJobs: set('WA_JOBPOOL') && set('WA_PROCESS_URL'),
+      // Config alone is not enough to answer this. Job Scheduling and Stratus arrived
+      // in zcatalyst-sdk-node 3.x, and on 2.x the calls simply are not there: photo
+      // enrolment throws and the webhook silently falls back to inline forever. Both
+      // were configured and reported healthy while neither could work, so the
+      // namespaces are probed rather than assumed.
+      asyncJobs: set('WA_JOBPOOL') && set('WA_PROCESS_URL') && hasSdkNamespace('jobScheduling'),
+      objectStore: hasSdkNamespace('stratus'),
       internalKey: set('WA_INTERNAL_KEY'),
+      // Configured means "a name is set", not "Meta has approved it". An unapproved
+      // template still fails at send time, and the dispatch reports that per officer.
       alertTemplate: set('WA_ALERT_TEMPLATE'),
       photoBucket: process.env.WA_PHOTO_BUCKET || 'ksp-field-photos'
     }
   };
+  // Resolve the job pool for real. `enqueue` deliberately swallows its failure and
+  // falls back inline — losing the queue must not lose an officer's message — which
+  // also means a broken queue is invisible. This is a read, creates no job, and
+  // exercises the same namespace and credentials that submitJob would.
+  if (out.configured.asyncJobs) {
+    try {
+      const adminApp = catalyst.initialize(req, { scope: 'admin' });
+      const pool = await adminApp.jobScheduling().getJobpool(process.env.WA_JOBPOOL);
+      out.jobPool = pool ? 'resolved' : 'not found';
+    } catch (e) {
+      out.jobPool = 'error: ' + String((e && e.message) || e).slice(0, 200);
+    }
+  }
+
   try {
     const adminApp = catalyst.initialize(req, { scope: 'admin' });
     const zcql = adminApp.zcql();
@@ -760,7 +808,10 @@ app.delete('/admin/officers', adminGuard, async (req, res) => {
       phone: body.phone,
       purgeLedger: body.purgeLedger === true
     });
-    res.status(out.deleted ? 200 : 404).json(out);
+    // 404 only when nothing at all was found for this number, so a ledger-only purge
+    // of a never-registered caller reports success rather than "not found".
+    const removedSomething = out.deleted || Number(out.ledgerRowsPurged || 0) > 0;
+    res.status(removedSomething ? 200 : 404).json(out);
   } catch (e) {
     res.status(400).json({ error: 'officer_delete_failed', message: String((e && e.message) || e) });
   }
