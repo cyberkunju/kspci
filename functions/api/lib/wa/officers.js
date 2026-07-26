@@ -12,6 +12,9 @@
 
 const ROLES = ['investigator', 'analyst', 'supervisor', 'policymaker', 'admin'];
 
+/** Languages the channel speaks. Kept here so the roster column and the copy packs agree. */
+const LANGUAGES = ['en', 'kn', 'hi'];
+
 const dtNow = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
 const genId = (p) => p + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
@@ -64,7 +67,8 @@ function shapeOfficer(row) {
     state: row.StateName || '',
     district: row.DistrictName || '',
     station: row.StationName || '',
-    language: String(row.Language || 'en').toLowerCase() === 'kn' ? 'kn' : 'en',
+    language: LANGUAGES.includes(String(row.Language || '').toLowerCase())
+      ? String(row.Language).toLowerCase() : 'en',
     active: isTrue(row.IsActive),
     alertDistricts: String(row.AlertDistricts || '').split(',').map((s) => s.trim()).filter(Boolean),
     alertSeverity: String(row.AlertSeverity || 'critical').toLowerCase(),
@@ -147,7 +151,9 @@ async function upsertOfficer(app, input) {
   set('StateName', input.state === undefined ? undefined : String(input.state).slice(0, 80));
   set('DistrictName', input.district === undefined ? undefined : String(input.district).slice(0, 80));
   set('StationName', input.station === undefined ? undefined : String(input.station).slice(0, 120));
-  set('Language', input.language === undefined ? undefined : (String(input.language).toLowerCase() === 'kn' ? 'kn' : 'en'));
+  set('Language', input.language === undefined
+    ? undefined
+    : (LANGUAGES.includes(String(input.language).toLowerCase()) ? String(input.language).toLowerCase() : 'en'));
   set('IsActive', input.active === undefined ? undefined : (input.active === false ? 'false' : 'true'));
   set('AlertDistricts', input.alertDistricts === undefined ? undefined : districts(input.alertDistricts));
   set('AlertSeverity', input.alertSeverity === undefined ? undefined : String(input.alertSeverity).toLowerCase());
@@ -229,6 +235,46 @@ async function deleteOfficer(app, { phone, purgeLedger = false } = {}) {
     out.ledgerRowsPurged = removed;
   }
   return out;
+}
+
+/**
+ * Persist the officer's own language choice.
+ *
+ * Written to the roster row, not just to the turn's pending blob, because it has to
+ * outlive the conversation: a proactive alert is composed with no turn in flight, and
+ * an officer who asked for Hindi should not get an English push at 6am.
+ */
+async function setLanguage(app, officer, language) {
+  const code = String(language || '').toLowerCase();
+  if (!LANGUAGES.includes(code)) throw new Error('language must be one of ' + LANGUAGES.join(', '));
+  if (!officer || !officer.rowId) throw new Error('officer record not found');
+  await app.datastore().table('Officers').updateRow({ ROWID: officer.rowId, Language: code });
+  await invalidateOfficer(app, officer.phone);
+  return code;
+}
+
+/**
+ * Persist the officer's access context.
+ *
+ * Caller-gated, not gated here: `WA_SELF_ROLE` decides whether an officer may set
+ * their own, and that decision belongs at the point where officer intent is being
+ * interpreted rather than buried in a setter. Every change is audited against their
+ * identity, because a role change is the single most consequential thing this channel
+ * can write.
+ */
+async function setRole(app, officer, role) {
+  const r = String(role || '').toLowerCase();
+  if (!ROLES.includes(r)) throw new Error('role must be one of ' + ROLES.join(', '));
+  if (!officer || !officer.rowId) throw new Error('officer record not found');
+  const previous = officer.role;
+  await app.datastore().table('Officers').updateRow({ ROWID: officer.rowId, Role: r });
+  await invalidateOfficer(app, officer.phone);
+  await logMessage(app, {
+    direction: 'audit', phone: officer.phone, officerId: officer.officerId,
+    type: 'role-change', body: `role ${previous} -> ${r} (set by the officer over WhatsApp)`,
+    status: 'applied'
+  });
+  return r;
 }
 
 /** Persist an officer's own alert preferences (set by the officer over WhatsApp). */
@@ -671,7 +717,8 @@ async function releaseTurnLock(app, phone) {
 
 module.exports = {
   ROLES, normalizePhone, getOfficer, invalidateOfficer, alertRecipients,
-  upsertOfficer, deleteOfficer, setAlertPrefs, touchOfficer, withinServiceWindow,
+  upsertOfficer, deleteOfficer, setAlertPrefs, setLanguage, setRole,
+  touchOfficer, withinServiceWindow, LANGUAGES,
   checkRate, claimMessage, completeMessage, releaseMessage, logMessage,
   messageAlreadyAnswered,
   alertAlreadySent, recentTurns, shapeOfficer, dtNow, genId,
