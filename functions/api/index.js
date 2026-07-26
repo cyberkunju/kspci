@@ -16,10 +16,19 @@
  *   GET  /trends                 crime trend + hotspot aggregation                     [Phase 2]
  *   GET  /offender/:id/risk      AutoML risk score + factors                          [Phase 2/3]
  *   POST /ingest/ocr             scanned FIR OCR ingestion (Zia OCR)                   [Phase 3]
+ *
+ *   WhatsApp field-officer channel (lib/wa/*):
+ *   GET  /whatsapp/webhook           Meta subscription handshake
+ *   POST /whatsapp/webhook           inbound messages (HMAC-verified, fast ack)
+ *   POST /whatsapp/process           internal: run one turn through the field agent
+ *   POST /whatsapp/alerts/dispatch   internal: cron-driven early-warning push
+ *   GET  /whatsapp/health            channel configuration diagnostics
+ *   GET/POST /admin/officers         officer roster (admin-key guarded)
  */
 
 const express = require('express');
 const catalyst = require('zcatalyst-sdk-node');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { parseCsv } = require('./lib/csv');
@@ -31,7 +40,13 @@ const dtNow = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
 const genId = (p) => p + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
+// Meta signs the WhatsApp webhook over the RAW request bytes, so keep a copy
+// before parsing — re-serializing the parsed object changes whitespace and key
+// order and the HMAC no longer matches.
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, _res, buf) => { req.rawBody = buf; }
+}));
 
 const SEED_DIR = path.join(__dirname, 'seed');
 const SEED_TABLES = [
@@ -80,31 +95,21 @@ app.post('/warmup', async (req, res) => {
   }
 });
 
-// ---- Voice: Sarvam AI STT + TTS ----
+// ---- Voice: Sarvam AI STT + TTS (lib/voice.js) ----
 // Catalyst/Zia has no speech model, so voice uses Sarvam (saarika STT + bulbul TTS),
 // the one justified third-party (LLM = Zoho GLM, OCR = Zia are fully native).
-const SARVAM = 'https://api.sarvam.ai';
-const sarvamLang = (l) => (l === 'kn' ? 'kn-IN' : 'en-IN');
-
+// The WhatsApp channel transcribes voice notes through the same module.
 app.post('/voice/stt', requireRole(), async (req, res) => {
   try {
     const { audio, mime = 'audio/webm', language } = req.body || {};
     if (!audio) return res.status(400).json({ error: 'audio (base64) required' });
-    const buf = Buffer.from(audio, 'base64');
-    const form = new FormData();
-    form.append('model', process.env.SARVAM_STT_MODEL || 'saarika:v2.5');
-    form.append('language_code', language ? sarvamLang(language) : 'unknown');
-    form.append('file', new Blob([buf], { type: mime }), 'audio.webm');
-    const r = await fetch(`${SARVAM}/speech-to-text`, {
-      method: 'POST',
-      headers: { 'api-subscription-key': process.env.SARVAM_API_KEY || '' },
-      body: form
-    });
-    const j = await r.json();
-    if (!r.ok) return res.status(502).json({ error: 'stt_failed', detail: j });
-    res.json({ text: j.transcript || '', language: j.language_code || null });
+    const { speechToText } = require('./lib/voice');
+    const out = await speechToText({ buffer: Buffer.from(audio, 'base64'), mime, language });
+    res.json(out);
   } catch (e) {
-    res.status(500).json({ error: 'stt_error', message: String((e && e.message) || e) });
+    res.status(e && e.status === 400 ? 400 : 502).json({
+      error: 'stt_failed', message: String((e && e.message) || e), detail: e && e.detail
+    });
   }
 });
 
@@ -112,23 +117,10 @@ app.post('/voice/tts', requireRole(), async (req, res) => {
   try {
     const { text, language } = req.body || {};
     if (!text || !text.trim()) return res.status(400).json({ error: 'text required' });
-    const r = await fetch(`${SARVAM}/text-to-speech`, {
-      method: 'POST',
-      headers: { 'api-subscription-key': process.env.SARVAM_API_KEY || '', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text: text.slice(0, 2500),
-        target_language_code: sarvamLang(language),
-        speaker: process.env.SARVAM_TTS_SPEAKER || 'ritu',
-        model: process.env.SARVAM_TTS_MODEL || 'bulbul:v3',
-        output_audio_codec: 'mp3'
-      })
-    });
-    const j = await r.json();
-    const audios = j && j.audios;
-    if (!r.ok || !Array.isArray(audios) || !audios[0]) return res.status(502).json({ error: 'tts_failed', detail: j });
-    res.json({ audio: audios[0], mime: 'audio/mpeg' });
+    const { textToSpeech } = require('./lib/voice');
+    res.json(await textToSpeech({ text, language }));
   } catch (e) {
-    res.status(500).json({ error: 'tts_error', message: String((e && e.message) || e) });
+    res.status(502).json({ error: 'tts_failed', message: String((e && e.message) || e), detail: e && e.detail });
   }
 });
 
@@ -145,9 +137,22 @@ app.get('/health', (req, res) => {
 // ============================ ADMIN: SDK-based data seeder ============================
 // Loads synthetic CSVs (bundled in seed/) into Data Store via the SDK — no interactive
 // prompts, no 5k CLI cap workaround needed beyond dev-env limits. Batched by the caller.
+/**
+ * Constant-time secret comparison. Used by every shared-key guard so they match
+ * the discipline the webhook's HMAC check already follows — a `!==` on a secret
+ * returns early on the first differing byte, and there is no reason to hand out
+ * that signal when the fix is three lines.
+ */
+function secretMatches(supplied, expected) {
+  if (!expected) return false;
+  const a = Buffer.from(String(supplied == null ? '' : supplied));
+  const b = Buffer.from(String(expected));
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
 function adminGuard(req, res, next) {
-  const key = req.headers['x-admin-key'];
-  if (!process.env.ADMIN_KEY || key !== process.env.ADMIN_KEY) {
+  if (!secretMatches(req.headers['x-admin-key'], process.env.ADMIN_KEY)) {
     return res.status(401).json({ error: 'unauthorized' });
   }
   next();
@@ -589,6 +594,226 @@ app.get('/analytics/brief', requireRole(), async (req, res) => {
     res.json({ horizon: fc.horizon, brief: out.content, critical: ew.critical, elevated: ew.elevated, model: modelLabel() });
   } catch (e) {
     res.status(500).json({ error: 'brief_failed', message: String((e && e.message) || e) });
+  }
+});
+
+// ============================ WhatsApp field-officer channel ============================
+// Meta WhatsApp Cloud API webhook + the internal endpoints its async processing and
+// alert cron call back into. See lib/wa/* and documentation/15-whatsapp-field-bot.md.
+//
+// These routes are deliberately NOT behind requireRole: a field message carries no
+// role header. Authorization is the Officers roster (lib/wa/officers.js), and the
+// webhook itself is authenticated by Meta's HMAC signature.
+
+// Webhook subscription handshake.
+app.get('/whatsapp/webhook', (req, res) => {
+  const { verifyChallenge } = require('./lib/wa/client');
+  const challenge = verifyChallenge(req.query);
+  if (!challenge) return res.sendStatus(403);
+  res.status(200).type('text/plain').send(challenge);
+});
+
+// Inbound messages. Meta redelivers anything it does not see acknowledged quickly,
+// so this answers 200 as soon as the message is authenticated and claimed, and the
+// slow work runs in a job (or inline when job scheduling is unconfigured).
+app.post('/whatsapp/webhook', async (req, res) => {
+  const { verifySignature } = require('./lib/wa/client');
+  if (!verifySignature(req.rawBody, req.headers['x-hub-signature-256'])) {
+    return res.status(403).json({ error: 'bad_signature' });
+  }
+  const { acceptWebhook } = require('./lib/wa/inbound');
+  // The work is awaited BEFORE responding, always.
+  //
+  // Acknowledging first and finishing afterwards looks like the obvious way to keep
+  // the webhook fast, but a serverless instance can be frozen the moment the
+  // response is written — and the part that would be lost is the job submission,
+  // i.e. the officer's message. With a job pool configured this path only claims the
+  // id and submits the job, so it returns in well under a second anyway. Without
+  // one it processes inline and takes longer; Meta may then redeliver, but the id is
+  // claimed exactly once, so the redelivery is discarded rather than answered twice.
+  let accepted = null;
+  try {
+    const adminApp = catalyst.initialize(req, { scope: 'admin' });
+    accepted = await acceptWebhook(adminApp, req.body);
+    if (accepted && accepted.error) console.error('wa webhook partial failure:', accepted.error);
+  } catch (e) {
+    console.error('wa webhook failed:', String((e && e.message) || e));
+  }
+  // Always 200. A non-2xx makes Meta redeliver, and a redelivery cannot help with a
+  // failure on our side — it only re-enters a code path that just failed.
+  //
+  // The body reports counts only — how many events arrived, how many were queued,
+  // deduplicated or handled inline — and never message content. Meta ignores it, but
+  // it is the only way to tell from outside whether the queue is actually carrying
+  // turns or whether every one is silently falling back inline, and this endpoint is
+  // HMAC-gated so no unauthenticated caller ever sees it.
+  if (!res.headersSent) res.status(200).json(accepted || { received: 0 });
+});
+
+// Internal: process one normalized turn. Called by the Catalyst job, never by Meta.
+// Fails closed — without WA_INTERNAL_KEY nobody may drive officer conversations.
+function internalGuard(req, res, next) {
+  if (!secretMatches(req.headers['x-wa-internal-key'], process.env.WA_INTERNAL_KEY)) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  next();
+}
+
+app.post('/whatsapp/process', internalGuard, async (req, res) => {
+  try {
+    const { processEvent } = require('./lib/wa/inbound');
+    const event = req.body && req.body.event;
+    if (!event || !event.from) return res.status(400).json({ error: 'event required' });
+    const adminApp = catalyst.initialize(req, { scope: 'admin' });
+    const out = await processEvent(adminApp, event);
+    // processEvent decides whether a retry is safe. It is safe only when the failure
+    // happened before the agent ran, because a turn that already enrolled a photo
+    // would enrol it twice on the second attempt. A 500 is what makes the job pool
+    // try again, so it is sent only when processEvent asked for it.
+    res.status(out && out.retry ? 500 : 200).json(out);
+  } catch (e) {
+    res.status(500).json({ error: 'wa_process_failed', message: String((e && e.message) || e) });
+  }
+});
+
+// Internal: proactive early-warning push. Wired to a Catalyst cron.
+app.post('/whatsapp/alerts/dispatch', internalGuard, async (req, res) => {
+  try {
+    const { dispatchAlerts } = require('./lib/wa/alerts');
+    const adminApp = catalyst.initialize(req, { scope: 'admin' });
+    const dryRun = req.query.dryRun === 'true' || (req.body && req.body.dryRun === true);
+    res.json(await dispatchAlerts(adminApp, { dryRun }));
+  } catch (e) {
+    res.status(500).json({ error: 'wa_alerts_failed', message: String((e && e.message) || e) });
+  }
+});
+
+/**
+ * Whether the installed SDK actually exposes a namespace.
+ *
+ * Probed against the prototype so it costs nothing and needs no request context.
+ */
+function hasSdkNamespace(name) {
+  try {
+    const proto = catalyst.initialize && Object.getPrototypeOf(catalyst);
+    if (proto && typeof proto[name] === 'function') return true;
+  } catch (_) { /* fall through */ }
+  try {
+    require.resolve('zcatalyst-sdk-node/lib/' + (name === 'jobScheduling' ? 'job-scheduling' : name));
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Channel diagnostics. Reports whether each piece is configured, never the values.
+//
+// Admin-guarded, because the answers are useful to the wrong person too: row counts
+// for a police roster and gallery are operational intelligence, and
+// `webhookSignature: false` tells a caller the webhook is forgeable.
+app.get('/whatsapp/health', adminGuard, async (req, res) => {
+  const set = (k) => Boolean(process.env[k]);
+  const out = {
+    channel: 'whatsapp-field-officer',
+    graphVersion: process.env.WA_GRAPH_VERSION || 'v25.0',
+    sdk: (() => { try { return require('zcatalyst-sdk-node/package.json').version; } catch (_) { return 'unknown'; } })(),
+    configured: {
+      send: set('WA_PHONE_NUMBER_ID') && set('WA_ACCESS_TOKEN'),
+      webhookSignature: set('WA_APP_SECRET'),
+      webhookVerifyToken: set('WA_VERIFY_TOKEN'),
+      // Config alone is not enough to answer this. Job Scheduling and Stratus arrived
+      // in zcatalyst-sdk-node 3.x, and on 2.x the calls simply are not there: photo
+      // enrolment throws and the webhook silently falls back to inline forever. Both
+      // were configured and reported healthy while neither could work, so the
+      // namespaces are probed rather than assumed.
+      asyncJobs: set('WA_JOBPOOL') && set('WA_PROCESS_URL') && hasSdkNamespace('jobScheduling'),
+      objectStore: hasSdkNamespace('stratus'),
+      internalKey: set('WA_INTERNAL_KEY'),
+      // Configured means "a name is set", not "Meta has approved it". An unapproved
+      // template still fails at send time, and the dispatch reports that per officer.
+      alertTemplate: set('WA_ALERT_TEMPLATE'),
+      photoBucket: process.env.WA_PHOTO_BUCKET || 'ksp-field-photos'
+    }
+  };
+  // Resolve the job pool for real. `enqueue` deliberately swallows its failure and
+  // falls back inline — losing the queue must not lose an officer's message — which
+  // also means a broken queue is invisible. This is a read, creates no job, and
+  // exercises the same namespace and credentials that submitJob would.
+  if (out.configured.asyncJobs) {
+    try {
+      const adminApp = catalyst.initialize(req, { scope: 'admin' });
+      const pool = await adminApp.jobScheduling().getJobpool(process.env.WA_JOBPOOL);
+      out.jobPool = pool ? 'resolved' : 'not found';
+    } catch (e) {
+      out.jobPool = 'error: ' + String((e && e.message) || e).slice(0, 200);
+    }
+  }
+
+  try {
+    const adminApp = catalyst.initialize(req, { scope: 'admin' });
+    const zcql = adminApp.zcql();
+    for (const t of ['Officers', 'WaMessages', 'PersonPhotos']) {
+      try {
+        const r = await zcql.executeZCQLQuery(`SELECT COUNT(ROWID) FROM ${t}`);
+        const obj = r && r[0] && r[0][t];
+        out[t] = obj ? Number(Object.values(obj)[0]) : 0;
+      } catch (_) { out[t] = 'table_missing'; }
+    }
+  } catch (_) { out.datastore = 'unavailable'; }
+  res.json(out);
+});
+
+// Officer roster management (admin-key guarded, same as the seeder).
+app.get('/admin/officers', adminGuard, async (req, res) => {
+  try {
+    const adminApp = catalyst.initialize(req, { scope: 'admin' });
+    const rows = await adminApp.zcql().executeZCQLQuery('SELECT * FROM Officers ORDER BY CREATEDTIME DESC LIMIT 300');
+    const { shapeOfficer } = require('./lib/wa/officers');
+    res.json({ officers: (rows || []).map((r) => shapeOfficer(r.Officers || r)) });
+  } catch (e) {
+    res.status(500).json({ error: 'officers_failed', message: String((e && e.message) || e) });
+  }
+});
+
+// Register or update officers. Accepts one object or an array for bulk onboarding.
+app.post('/admin/officers', adminGuard, async (req, res) => {
+  try {
+    const { upsertOfficer } = require('./lib/wa/officers');
+    const adminApp = catalyst.initialize(req, { scope: 'admin' });
+    const input = Array.isArray(req.body) ? req.body : [req.body || {}];
+    if (input.length > 200) return res.status(400).json({ error: 'at most 200 officers per request' });
+    const results = [];
+    for (const o of input) {
+      try { results.push(await upsertOfficer(adminApp, o)); }
+      catch (e) { results.push({ phone: o && o.phone, error: String((e && e.message) || e) }); }
+    }
+    res.status(201).json({ results });
+  } catch (e) {
+    res.status(500).json({ error: 'officer_upsert_failed', message: String((e && e.message) || e) });
+  }
+});
+
+// Deregister an officer. Body: { phone, purgeLedger?: true }.
+//
+// Revoking access day-to-day is POST with { active: false } — the roster lookup
+// refuses an inactive row and the row remains as the record that this number held
+// access. This route is for a number that should never have been registered, where
+// an inactive row would leave a live police roster listing a number nobody owns.
+app.delete('/admin/officers', adminGuard, async (req, res) => {
+  try {
+    const { deleteOfficer } = require('./lib/wa/officers');
+    const adminApp = catalyst.initialize(req, { scope: 'admin' });
+    const body = req.body || {};
+    const out = await deleteOfficer(adminApp, {
+      phone: body.phone,
+      purgeLedger: body.purgeLedger === true
+    });
+    // 404 only when nothing at all was found for this number, so a ledger-only purge
+    // of a never-registered caller reports success rather than "not found".
+    const removedSomething = out.deleted || Number(out.ledgerRowsPurged || 0) > 0;
+    res.status(removedSomething ? 200 : 404).json(out);
+  } catch (e) {
+    res.status(400).json({ error: 'officer_delete_failed', message: String((e && e.message) || e) });
   }
 });
 

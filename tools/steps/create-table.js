@@ -41,6 +41,5 @@ module.exports = async (page, args) => {
     out.push({ table: name, status: now.includes(name) ? 'created' : 'NOT VISIBLE after create' });
   }
 
-  await page.screenshot({ path: '/tmp/tables.png' });
   return { results: out, tables: await tableNames(page) };
 };

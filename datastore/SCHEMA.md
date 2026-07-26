@@ -95,6 +95,99 @@ SessionID(Text), UserId(Text), Role(Text), Language(Text), Title(Text), CreatedA
 
 ---
 
+## WhatsApp field-officer channel (3 more tables)
+
+Required only for the WhatsApp bot (`functions/api/lib/wa/*`). Create them the same
+way; all three start empty. Full context: `documentation/15-whatsapp-field-bot.md`.
+
+### 11. `Officers`   (the channel's allow-list — a WhatsApp number is its only credential)
+| Column | Type | Notes |
+|---|---|---|
+| OfficerID | Text | generated `off_...` |
+| **Phone** | **Text** | E.164 digits, no `+` (matches WhatsApp's `wa_id`). The lookup key |
+| Name | Text | |
+| Rank | Text | |
+| Role | Text | investigator / analyst / supervisor / policymaker / admin |
+| StateName | Text | |
+| DistrictName | Text | posting; also the default alert subscription |
+| StationName | Text | |
+| Language | Text | `en` or `kn` |
+| IsActive | Text | `true` / `false` — set `false` to revoke a handset instantly |
+| AlertDistricts | Text | comma-separated subscription list |
+| AlertSeverity | Text | critical / elevated / watch / none |
+| OptedInAt | DateTime | |
+| LastSeenAt | DateTime | last inbound message — decides Meta's 24-hour window |
+| Pending | Text (max) | JSON conversational state: open frame, language prior, undo ledger. Bounded and self-healing (see below) |
+
+> A number absent from this table, or with `IsActive` false, receives no data. There
+> is no self-registration.
+
+`Pending` is the channel's only mutable per-officer state, written once per turn in
+the same update that stamps `LastSeenAt`:
+
+```json
+{
+  "openFrame": { "v": 1, "kind": "pick", "prompt": "Which Suresh Kumar?",
+                 "options": [{ "id": "1", "label": "…", "resolve": "…" }],
+                 "context": { "promptMsgId": "wamid…" }, "ts": 1750000000000, "retries": 0 },
+  "recentLangs": ["kn", "kn", "en"],
+  "undo": [{ "token": "A2B3C4", "action": "undo_enroll", "payload": { "photoId": "pht_…" }, "ts": 1750000000000 }]
+}
+```
+
+Every part is bounded by construction — one frame, twelve prior entries, five undo
+records — and an unparseable or oversized value is read as `{}` rather than failing
+the write that also stamps the service window. Losing a frame costs one turn;
+losing `LastSeenAt` costs the ability to send an alert.
+
+> Not cached. The officer's identity and role are cached because a roster edit is
+> rare; this changes every turn, and a stale copy would make the bot forget the
+> question it just asked.
+
+### 12. `WaMessages`   (field-channel audit trail, de-duplication, and alert ledger)
+| Column | Type | Notes |
+|---|---|---|
+| **MsgID** | **Text** | Meta `wamid` for inbound, or the alert dedupe key. Uniqueness is enforced by lookup, not by the store |
+| Direction | Text | in / out / alert / status / audit |
+| Phone | Text | |
+| OfficerID | Text | |
+| MsgType | Text | text / image / audio / location / alert-template / … |
+| Body | Text (max) | message text, or the alert payload |
+| MediaKey | Text | Stratus object key when media was retained |
+| SessionID | Text | |
+| Status | Text | sent / failed / rejected / released (a claim given back after a failed attempt, so the job's retry is not read as a duplicate) |
+| CreatedAt | DateTime | |
+
+### 13. `PersonPhotos`   (reference gallery for Zia facial comparison)
+| Column | Type | Notes |
+|---|---|---|
+| PhotoID | Text | generated `pht_...` |
+| PersonName | Text | |
+| PersonID | Text | from `Accused` where the name resolved |
+| AccusedMasterID | BigInt | 0 when unlinked |
+| CaseMasterID | BigInt | 0 when unlinked |
+| CrimeNo | Text | |
+| DistrictName | Text | narrows the comparison shortlist |
+| StateName | Text | |
+| Gender | Text | narrows the comparison shortlist |
+| AgeYear | Int | narrows the comparison shortlist |
+| RingID | Int | |
+| ObjectKey | Text | Stratus key, `gallery/<PhotoID>.<ext>` |
+| Mime | Text | |
+| Source | Text | `field-enrolment` |
+| EnrolledBy | Text | officer name |
+| EnrolledByPhone | Text | |
+| CreatedAt | DateTime | |
+
+> The crime dataset contains **no photographs**. This gallery holds only what
+> officers enrol in the field, so facial comparison matches nothing until it is
+> populated — and it says so rather than pretending otherwise.
+
+Also create a **Stratus bucket** for the image bytes (default name
+`ksp-field-photos`, override with `WA_PHOTO_BUCKET`).
+
+---
+
 ---
 
 ## Generating seed data

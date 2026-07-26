@@ -33,7 +33,6 @@ module.exports = async (page, args) => {
   const name = args[0] || 'Cases';
   await openTable(page, name);
   const cols = await columns(page);
-  await page.screenshot({ path: `/tmp/table-${name}.png` });
   return { table: name, url: page.url(), count: cols.length, columns: cols.map((c) => `${c.name}:${c.type}`) };
 };
 
