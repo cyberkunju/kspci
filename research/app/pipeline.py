@@ -28,7 +28,9 @@ from .extract import extract
 from .governance import DISCLAIMER
 from .models import ATTRIBUTION_RANK, Anchors, Document, Finding, Hit, Story, Tier
 from .net import Fetcher, canonical_url
+from .fuse import fuse
 from .plan import GdeltPlan, Query, plan_queries, resolve_names
+from .verdict import render_notice, verdicts
 from .tiers import tier_for
 
 Progress = Callable[[str, str, dict], Awaitable[None] | None]
@@ -159,6 +161,8 @@ async def _discover(f: Fetcher, queries: list[Query], gdelt_plan: GdeltPlan,
         return got
 
     legs: list[Awaitable[list[Hit]]] = []
+    # Order matters from here on: each leg's own ranking is the signal rank fusion reads,
+    # so legs are kept as separate ordered lists rather than concatenated.
     if "gdelt" in {r for q in queries for r in q.routes} or True:
         legs.append(gdelt_leg())
 
@@ -191,29 +195,30 @@ async def _discover(f: Fetcher, queries: list[Query], gdelt_plan: GdeltPlan,
         failed.append("discovery timed out before every source answered")
         results = []
 
+    # Canonicalise before fusing, so the same article from three tiers is one URL and
+    # therefore one fused hit with three contributing sources.
+    ordered_legs: list[list[Hit]] = []
     for res in results:
         if isinstance(res, BaseException) or not res:
             continue
+        leg: list[Hit] = []
         for h in res:
-            hits.append(h)
             used[h.via] = used.get(h.via, 0) + 1
+            u = canonical_url(h.url)
+            if not u:
+                continue
+            h.url = u
+            if h.tier == Tier.UNKNOWN:
+                h.tier = tier_for(u)
+            leg.append(h)
+        if leg:
+            ordered_legs.append(leg)
 
-    # Canonical dedupe. The same article arrives from GDELT, an on-site search and a
-    # metasearch engine; keeping the first occurrence preserves which source found it
-    # first, which is worth knowing.
-    seen: set[str] = set()
-    unique: list[Hit] = []
-    for h in hits:
-        u = canonical_url(h.url)
-        if not u or u in seen:
-            continue
-        seen.add(u)
-        h.url = u
-        if h.tier == Tier.UNKNOWN:
-            h.tier = tier_for(u)
-        unique.append(h)
-
-    return unique[:budget.max_hits], failed, used, notes
+    # Weighted reciprocal-rank fusion, rather than keeping whichever copy arrived first.
+    # Agreement between independent tiers is the strongest relevance signal available
+    # before a single page is fetched, and it used to be computed and thrown away.
+    hits = fuse(ordered_legs)
+    return hits[:budget.max_hits], failed, used, notes
 
 
 def _prefilter(hits: list[Hit], terms: list[str]) -> list[Hit]:
@@ -224,12 +229,19 @@ def _prefilter(hits: list[Hit], terms: list[str]) -> list[Hit]:
     nothing. Fetch in discovery order and thirty reads get spent on today's front page
     while a genuine match sits unread at position forty.
 
-    So a hit whose title carries a subject term is read first. A hit with no title is
-    read before one whose title clearly does not match — the blank is unknown, and the
-    mismatch is known-bad. Authority and recency break the remaining ties.
+    Four signals, in order of how much they are worth:
 
-    Nothing is discarded here. This is ordering, not filtering; a title is weak evidence
-    and the decision about relevance belongs to attribution, which has the full text.
+      1. A subject term in the TITLE. Still the strongest single cue about this specific
+         subject, which is why it stays first — rank fusion knows what several sources
+         thought was relevant to the query, not who the document is about.
+      2. A subject term in the snippet.
+      3. Whether we can read this publisher at all. A domain that has failed repeatedly
+         and never once yielded article text goes last regardless: spending a read on a
+         page we know renders empty is spending it on nothing. See verdict.py.
+      4. The fused score — how many sources found it and how highly they ranked it.
+
+    Nothing is discarded. This is ordering, not filtering; a title is weak evidence and
+    the decision about relevance belongs to attribution, which has the full text.
     """
     needles = [t for t in terms if len(t) >= 4]
 
@@ -244,7 +256,9 @@ def _prefilter(hits: list[Hit], terms: list[str]) -> list[Hit]:
             relevance = 2          # unknown beats known-mismatch
         else:
             relevance = 3
-        return (relevance, int(h.tier), -(len(h.published or "")), h.published or "")
+        unreadable = 1 if verdicts.needs_render(h.url) else 0
+        fused = float(h.extra.get("fused_score") or 0.0)
+        return (relevance, unreadable, -fused, int(h.tier), h.published or "")
 
     return sorted(hits, key=rank)
 
@@ -266,15 +280,24 @@ async def _retrieve(f: Fetcher, hits: list[Hit], budget: Budget, dl: Deadline,
                 return Document(url=h.url, tier=h.tier, via=[h.via],
                                 error="skipped: run deadline reached")
             r = await f.get(h.url, timeout_s=int(dl.slice(settings.fetch_timeout_s)))
+            # `via` is comma-joined after fusion — one hit can have been found by four
+            # tiers — so it is split back into the list the report counts.
             doc = extract(url=h.url, final_url=r["final_url"], content=r["content"],
                           content_type=r["content_type"], tier=h.tier, status=r["status"],
-                          via=[h.via], error=r["error"])
+                          via=[v for v in (h.via or "").split(",") if v], error=r["error"])
             if not doc.title and h.title:
                 doc.title = h.title
             if not doc.published and h.published:
                 doc.published = h.published
             if not doc.language and h.language:
                 doc.language = h.language
+            # Remember whether this publisher can be read statically at all. Only counted
+            # when the fetch itself succeeded: a 404 or a timeout says nothing about
+            # whether the page needs a browser.
+            if r["status"] == 200 and not r["error"]:
+                verdicts.record(doc.final_url or doc.url, readable=bool(doc.text))
+                if not doc.text and verdicts.needs_render(doc.url):
+                    doc.error = render_notice(doc.url)
             done += 1
             if done % 5 == 0 or done == total:
                 await _emit(progress, "retrieve", f"read {done} of {total}",
@@ -474,6 +497,10 @@ def _findings(stories: list[Story], docs: list[Document]) -> list[Finding]:
     for d in docs:
         if d.ok:
             continue
+        # A link we could not read is still a link the officer may want to open, so it is
+        # listed rather than dropped — and the reason distinguishes "this publisher needs a
+        # browser we do not run" from "this page is gone", because only one of those is
+        # worth clicking.
         out.append(Finding(
             url=d.final_url or d.url, title=d.title or d.url, outlet=d.outlet,
             published=d.published, tier=int(d.tier), attribution="unrelated",

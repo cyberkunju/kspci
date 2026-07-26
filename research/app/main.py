@@ -34,6 +34,7 @@ from .config import BUDGETS, budget_for, settings
 from .models import Anchors
 from .pipeline import run as run_pipeline
 from .runs import Run, registry
+from .verdict import verdicts
 
 app = FastAPI(title="KSP Research Engine", version="1.0",
               docs_url=None, redoc_url=None, openapi_url=None)
@@ -299,6 +300,10 @@ async def health() -> dict:
                   **({"last_error": llm.LAST_ERROR} if llm.LAST_ERROR else {})},
         "sources": sources.available(),
         "source_status": dict(sources.STATUS),
+        # Which publishers this instance has learned it cannot read without a browser.
+        # Operationally useful: a domain appearing here repeatedly is the argument for
+        # building the render tier, or evidence that one is now needed.
+        "publishers": verdicts.summary(),
         "runs": {"active": registry.active(), "max_concurrent": settings.max_concurrent_runs,
                  "ttl_s": settings.run_ttl_s},
         "authenticated": bool(settings.internal_key),
