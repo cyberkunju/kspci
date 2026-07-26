@@ -750,20 +750,31 @@ test('a two- or three-way choice is offered as taps, and a wider one is not', ()
 
 /* ============================ message pack ============================ */
 
-test('every officer-facing string exists in both languages with the same shape', () => {
+test('every officer-facing string exists in all three languages with the same shape', () => {
   const en = Object.keys(copy.EN).sort();
-  const kn = Object.keys(copy.KN).sort();
-  assert.deepStrictEqual(kn, en, 'a missing Kannada key is how a bilingual bot answers in English');
-  for (const key of en) {
-    assert.strictEqual(typeof copy.KN[key], typeof copy.EN[key], key + ' must have the same shape in both packs');
+  for (const [code, packObj] of [['kn', copy.KN], ['hi', copy.HI]]) {
+    assert.deepStrictEqual(
+      Object.keys(packObj).sort(), en,
+      `a missing ${code} key is how a multilingual bot answers in English`
+    );
+    for (const key of en) {
+      assert.strictEqual(typeof packObj[key], typeof copy.EN[key], `${code}.${key} must have the same shape as English`);
+    }
   }
   assert.strictEqual(copy.messages('kn'), copy.KN);
+  assert.strictEqual(copy.messages('hi'), copy.HI);
   assert.strictEqual(copy.messages('xx'), copy.EN, 'an unknown language falls back rather than failing');
   assert.strictEqual(copy.messages(undefined), copy.EN);
+
+  // The language menu is offered before any language is known, so each label has to be
+  // legible to the officer who reads that language — not transliterated for our benefit.
+  assert.deepStrictEqual(copy.LANGUAGES.map((l) => l.code), ['en', 'kn', 'hi']);
+  assert.ok(/[\u0C80-\u0CFF]/.test(copy.languageName('kn')), 'the Kannada option must be written in Kannada');
+  assert.ok(/[\u0900-\u097F]/.test(copy.languageName('hi')), 'the Hindi option must be written in Devanagari');
 });
 
 test('no failure message leaves the officer without a next move', () => {
-  for (const code of ['en', 'kn']) {
+  for (const code of ['en', 'kn', 'hi']) {
     const pack = copy.messages(code);
     for (const key of [
       'notUnderstood', 'imageUnreadable', 'voiceUnclear', 'idNoMatch', 'idEmptyGallery',

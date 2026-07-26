@@ -11,7 +11,8 @@ Code: `functions/api/lib/wa/` · routes in `functions/api/index.js` · tables 11
 
 ## What an officer can do
 
-Everything is expressed in natural language, English or Kannada, typed or spoken.
+Everything is expressed in natural language — English, Kannada or Hindi, typed or
+spoken.
 There is no command syntax, no menu, no keyword table.
 
 | The officer sends | What happens |
@@ -25,7 +26,62 @@ There is no command syntax, no menu, no keyword table.
 | "status of FIR 4021/2026" | full dossier: record, accused, victims, arrests, timeline, similar-case outcomes |
 | "what's flagged in Mysuru next month" | live output of the predictive early-warning engine |
 | "alert me about Ballari too" / "alerts off" | changes their own push subscription |
+| "reply in Hindi" / "ಕನ್ನಡದಲ್ಲಿ ಉತ್ತರ ಕೊಡಿ" | switches language and keeps it that way |
+| "reset" | wipes their state and re-runs setup: language, then access context |
 | *(nothing — a critical district is flagged)* | proactive push arrives with a one-line AI advisory |
+
+## Setup: `reset` → language → access context
+
+Sending **`reset`** wipes the officer's conversational state and walks them through
+setup. Everything derived from past turns goes — the open frame, the language prior,
+the undo ledger — but deliberately not their roster identity and not the message
+ledger: a reset is an officer restarting a conversation, not erasing the audit trail
+of what they were shown.
+
+**Step 1 — language, as three tap buttons.** English, ಕನ್ನಡ, हिन्दी, each label written
+in its own script. Offering "Kannada" in Latin letters to someone who reads Kannada is
+the same failure the copy pack exists to prevent, one step earlier. The prompt itself
+is trilingual and is the only message in the system not taken from a pack, because it
+is sent before any language is known and a guess there strands the officer.
+
+**Step 2 — access context**, the five roles the web app uses, as a numbered list
+(WhatsApp caps reply buttons at three).
+
+Both steps are **deterministic and never reach the model.** Choosing a language and a
+role is a consent decision about identity, so it has the same standing as `help` and
+`stop`: it must work when the model is down, which is exactly when an officer reaches
+for `reset`. Backing out with "cancel" leaves existing settings untouched rather than
+re-asking forever — setup is only ever entered deliberately, so being unable to leave
+it would be the trap the frame machine exists to avoid.
+
+### Self-selected roles are a demo affordance
+
+`WA_SELF_ROLE` is **off unless explicitly `true`**, and that default matters. The trust
+boundary of this channel is that the role comes from the roster row and never from a
+message — it is what stops an investigator talking their way into risk scores and
+associate networks. Letting the officer choose mirrors the web app's own
+"Demo role · API enforced" selector and is right for a demonstration, but it is a
+deliberate relaxation, not a default a deployment should inherit without deciding. It
+is enabled in this environment. Every change is audited against the officer's identity
+either way, and with it off the setup flow ends after the language step and says so.
+
+### Changing language later
+
+Any explicit request works, in any of the three languages and any phrasing:
+"reply in English", "ab se mujhe hindi mein jawab dena", "ಕನ್ನಡದಲ್ಲಿ ಉತ್ತರ ಕೊಡಿ".
+
+This is handled **deterministically**, not by the model, and the reason is a live
+failure: asked in romanized Hindi, the model answered in Hindi and never called
+`set_language`, so nothing persisted and the next English message would have flipped it
+straight back. A named language plus a change word now switches and persists directly.
+The `set_language` tool remains for phrasings the detector misses. Naming a language in
+passing ("the FIR is written in Kannada") does not switch, and naming two does not
+either — that is a comparison, not an instruction.
+
+Once chosen, the language **outranks detection**. It is beaten only by writing in
+another script, which is unambiguous; a couple of English function words in an
+otherwise Hindi conversation is not. The choice is written to the roster row as well as
+the conversation, so a 6am alert composed with no turn in flight still comes out right.
 
 ## Why the routing is a model, not a script
 
@@ -97,14 +153,25 @@ by a stale question. Two or three options are sent as tap buttons with positiona
 ids (`pick:1`), which route independently of the localized title; a tap whose
 `context.id` does not match the question we asked is refused as stale.
 
-### Bilingual by construction
+### Trilingual by construction
 
-Every officer-facing string lives in `lib/wa/copy.js` in English and Kannada,
-police vocabulary (FIR, CrimeNo, district) deliberately left in English inside the
-Kannada copy because that is how Karnataka officers write it. `scripts/lint-wa-copy.mjs`
-fails the build if any module passes a literal string to a send, and a test asserts
-the two packs have identical keys — a missing Kannada key is exactly how a
-bilingual bot ends up answering in English.
+Every officer-facing string lives in `lib/wa/copy.js` in English, Kannada and Hindi —
+46 keys per pack, and a test asserts the three have identical keys, because a missing
+key is exactly how a multilingual bot ends up answering in English.
+
+**Romanized Hindi is far more dangerous than romanized Kannada**, and the lexicon is
+shaped by that. It excludes every function word Hindi shares with English — `the` (थे),
+`do` (दो), `is` (इस), `to` (तो), `par`, `main`, `mat` — because `the` alone would have
+read every English sentence as Hindi. `fir` is excluded because it is FIR, which appears
+in most messages on this channel, and `hogi` because Kannada already claims it: one
+token cannot be evidence for two languages. Anything under three characters is left out
+entirely. Where the two Indic sets tie, and where the officer's prior ties, the decision
+goes away from English — leaning English on a tie is the same cardinal sin, just quieter.
+
+Police vocabulary (FIR, CrimeNo, district) is deliberately left in English inside the
+Kannada and Hindi copy, because that is how officers here actually write it.
+`scripts/lint-wa-copy.mjs` fails the build if any module passes a literal string to a
+send, which is the only way an unlocalized reply can reach an officer.
 
 `lib/wa/lang.js` decides per turn, not per officer, from three layers: Kannada
 script (decisive), a romanized-Kannada function-word lexicon, and suffix
@@ -346,6 +413,8 @@ new name, which is cheaper than waiting.
 | Query safety | Model-generated ZCQL goes through the same `isSafeSelect` gate as the web chat: SELECT-only, no semicolons, enforced LIMIT |
 | Writes | The channel can add a gallery photo and change the officer's own alert settings. Nothing else. Case records are unreachable |
 | Prompt injection | Screened deterministically in `waGuard.screenInjection()` before the model sees the turn, on message text, captions **and OCR output** — anyone can print "ignore your instructions" on a sheet and hold it to a police camera. Not blocked: the finding is attached to the turn as an explicit warning and logged, and the legitimate part of the request is still answered |
+| Self-selected role | `WA_SELF_ROLE` is off unless explicitly `true`. It relaxes the channel's central trust boundary — role from the roster, never from a message — so it is a deliberate demo affordance mirroring the web app's own role selector, never a default. Every change is audited against the officer's identity |
+| A question mistaken for a command | An alert subscription may only change when the officer's own words mention alerts, in any of the three languages. Asked what the risk was in Ballari next month, the model called `set_alerts` twice and resubscribed the officer before answering — the write gate cannot catch that, because the phrasing is a plain question and questions are permitted there by design. So the check is about topic rather than mood, and reads the officer's words rather than the model's reading of them |
 | Unintended writes | `waGuard.epistemicWriteGate()` is clause-level. A negated ("don't save this") or hypothetical ("what if I save this") phrasing cannot mint a write, whatever the model decided. Polite and interrogative framings are treated as requests, because a silently-skipped enrolment is its own failure |
 | Hallucinated identifiers | `tools.verifyGrounding()` runs after the model and before delivery. A reply citing identifiers that no tool returned and the officer never supplied is replaced. Comparison is canonical (`4021/2026` = `4021 / 2026` = `4021-2026`), never substring — a substring rule let a fabricated `AB1299/2026` pass because some real record contained `AB12` |
 | A model that ignores a refusal | The second denial in one turn ends it with deterministic copy. Asking the model to stop and explain would rely on the same compliance that just failed twice, and the tools' refusal text is addressed to the model, not to an officer |
@@ -380,6 +449,7 @@ new name, which is cheaper than waiting.
 | Webhook | all three levels point at KSP: app, **phone-number override**, and WABA `subscribed_apps` |
 | Alert template | `ksp_early_warning_v2` (UTILITY, four body parameters) — **approved but disabled**, `WA_ALLOW_TEMPLATES=false` |
 | Alert delivery | free-form only, inside the 24-hour window; otherwise deferred and flushed on the officer's next message |
+| Languages | English, Kannada, **Hindi** — `WA_SELF_ROLE=true`, so `reset` also lets the officer pick their access context |
 
 **The number is exclusive to KSP now.** It had been wired into three projects at once — SellThat,
 Tia and Versifine — and a WhatsApp number delivers to exactly one webhook, so whichever project

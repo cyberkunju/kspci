@@ -538,6 +538,37 @@ a million rows — every cron cycle failed with an opaque 400. `backtest.earlyWa
 reads the batch-scored snapshot and falls back to live computation on a fresh environment, which
 also guarantees an officer's push says the same thing the dashboard says.
 
+### Setup, languages and self-selected roles
+
+`reset` re-runs onboarding: language as three tap buttons (English, ಕನ್ನಡ, हिन्दी, each
+label in its own script), then access context. Both steps are deterministic and never
+reach the model, for the same reason `help` and `stop` are — an officer reaches for
+`reset` precisely when the model may be the thing misbehaving. Backing out leaves
+existing settings alone rather than re-asking forever.
+
+An explicit language request ("reply in English", "ab se mujhe hindi mein jawab dena",
+"ಕನ್ನಡದಲ್ಲಿ ಉತ್ತರ ಕೊಡಿ") is also deterministic, because relying on the model failed live:
+asked in romanized Hindi it answered in Hindi and never called `set_language`, so
+nothing persisted and the next English message would have flipped it back. Once chosen,
+the language outranks detection and is beaten only by writing in another script.
+
+**`WA_SELF_ROLE=true` in this environment, and it is off by default in code.** Letting an
+officer choose their own access context relaxes the channel's central trust boundary —
+role from the roster row, never from a message. It mirrors the web app's own
+"Demo role · API enforced" selector and is right for a demonstration, but it is a
+deliberate relaxation and every change is audited against the officer's identity.
+
+Two live defects fixed while wiring this up, both worth knowing:
+
+- A **question** about a district changed the officer's alert subscription. Asked what
+  the risk was in Ballari next month, the model called `set_alerts` twice before
+  answering. The epistemic write gate cannot catch it — the phrasing is a plain question
+  and questions are permitted there so a politely-asked enrolment is not refused. An
+  alert subscription now only changes when the officer's own words mention alerts.
+- Copy appended **after** the agent loop used the pack captured at the start of the turn,
+  so "Switched to English." arrived with a Hindi undo hint. A turn can change its own
+  language, so anything appended afterwards has to read the pack back off the context.
+
 ### Removing a number from the roster
 
 Day-to-day revocation is `POST /admin/officers` with `{"active": false}` — the lookup refuses an
