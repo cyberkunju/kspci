@@ -158,8 +158,8 @@ async def _discover(f: Fetcher, queries: list[Query], gdelt_plan: GdeltPlan,
                 failed.append(note)
         return got
 
-    async def web_leg(text: str) -> list[Hit]:
-        got = await sources.web_search(f, text)
+    async def web_leg(text: str, limit: int = 10) -> list[Hit]:
+        got = await sources.web_search(f, text, limit=limit)
         if not got and "web" in sources.STATUS:
             note = f"web ({sources.STATUS['web']})"
             if note not in failed:
@@ -202,9 +202,13 @@ async def _discover(f: Fetcher, queries: list[Query], gdelt_plan: GdeltPlan,
     # leg so rank fusion can see where a forum thread placed against the news tiers. This
     # is the only tier that reaches discussion boards, blogs and complaint sites, so it is
     # not treated as long-tail breadth like metasearch below.
-    if settings.serper_key:
+    if settings.web_search_key:
+        # Ten per query, not twenty. Measured: at twenty this tier alone contributed 99 of
+        # 228 candidates and crowded the Kannada on-site results out of the read budget
+        # entirely — 12 Kannada sources read became 1. Its job is to reach places no other
+        # tier can, and the top ten do that; the tail is more of the same domains.
         for q in queries[:5]:
-            legs.append(web_leg(q.text.replace('"', "")))
+            legs.append(web_leg(q.text.replace('"', ""), limit=10))
 
     for q in queries[:budget.max_queries]:
         if "searxng" in q.routes and settings.searxng_url:
@@ -372,7 +376,17 @@ async def _rank_candidates(hits: list[Hit], terms: list[str], *, subject: str,
     baseline = {id(h): i for i, h in enumerate(ordered)}
 
     def key(h: Hit) -> tuple:
-        unreadable = 1 if verdicts.needs_render(h.url) else 0
+        # Two things outrank the model, for the same reason: it scores a headline and
+        # cannot predict whether the page yields text. A publisher we have learned we
+        # cannot read goes last, and so does a social or video platform — an Instagram
+        # reel or a YouTube watch page has no article body to extract, so a read spent
+        # there is a read spent on nothing. Measured when the general-web tier was
+        # switched on: readable pages fell from 48 of 48 to 34 of 48, and the difference
+        # was almost entirely x.com, instagram.com, youtube.com and quora.com. They stay
+        # in the candidate list and in the officer's table — the link is still worth
+        # having — they just do not get paid for out of the reading budget first.
+        unreadable = 1 if (verdicts.needs_render(h.url)
+                           or int(h.tier) >= int(Tier.SOCIAL)) else 0
         score = h.extra.get("rerank_score")
         return (unreadable, -float(neutral if score is None else score),
                 baseline.get(id(h), 0))

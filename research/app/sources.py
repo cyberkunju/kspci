@@ -689,37 +689,52 @@ async def web_search(f: Fetcher, query: str, *, limit: int = 20) -> list[Hit]:
         datacenter ranges. Self-hosting it would move the failure, not fix it.
 
     So the honest options were a paid index or nothing, and nothing is not an answer to
-    the requirement. This adapter stays dark until `SERPER_API_KEY` is set, exactly like
-    marginalia and searxng, and `available()` reports it as off so a run never presents
-    news-only coverage as though it had searched the web.
+    the requirement. This adapter stays dark until `WEB_SEARCH_KEY` (or the Firecrawl
+    key it falls back to) is set, exactly like marginalia and searxng, and `available()`
+    reports it as off so a run never presents news-only coverage as though it had
+    searched the web.
+
+    ONE CALL PER QUERY, AND DELIBERATELY UNLOCALISED. Firecrawl accepts a `location`, and
+    `location: "India"` does change the answer — it returns mainstream Hindi outlets. It is
+    not used, because those are the outlets the Bing news tier already reaches in its
+    `hi-IN` market. Without it the same query returns a wider spread of DOMAINS —
+    Hindustan Times, a district news site, X, Instagram, YouTube, a small English local —
+    which is the coverage nothing else in this engine has. Cost is one call either way; the
+    choice is about what is additive.
     """
-    key = settings.serper_key
+    key = settings.web_search_key
     if not key or not query.strip():
         return []
     if _cooling("web"):
         return []
-    payload = json.dumps({"q": query, "gl": "in", "num": min(max(limit, 10), 20)})
-    r = await f.post_json("https://google.serper.dev/search", payload,
-                          headers={"X-API-KEY": key, "Content-Type": "application/json"},
-                          timeout_s=settings.search_timeout_s)
+    payload = json.dumps({"query": query, "sources": ["web"],
+                          "limit": min(max(limit, 5), 20)})
+    r = await f.post_json("https://api.firecrawl.dev/v2/search", payload,
+                          headers={"Authorization": f"Bearer {key}",
+                                   "Content-Type": "application/json"},
+                          timeout_s=max(settings.search_timeout_s, 20))
     if r is None:
         _cool("web", "search api did not answer")
+        return []
+    rows = ((r.get("data") or {}).get("web") or []) if isinstance(r.get("data"), dict) else []
+    if not rows:
+        # An empty result set is a legitimate answer to a narrow query, so it is not a
+        # failure — but a body with no `data.web` key at all means the contract moved.
+        if not isinstance(r.get("data"), dict):
+            _cool("web", "unexpected response shape from the search api")
         return []
     STATUS.pop("web", None)
     out: list[Hit] = []
     seen: set[str] = set()
-    # `organic` is the ranked web list. The knowledge panel and "people also ask" are
-    # deliberately ignored: they are Google's summary of other pages, and this engine
-    # cites pages.
-    for row in (r.get("organic") or [])[:limit]:
-        u = canonical_url(str(row.get("link") or ""))
+    for row in rows[:limit]:
+        u = canonical_url(str(row.get("url") or ""))
         if not u or u in seen:
             continue
         seen.add(u)
+        raw_date = str(row.get("date") or row.get("publishedDate") or "")
         out.append(Hit(url=u, title=" ".join(str(row.get("title") or "").split())[:200],
-                       snippet=str(row.get("snippet") or "")[:400],
-                       published=str(row.get("date") or "")[:10] if re.match(
-                           r"^\d{4}-\d{2}-\d{2}", str(row.get("date") or "")) else "",
+                       snippet=str(row.get("description") or row.get("snippet") or "")[:400],
+                       published=raw_date[:10] if re.match(r"^\d{4}-\d{2}-\d{2}", raw_date) else "",
                        via="web", tier=tier_for(u), query=query))
     return out
 
@@ -761,7 +776,7 @@ def available() -> dict[str, bool]:
         "onsite": bool(ONSITE),
         # The general web — forums, blogs, anything outside the news tiers. Off means the
         # run searched the press, not the internet, and the report must not imply otherwise.
-        "web": bool(settings.serper_key),
+        "web": bool(settings.web_search_key),
         "searxng": bool(settings.searxng_url),
         "mojeek": settings.mojeek_enabled,
         "marginalia": bool(settings.marginalia_key),

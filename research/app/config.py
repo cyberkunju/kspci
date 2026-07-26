@@ -89,11 +89,14 @@ class Settings:
     # ── optional sources ────────────────────────────────────────────────────
     searxng_url: str = field(default_factory=lambda: _env("SEARXNG_URL"))
     marginalia_key: str = field(default_factory=lambda: _env("MARGINALIA_KEY"))
-    # The general-web tier. Off until keyed, and reported as off, because a run that
-    # searched only the press must not look like a run that searched the internet. Every
-    # keyless alternative was tried and rejected on robots or on datacenter blocking —
-    # the list is in sources.web_search.
-    serper_key: str = field(default_factory=lambda: _env("SERPER_API_KEY"))
+    # The general-web tier — the only one that reaches forums, blogs, video and social.
+    # Off until keyed, and reported as off, because a run that searched only the press
+    # must not look like a run that searched the internet. Every keyless alternative was
+    # tried and rejected on robots or on datacenter blocking — the list is in
+    # sources.web_search. `FIRECRAWL_API_KEY` is honoured as a fallback so a deployment
+    # that already holds one does not need a second name for the same secret.
+    web_search_key: str = field(
+        default_factory=lambda: _env("WEB_SEARCH_KEY") or _env("FIRECRAWL_API_KEY"))
     # Off by default: Mojeek's robots.txt disallows /search, and we honour robots.
     # The adapter is kept because Mojeek offers a licensed API — if that is ever
     # arranged, this becomes a one-line switch rather than a rewrite.
