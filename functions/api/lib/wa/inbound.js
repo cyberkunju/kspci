@@ -336,7 +336,16 @@ async function processEvent(app, event) {
     // text bubble entirely, so prefixing only `outText` would drop the transcript
     // on exactly the turns where it matters most.
     const isRetry = String(result.decision.frame || '').startsWith('retry');
-    const offer = (result.decision.route === 'agent' || isRetry)
+    const route = String(result.decision.route || '');
+
+    // Which routes may attach tap buttons. Deliberately an allow-list rather than
+    // "whenever a frame is open": a safety refusal or a stale-tap notice can coincide
+    // with an unrelated open frame, and hanging that frame's buttons off an unrelated
+    // message invites a tap that answers a question the officer was never asked.
+    // `reset` and `setup:*` are here because the language menu is the whole point of
+    // asking — three languages, three taps, each label in its own script.
+    const mayOfferButtons = route === 'agent' || isRetry || route === 'reset' || route.startsWith('setup:');
+    const offer = mayOfferButtons
       ? pendingInteractive(result.pending, isRetry ? outText : undefined)
       : null;
     if (offer && echo && !isRetry) offer.body = echo + offer.body;

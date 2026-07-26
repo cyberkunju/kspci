@@ -35,7 +35,8 @@ const { chatLLM } = require('../llm');
 const { SCHEMA_PROMPT } = require('../schema');
 const { assessSafety } = require('../guard');
 const { dispatch, toolCatalogue, verifyGrounding, performUndo } = require('./tools');
-const { messages: pack } = require('./copy');
+const copy = require('./copy');
+const { messages: pack } = copy;
 const lang = require('./lang');
 const frames = require('./frames');
 const guard = require('./waGuard');
@@ -263,7 +264,23 @@ function looksBlank(reply) {
  * substring match on "stop" would silently unsubscribe an officer who wrote
  * "stop the vehicle at the checkpoint".
  */
-const HELP_TOKENS = new Set(['help', 'menu', 'commands', 'options', 'sahaya', 'sahaaya', 'ಸಹಾಯ', 'ಮೆನು']);
+const HELP_TOKENS = new Set([
+  'help', 'menu', 'commands', 'options', 'sahaya', 'sahaaya', 'ಸಹಾಯ', 'ಮೆನು',
+  'madad', 'सहायता', 'मदद'
+]);
+
+/**
+ * Whole-string reset tokens. Deterministic, like `help` and `stop`, and for the same
+ * reason: starting over is what an officer reaches for when the channel is behaving
+ * oddly, which is exactly when the model may be the thing behaving oddly.
+ *
+ * Note `universalCommand` strips non-letters before matching, so "factory reset"
+ * arrives here as `factoryreset`.
+ */
+const RESET_TOKENS = new Set([
+  'reset', 'factoryreset', 'restart', 'startover', 'setup', 'startagain',
+  'ರೀಸೆಟ್', 'ಮರುಹೊಂದಿಸು', 'रीसेट', 'फिरसेशुरू'
+]);
 const OPTOUT_TOKENS = new Set([
   'stop', 'unsubscribe', 'mute', 'alertsoff', 'alertoff', 'stopalerts', 'stopalert',
   'noalerts', 'alertsbeda', 'alertbeda', 'ನಿಲ್ಲಿಸು', 'ಅಲರ್ಟ್ಬೇಡ'
@@ -281,6 +298,144 @@ function universalCommand(text) {
   if (!key || key.length > 14) return null;
   if (HELP_TOKENS.has(key)) return 'help';
   if (OPTOUT_TOKENS.has(key)) return 'optout';
+  if (RESET_TOKENS.has(key)) return 'reset';
+  return null;
+}
+
+/* ------------------------------ setup: reset → language → role ------------------------------ */
+
+/**
+ * Whether an officer may set their own access context.
+ *
+ * Off unless `WA_SELF_ROLE=true`, and that default is the important part. The trust
+ * boundary of this whole channel is that role comes from the roster row and never from
+ * a message — it is what stops an investigator talking their way into risk scores and
+ * associate networks. Letting the officer choose is a **demo affordance**, matching the
+ * web app's own "Demo role · API enforced" selector, and it must be switched on
+ * deliberately rather than inherited by a deployment that never thought about it.
+ *
+ * Every change is audited against the officer's identity either way.
+ */
+const selfRoleAllowed = () => String(process.env.WA_SELF_ROLE || '').toLowerCase() === 'true';
+
+const LANG_FRAME = 'setup_language';
+const ROLE_FRAME = 'setup_role';
+
+/** How each language gets named, in all three languages plus the usual romanizations. */
+const LANGUAGE_NAMED = [
+  { code: 'en', re: /english|angrezi|angreji|ingliish|ಇಂಗ್ಲಿಷ್|ಇಂಗ್ಲೀಷ್|ಆಂಗ್ಲ|अंग्रेज़ी|अंग्रेजी|इंग्लिश/i },
+  { code: 'kn', re: /kannada|kannad|ಕನ್ನಡ|कन्नड़|कन्नड/i },
+  { code: 'hi', re: /hindi|ಹಿಂದಿ|हिंदी|हिन्दी/i }
+];
+
+/**
+ * Words that turn naming a language into asking for it.
+ *
+ * Required alongside the name so that mentioning a language in passing — "the FIR is
+ * in Kannada" — does not silently switch the channel.
+ */
+const LANGUAGE_CHANGE = /\b(speak|talk|reply|answer|respond|write|switch|change|use|prefer|in|into|to)\b|ಮಾತಾಡ|ಉತ್ತರ|ಬರೆ|ಬದಲಾಯಿಸ|ದಲ್ಲಿ|ಭಾಷೆ|jawab|jawaab|batao|bolo|likho|badal|mein|में|बात|जवाब|भाषा|बदल/i;
+
+/**
+ * An explicit request to change language, or null.
+ *
+ * Deterministic, and that is the point. Asked "ab se mujhe hindi mein jawab dena" the
+ * model answered in Hindi and did not call `set_language`, so nothing persisted and the
+ * next English message would have flipped it straight back. An instruction the officer
+ * gave explicitly must not depend on the model choosing to act on it — same reasoning
+ * as `help` and `stop`. The tool stays for phrasings this misses.
+ */
+function languageRequest(text) {
+  const raw = String(text || '');
+  if (!raw.trim() || !LANGUAGE_CHANGE.test(raw)) return null;
+  const named = LANGUAGE_NAMED.filter((l) => l.re.test(raw));
+  // Two languages named at once is a comparison or a question, not a switch.
+  return named.length === 1 ? named[0].code : null;
+}
+
+/** Open the language question: three taps, each label in its own script. */
+function askLanguage(pending) {
+  frames.openFrame(pending, {
+    kind: LANG_FRAME,
+    prompt: copy.ASK_LANGUAGE,
+    // `resolve` carries the code rather than the label, so the deterministic handler
+    // never has to map a localized string back to a language.
+    options: copy.LANGUAGES.map((l) => ({ id: l.code, label: l.label, resolve: l.code })),
+    ttlMs: 15 * 60 * 1000
+  });
+  return copy.ASK_LANGUAGE;
+}
+
+/** Open the access-context question. Five options, so it renders as a numbered list. */
+function askRole(pending, m) {
+  frames.openFrame(pending, {
+    kind: ROLE_FRAME,
+    prompt: m.askRole,
+    options: officers.ROLES.map((r) => ({ id: r, label: r, resolve: r })),
+    ttlMs: 15 * 60 * 1000
+  });
+  return frames.renderPrompt(frames.getFrame(pending), m);
+}
+
+/**
+ * Wipe the officer's conversational state back to nothing and start setup.
+ *
+ * Everything derived from past turns goes: the open frame, the language prior, the undo
+ * ledger. Deliberately NOT the roster row's identity or the message ledger — a reset is
+ * the officer restarting a conversation, not an officer erasing an audit trail of what
+ * they were shown.
+ */
+function beginReset(pending) {
+  for (const key of Object.keys(pending)) delete pending[key];
+  pending.setup = { startedAt: Date.now() };
+  return askLanguage(pending);
+}
+
+/**
+ * Handle a resolved setup frame. Returns a reply string, or null when the frame was
+ * not a setup frame.
+ *
+ * Deterministic on purpose, exactly like `help` and `stop`. An officer choosing their
+ * language and access context is a consent decision about identity, and it must not
+ * depend on the model being reachable or on it agreeing.
+ */
+async function advanceSetup(ctx, frameResult) {
+  const { app, officer, pending: p } = ctx;
+
+  if (frameResult.kind === LANG_FRAME) {
+    const code = lang.normalize(frameResult.text) || 'en';
+    // Lock it for subsequent turns, and persist it so a proactive alert composed with
+    // no turn in flight still comes out in the right language.
+    p.langLock = code;
+    try { await officers.setLanguage(app, officer, code); } catch (_) { /* lock still applies */ }
+    officer.language = code;
+    ctx.language = code;
+    ctx.messages = pack(code);
+    const m = ctx.messages;
+
+    if (!selfRoleAllowed()) {
+      delete p.setup;
+      return m.languageSet(copy.languageName(code)) + '\n\n' + m.roleSelfDisabled + '\n\n' + m.helpCard;
+    }
+    p.setup = { ...(p.setup || {}), language: code };
+    return m.languageSet(copy.languageName(code)) + '\n\n' + askRole(p, m);
+  }
+
+  if (frameResult.kind === ROLE_FRAME) {
+    const m = ctx.messages;
+    if (!selfRoleAllowed()) { delete p.setup; return m.roleSelfDisabled; }
+    const role = String(frameResult.text || '').toLowerCase();
+    try {
+      await officers.setRole(app, officer, role);
+    } catch (e) {
+      return m.engineError;
+    }
+    officer.role = role;
+    ctx.wrote = true;
+    delete p.setup;
+    return m.onboardReady(officer.name, role) + '\n\n' + m.helpCard;
+  }
+
   return null;
 }
 
@@ -330,7 +485,9 @@ async function handleTurn(app, { officer, pending, turn, history = [] }) {
     text: [turn.text, turn.imageCaption].filter(Boolean).join(' '),
     sttLanguage: turn.sttLanguage,
     prior: p.recentLangs,
-    preference: officer.language
+    preference: officer.language,
+    // An explicit choice — from setup or from "switch to Hindi" — outranks detection.
+    lock: p.langLock
   });
   p.recentLangs = resolved.prior;
   const language = resolved.language;
@@ -388,8 +545,27 @@ async function handleTurn(app, { officer, pending, turn, history = [] }) {
   let frameResolved = false;
   if (frameResult) {
     decision.frame = frameResult.verdict + ':' + frameResult.kind;
+    const isSetup = frameResult.kind === LANG_FRAME || frameResult.kind === ROLE_FRAME;
+
+    // Backing out of setup leaves the officer's existing settings untouched rather than
+    // re-asking forever. Setup is only ever entered deliberately, so being unable to
+    // escape it would be the trap the frame machine exists to avoid.
+    if (isSetup && frameResult.verdict !== 'resolved') {
+      frames.clearFrame(p);
+      delete p.setup;
+      return finish(ctx, m.onboardAbandoned, { ...decision, route: 'setup_abandoned' });
+    }
+
     if (frameResult.verdict !== 'resolved') {
       return finish(ctx, frameResult.reply, { ...decision, route: 'frame' });
+    }
+
+    // 3a. SETUP. Handled deterministically, before the model — choosing a language and
+    // an access context is a consent decision about identity, and it must not depend on
+    // the model being reachable. `ctx.messages` may be swapped here, so read it back.
+    if (isSetup) {
+      const reply = await advanceSetup(ctx, frameResult);
+      return finish(ctx, reply, { ...decision, route: 'setup:' + frameResult.kind, language: ctx.language });
     }
     // Resolved: the short answer becomes a fully-specified request, and any photo
     // parked with the frame is brought back so the agent can still act on it.
@@ -436,6 +612,28 @@ async function handleTurn(app, { officer, pending, turn, history = [] }) {
   if (universal === 'help') {
     return finish(ctx, m.helpCard, { ...decision, route: 'help' });
   }
+  if (universal === 'reset') {
+    return finish(ctx, beginReset(p), { ...decision, route: 'reset' });
+  }
+
+  // 3c. LANGUAGE CHANGE. Deterministic, and applied to this very turn so the
+  // confirmation arrives in the language just asked for. Skipped on a resolved frame,
+  // where `text` is model-authored.
+  const wantsLanguage = frameResolved ? null : languageRequest(officerText);
+  if (wantsLanguage && wantsLanguage !== ctx.language) {
+    p.langLock = wantsLanguage;
+    try {
+      await officers.setLanguage(app, officer, wantsLanguage);
+      officer.language = wantsLanguage;
+    } catch (_) { /* the lock still holds for this conversation */ }
+    ctx.language = wantsLanguage;
+    ctx.messages = pack(wantsLanguage);
+    return finish(
+      ctx,
+      ctx.messages.languageSet(copy.languageName(wantsLanguage)),
+      { ...decision, route: 'language', language: wantsLanguage }
+    );
+  }
   if (universal === 'optout') {
     try {
       await officers.setAlertPrefs(app, officer, { severity: 'none' });
@@ -466,6 +664,10 @@ async function handleTurn(app, { officer, pending, turn, history = [] }) {
   ctx.writeGate = guard.epistemicWriteGate(officerText);
   if (!ctx.writeGate.allowed) decision.writeGate = ctx.writeGate.reason;
 
+  // The officer's own words, for tools that need to check intent against them rather
+  // than against the model's interpretation of them.
+  ctx.officerText = officerText;
+
   // 7. AGENT.
   const result = await runLoop(ctx, { text, history, screen });
   decision.route = 'agent';
@@ -474,23 +676,30 @@ async function handleTurn(app, { officer, pending, turn, history = [] }) {
 
   let reply = result.reply;
 
+  // Read the pack back off the context rather than reusing the one captured at the
+  // top of the turn. A turn can change its own language — set_language, or an undo of
+  // it — and everything appended after the loop has to follow. It did not, so
+  // "Switched to English." arrived with its undo hint still in Hindi.
+  const out = ctx.messages;
+  decision.language = ctx.language;
+
   // Grounding verification, after the model and before the officer sees it.
   const grounding = verifyGrounding(reply, ctx, citable);
   if (!grounding.ok) {
     decision.grounding = 'refused:' + grounding.unverified.slice(0, 3).join(',');
-    reply = m.groundingBlocked;
+    reply = out.groundingBlocked;
   } else if (grounding.unverified.length) {
     decision.grounding = 'partial:' + grounding.unverified.slice(0, 3).join(',');
   }
 
   if (looksBlank(reply)) {
     decision.rewritten = 'blank_refusal';
-    reply = m.notUnderstood;
+    reply = out.notUnderstood;
   }
 
   // The undo hint is appended by us, not written by the model, so it is always
   // present when a write happened and never invented when one did not.
-  if (ctx.undoToken && !result.terminal) reply += m.undoHint(ctx.undoToken);
+  if (ctx.undoToken && !result.terminal) reply += out.undoHint(ctx.undoToken);
 
   return finish(ctx, reply, decision);
 }
@@ -603,6 +812,6 @@ async function runLoop(ctx, { text, history, screen }) {
 }
 
 module.exports = {
-  handleTurn, runLoop, parseAction, toWhatsApp, systemPrompt,
+  handleTurn, runLoop, parseAction, toWhatsApp, systemPrompt, languageRequest,
   looksBlank, universalCommand, BLANK_REFUSAL
 };
