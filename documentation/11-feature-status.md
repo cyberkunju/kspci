@@ -16,6 +16,8 @@ Status legend: ✅ Done & live · 🟡 Partial / caveat · 🔵 Optional / not b
 | 8 | Explainable AI + audit trail | ✅ | Evidence panel + `AuditLog` table + `GET /chat/:sessionId`. |
 | 9 | RBAC | ✅ | 5 roles, per‑route guards. |
 | + | OCR FIR ingestion | ✅ | Catalyst Zia OCR → LLM structuring → Data Store insert. |
+| + | WhatsApp field-officer channel | 🟡 | Built and tested (79 checks + smoke); needs Meta app provisioning to go live. See [15](./15-whatsapp-field-bot.md). |
+| + | Open-source research engine | ✅ | **Deployed and verified live on AppSail** on two real cases: a Bengaluru event (35 s, 13 confirmed of 29 stories, 19/19 claims span-verified) and an unanchored north-Indian subject given only as "name alias nickname" (64 s, 123 candidates, correct finding summarised from the one `probable` source). Recall-first: every retrieved link is shown with band, reasons, site, date, language, authority, corroboration and which tier found it. 4 offline suites pass. Desk UI and WhatsApp tool wired; the function's `RESEARCH_*` env vars still need adding for the in-app route to work. See [16](./16-research-engine.md). |
 
 ## 10‑point framework
 
@@ -40,6 +42,7 @@ Status legend: ✅ Done & live · 🟡 Partial / caveat · 🔵 Optional / not b
 | Advanced I/O Function `api` | ✅ | Node 18, 1 GB, all routes live. |
 | Data Store (10 tables) | ✅ | Seeded ~1.5 lakh rows. |
 | AppSail Python ML service | ✅ | Live; scale‑to‑zero (not 24×7). Deps vendored (or Dockerfile). |
+| AppSail research engine `research` | ✅ | Live at `research-50044266480.development.catalystappsail.in` — 1024 MB, 12 env vars, QuickML model reachable, health and governance verified against the running service. |
 | Client hosting `/app` | ✅ | Astryx SPA. |
 | Custom domain + SSL (`ksp.cyberkunju.com`) | ✅ | `/app` and `/server/api` both route. |
 

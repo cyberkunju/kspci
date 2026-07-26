@@ -16,6 +16,14 @@
     {
       "source": "ml/service",
       "name": "kspforecast"
+    },
+    {
+      "source": "docker://localhost/ksp-research:latest",
+      "name": "research",
+      "memory": 1024,
+      "port": {
+        "http": 9000
+      }
     }
   ]
 }

@@ -699,7 +699,12 @@ async function recentTurns(app, phone, limit = 10) {
     .filter((r) => r.Direction === 'in' || r.Direction === 'out')
     .map((r) => ({
       role: r.Direction === 'in' ? 'user' : 'assistant',
-      content: String(r.Body || '').slice(0, 1200)
+      // 1200 characters is right for a chat turn and wrong for a research report, which
+      // runs to three or four thousand and whose whole value in history is the NUMBERED
+      // SOURCE LIST at the bottom. Truncating at 1200 kept the summary and cut the list,
+      // so "what did the fifth source say" reached the model with sources one and two
+      // visible and five absent — and it answered anyway, from nothing. Observed live.
+      content: String(r.Body || '').slice(0, r.MsgType === 'research-result' ? 4000 : 1200)
     }))
     .filter((m) => m.content);
 }

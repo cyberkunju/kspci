@@ -51,6 +51,15 @@
             "WA_AGENT_STEPS": "6",
             "WA_VOICE_REPLY": "on",
 
+            "//research": "--- OSINT research engine (AppSail service in research/) ---",
+            "//research1": "A run takes 40-300s and this function is killed at 30, so it starts runs there and polls.",
+            "RESEARCH_SERVICE_URL": "https://<research-appsail-app>.development.catalystappsail.in",
+            "RESEARCH_INTERNAL_KEY": "<same-strong-key-set-as-RESEARCH_INTERNAL_KEY-on-the-appsail-service>",
+            "RESEARCH_START_TIMEOUT_MS": "15000",
+            "RESEARCH_POLL_TIMEOUT_MS": "20000",
+            "//research2": "Where the engine POSTs a finished run so WhatsApp can be told. Defaults to WA_PROCESS_URL's host + /research/callback.",
+            "RESEARCH_CALLBACK_URL": "https://<your-domain>/server/api/research/callback",
+
             "//3": "--- Optional tuning ---",
             "LLM_TIMEOUT_MS": "60000",
             "LLM_FORCE_REACT": "false",

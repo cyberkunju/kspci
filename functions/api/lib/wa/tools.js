@@ -203,6 +203,29 @@ function verifyGrounding(reply, ctx, officerText) {
   return { ok: unverified.length === 0 || verified > 0, cited, unverified, verified };
 }
 
+/**
+ * Has a research report on this subject already been delivered in this conversation?
+ *
+ * Matched on the subject's significant words appearing in an assistant turn that also
+ * carries the report's own heading marker, rather than on the exact subject string: the
+ * model rarely asks twice with identical wording ("Karnataka Lokayukta" then "Karnataka
+ * Lokayukta organisation"), and a strict comparison would let the second one through.
+ */
+function researchAlreadyDelivered(ctx, subject) {
+  const words = String(subject || '').toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) || [];
+  if (!words.length) return false;
+  for (const turn of Array.isArray(ctx.history) ? ctx.history : []) {
+    if (!turn || turn.role !== 'assistant') continue;
+    const body = String(turn.content || '').toLowerCase();
+    // The heading is the only reliable marker that this turn IS a delivered report; it is
+    // the one line every pack writes above a finished run.
+    if (!/research complete|ಸಂಶೋಧನೆ ಪೂರ್ಣಗೊಂಡಿದೆ|खोज पूरी हुई/.test(body)) continue;
+    const hit = words.filter((w) => body.includes(w)).length;
+    if (hit >= Math.max(1, Math.ceil(words.length * 0.6))) return true;
+  }
+  return false;
+}
+
 /* ------------------------------ tool definitions ------------------------------ */
 
 const TOOLS = {
@@ -499,6 +522,115 @@ const TOOLS = {
       });
       ctx.undoToken = token;
       return { updated: true, districts: res.districts || '(none)', severity: res.severity || ctx.officer.alertSeverity, undoToken: token };
+    }
+  },
+
+  open_source_research: {
+    // Not role-gated here, deliberately. The engine's own governance layer is the
+    // authoritative gate and it is finer than a role list can be: person-level research
+    // needs an operational role, while aggregate kinds — an organisation, an event, a
+    // crime pattern — are open to the read-only policymaker role too.
+    //
+    // This entry used to read OPERATIONAL, which denied policymakers every kind of
+    // research including the aggregate ones the engine permits. Worse, a tool missing
+    // from the catalogue is invisible to the model, so instead of "that needs higher
+    // access" the officer was told "I cannot search the open internet" — the system
+    // disclaiming a capability it has. Two gates for one rule, and the outer one wrong.
+    //
+    // The engine refuses with a reason (`403 role`), which reaches the officer as itself.
+    roles: ANY,
+    args: '{"tool":"open_source_research","subject":"person, crime or event","kind":"person|crime|event|organisation","purpose":"why this is needed, in a few words","mode":"standard|deep"}',
+    describe: 'Search the open internet — news, court, government, forums and social, in Kannada, Hindi and English — for a person, crime, event or organisation. Anchors the search on our own records automatically and grades every source by how confident we are that it is really about this subject. It does NOT answer inside this turn: a real search takes about a minute (`standard`) or up to five (`deep`), so it starts the search and the findings arrive here as a separate message. Do not call it twice for the same subject, and do not offer to wait. Nothing it returns is evidence. Requires a purpose, which is recorded.',
+    async run(ctx, args) {
+      const research = require('../research');
+      const waResearch = require('./research');
+      if (!research.configured()) {
+        return { error: 'Open-source research is not configured on this deployment. Answer from the crime database instead.' };
+      }
+      const subject = guard.sanitizeIdentifier(args.subject, { max: 120 });
+      if (!subject) return { error: 'A usable subject is required (no quotes).' };
+      const kind = ['person', 'crime', 'event', 'organisation', 'identifier', 'topic']
+        .includes(String(args.kind || '')) ? args.kind : 'person';
+
+      // The role rule, exactly as the engine states it: person-level research needs an
+      // operational role, aggregate kinds do not. Checked here as well as there — an
+      // authorization rule at a trust boundary is worth asserting on both sides, and
+      // locally it answers with the reason instead of costing a round-trip that could
+      // fail for an unrelated network reason and read as an outage.
+      if (kind === 'person' && !OPERATIONAL.includes(ctx.officer.role)) {
+        return { error: `Refused: person-level open-source research needs an operational role, and this officer is ${ctx.officer.role}. Aggregate subjects — an organisation, an event, a crime pattern — are permitted at this access level. Tell the officer their access context does not cover research on an individual; do not suggest the system cannot do it.` };
+      }
+      // Purpose binding is a governance requirement, not a formality: the engine
+      // refuses an unexplained run and records the refusal. It is not defaulted here —
+      // a default would satisfy the check while destroying the thing it protects.
+      const purpose = String(args.purpose || '').trim().slice(0, 200);
+      if (purpose.split(/\s+/).filter(Boolean).length < 3) {
+        return { error: 'A purpose of at least a few words is required, and it is recorded against this officer. State why the research is needed, e.g. "tracing absconding accused in FIR 118/2023".' };
+      }
+      const mode = research.MODES.includes(String(args.mode || '')) ? args.mode : 'standard';
+
+      // A report on this subject already sits in this conversation: answer from it.
+      //
+      // "Do not call it twice for the same subject" was in the tool description and
+      // nothing enforced it. Asked what one source in a delivered report said, the model
+      // sometimes started the whole search again — a minute of waiting, paid search calls
+      // spent, and an officer told to wait for something they were already holding.
+      // Refusing here is deterministic and points the model at the report.
+      //
+      // Scoped to the visible history window, so a genuine re-run later is unaffected,
+      // and skipped when the officer explicitly asks for a fresh search.
+      const asksAgain = /\b(again|re-?run|refresh|latest|new search|once more)\b|ಪುನಃ|ಮತ್ತೊಮ್ಮೆ|फिर से|दोबारा/i
+        .test(String(ctx.officerText || ''));
+      if (!asksAgain && researchAlreadyDelivered(ctx, subject)) {
+        return {
+          error: `A research report on "${subject}" was already delivered in this conversation and is in the messages above. Answer the officer's question from that report — quote the headline, outlet, date and confidence band as written. Do not start another run unless they ask for a fresh search.`
+        };
+      }
+
+      // A run whose result has nowhere to go is worse than a refusal, because the officer
+      // waits for it. So the delivery address is resolved BEFORE the run is started.
+      const callbackUrl = waResearch.callbackUrl();
+      if (!callbackUrl) {
+        return { error: 'Open-source research cannot be delivered on this channel: neither RESEARCH_CALLBACK_URL nor WA_PROCESS_URL is configured. Use the desk workspace.' };
+      }
+      const phone = ctx.officer && ctx.officer.phone;
+      if (!phone) {
+        return { error: 'Open-source research needs a registered handset to deliver the findings to.' };
+      }
+
+      let out;
+      try {
+        // Started, not awaited to completion. A standard run is 35-70 seconds and a deep
+        // run up to five minutes; this function is killed at 30. The engine POSTs the
+        // finished result to /research/callback and lib/wa/research.js sends it on.
+        out = await research.start(ctx.app, {
+          subject, kind, purpose, mode,
+          crimeNo: args.crimeNo ? guard.sanitizeIdentifier(args.crimeNo, { max: 80 }) : '',
+          // The officer id, not the handset number: the engine writes this into its
+          // audit line on stdout, and a phone number does not need to be there.
+          role: ctx.officer.role, officer: ctx.officer.officerId || ctx.officer.name,
+          // The summary is written in the officer's language. Only the summary: the
+          // source titles stay as published and the claims stay as quoted, because a
+          // translated quotation is not a quotation.
+          replyLanguage: ctx.language,
+          callbackUrl,
+          // Everything the callback needs to find this officer again and speak their
+          // language. The engine stores it opaquely and echoes it back untouched.
+          callbackContext: { channel: 'whatsapp', phone, language: ctx.language, subject }
+        });
+      } catch (e) {
+        return { error: 'Open-source research could not be started: ' + String((e && e.message) || e).slice(0, 160) };
+      }
+
+      // Terminal on purpose. The model has nothing to add to "it is running, I will send
+      // it" and everything to lose by improvising a summary of a run that has not
+      // happened — or worse, by promising to wait for it.
+      const m = ctx.messages;
+      return {
+        _TERMINAL: true,
+        reply: mode === 'deep' ? m.researchWaitDeep(subject) : m.researchWait(subject),
+        researchStarted: { id: out.id || '', mode: out.mode || mode, subject }
+      };
     }
   },
 

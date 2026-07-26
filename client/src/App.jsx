@@ -12,19 +12,21 @@ import {
   StatusDot, Banner, Markdown, ChatLayout, ChatMessageList, ChatMessage, ChatMessageBubble,
   ShieldCheck, MessagesSquare, ChartNoAxesCombined, Radar, Search, FileText,
   Plus, Download, Network, Layers, Volume2, TriangleAlert, Sparkles, UserRound,
-  Database, LockKeyhole,
+  Database, LockKeyhole, Globe,
 } from './ui';
 
 const Analytics = lazy(() => import('./components/Analytics'));
 const EarlyWarning = lazy(() => import('./components/EarlyWarning'));
 const CaseSupport = lazy(() => import('./components/CaseSupport'));
 const Ingest = lazy(() => import('./components/Ingest'));
+const Research = lazy(() => import('./components/Research'));
 
 const NAV = [
   { id: 'chat', path: '/chat', label: 'Ask AI', icon: MessagesSquare, title: 'Intelligence assistant' },
   { id: 'analytics', path: '/analytics', label: 'Analytics', icon: ChartNoAxesCombined, title: 'Crime analytics' },
   { id: 'forecast', path: '/early-warning', label: 'Early Warning', icon: Radar, title: 'Early warning' },
   { id: 'casesupport', path: '/case-support', label: 'Case Support', icon: Search, title: 'Case support' },
+  { id: 'research', path: '/research', label: 'Open Sources', icon: Globe, title: 'Open-source research' },
   { id: 'ingest', path: '/ingest', label: 'Ingest FIR', icon: FileText, title: 'FIR ingestion' },
 ];
 
@@ -212,6 +214,8 @@ export default function App() {
         <div className="scroll-view"><Suspense fallback={<ViewLoader />}><EarlyWarning role={role} language={language} /></Suspense></div>
       ) : view === 'casesupport' ? (
         <div className="scroll-view"><Suspense fallback={<ViewLoader />}><CaseSupport role={role} language={language} /></Suspense></div>
+      ) : view === 'research' ? (
+        <div className="scroll-view"><Suspense fallback={<ViewLoader />}><Research role={role} /></Suspense></div>
       ) : view === 'ingest' ? (
         <div className="scroll-view">
           <Suspense fallback={<ViewLoader />}>

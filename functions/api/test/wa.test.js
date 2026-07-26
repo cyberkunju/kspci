@@ -759,6 +759,17 @@ test('every officer-facing string exists in all three languages with the same sh
     );
     for (const key of en) {
       assert.strictEqual(typeof packObj[key], typeof copy.EN[key], `${code}.${key} must have the same shape as English`);
+      // Some entries are small lookup maps rather than single strings — the research
+      // confidence bands, for instance. A typeof check passes on an empty object, so
+      // recurse one level: a band missing from one pack falls back to the raw engine
+      // token, which is the English word this test exists to keep out.
+      const ref = copy.EN[key];
+      if (ref && typeof ref === 'object' && !Array.isArray(ref) && !(ref instanceof Function)) {
+        assert.deepStrictEqual(
+          Object.keys(packObj[key]).sort(), Object.keys(ref).sort(),
+          `${code}.${key} is missing entries`
+        );
+      }
     }
   }
   assert.strictEqual(copy.messages('kn'), copy.KN);

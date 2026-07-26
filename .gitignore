@@ -42,6 +42,10 @@ ml/models/
 # Vendored Linux wheels for the AppSail Python service (~200MB; reinstall via pip/requirements)
 ml/service/vendor/
 
+# Research engine: local virtualenv used when running the suites outside Docker.
+# The service itself ships as a container image, so nothing here belongs in the repo.
+research/.venv/
+
 # OS / editor
 .DS_Store
 Thumbs.db

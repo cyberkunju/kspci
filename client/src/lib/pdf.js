@@ -1,9 +1,52 @@
-// Conversation-history PDF export. Builds a clean, branded printable report of the
-// session and opens the browser print dialog (Save as PDF) — a local export that
-// preserves the full Q/A, generated ZCQL, and cited evidence for the case file.
+// Local PDF export. Builds a clean, branded printable report and opens the browser's
+// print dialog (Save as PDF) — no server round-trip, nothing leaves the machine, and
+// the officer gets a document they can attach to the case file.
+
+const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+const SHELL_CSS = `
+  body{font-family:Segoe UI,Arial,sans-serif;color:#111;max-width:820px;margin:0 auto;padding:32px;}
+  .hd{display:flex;align-items:center;gap:12px;border-bottom:3px solid #1e3a8a;padding-bottom:14px;margin-bottom:6px;}
+  .hd .sh{width:42px;height:42px;border-radius:9px;background:linear-gradient(135deg,#3d8bfd,#22d3ee);display:flex;align-items:center;justify-content:center;font-size:22px;}
+  .hd h1{font-size:18px;margin:0;color:#1e3a8a;} .hd p{margin:2px 0 0;font-size:11px;color:#666;}
+  .info{font-size:11px;color:#666;margin:10px 0 20px;}
+  .q{background:#f1f5fb;border-left:3px solid #3d8bfd;padding:10px 12px;margin:16px 0 6px;border-radius:0 6px 6px 0;font-size:13px;}
+  .a{padding:4px 4px 4px 12px;font-size:13px;} .atext{white-space:pre-wrap;margin:6px 0;line-height:1.55;}
+  .meta{font-size:11px;color:#555;margin-top:5px;} code{background:#f0f0f0;padding:1px 5px;border-radius:4px;font-size:11px;}
+  h2{font-size:13px;color:#1e3a8a;margin:22px 0 8px;text-transform:uppercase;letter-spacing:.04em;}
+  table{width:100%;border-collapse:collapse;font-size:11px;} th,td{text-align:left;padding:5px 6px;border-bottom:1px solid #e3e3e3;vertical-align:top;}
+  th{color:#555;font-weight:600;background:#f7f8fa;}
+  .band{font-weight:600;} .band-confirmed{color:#166534;} .band-probable{color:#92400e;}
+  .band-possible{color:#6b7280;} .band-different_person{color:#991b1b;} .band-unrelated{color:#9ca3af;}
+  .warn{background:#fff8e1;border-left:3px solid #d97706;padding:8px 10px;font-size:11px;margin:6px 0;}
+  .note{font-size:10px;color:#666;background:#f7f8fa;border:1px solid #e3e3e3;padding:8px 10px;border-radius:5px;margin:14px 0;}
+  a{color:#1d4ed8;word-break:break-all;}
+  .ft{margin-top:30px;border-top:1px solid #ddd;padding-top:10px;font-size:10px;color:#999;text-align:center;}
+`;
+
+/**
+ * Open a print window for one report. Shared by every export so they stay visually
+ * identical — a case file with two differently branded attachments looks careless.
+ */
+function printReport({ title, info, bodyHtml, footer }) {
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
+  <style>${SHELL_CSS}</style></head><body>
+    <div class="hd"><div class="sh">&#128737;</div><div><h1>${esc(title)}</h1>
+    <p>Karnataka State Police &middot; Confidential &middot; Synthetic data</p></div></div>
+    <div class="info">${info}</div>
+    ${bodyHtml}
+    <div class="ft">${footer}</div>
+  </body></html>`;
+
+  const w = window.open('', '_blank');
+  if (!w) { alert('Please allow pop-ups to export the PDF.'); return; }
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(() => w.print(), 400);
+}
+
 export function exportConversationPdf({ messages, role, language }) {
-  const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-  const now = new Date().toLocaleString('en-IN');
   const turns = messages.map((m) => {
     if (m.role === 'user') return `<div class="q"><b>Q:</b> ${esc(m.text)}</div>`;
     const cites = (m.citations || []).map((c) => `${esc(c.type)}:${esc(c.id)}`).join(', ');
@@ -13,29 +56,103 @@ export function exportConversationPdf({ messages, role, language }) {
       `</div>`;
   }).join('');
 
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>KSP Crime AI — Conversation Report</title>
-  <style>
-    body{font-family:Segoe UI,Arial,sans-serif;color:#111;max-width:820px;margin:0 auto;padding:32px;}
-    .hd{display:flex;align-items:center;gap:12px;border-bottom:3px solid #1e3a8a;padding-bottom:14px;margin-bottom:6px;}
-    .hd .sh{width:42px;height:42px;border-radius:9px;background:linear-gradient(135deg,#3d8bfd,#22d3ee);display:flex;align-items:center;justify-content:center;font-size:22px;}
-    .hd h1{font-size:18px;margin:0;color:#1e3a8a;} .hd p{margin:2px 0 0;font-size:11px;color:#666;}
-    .info{font-size:11px;color:#666;margin:10px 0 20px;}
-    .q{background:#f1f5fb;border-left:3px solid #3d8bfd;padding:10px 12px;margin:16px 0 6px;border-radius:0 6px 6px 0;font-size:13px;}
-    .a{padding:4px 4px 4px 12px;font-size:13px;} .atext{white-space:pre-wrap;margin:6px 0;line-height:1.55;}
-    .meta{font-size:11px;color:#555;margin-top:5px;} code{background:#f0f0f0;padding:1px 5px;border-radius:4px;font-size:11px;}
-    .ft{margin-top:30px;border-top:1px solid #ddd;padding-top:10px;font-size:10px;color:#999;text-align:center;}
-  </style></head><body>
-    <div class="hd"><div class="sh">🛡️</div><div><h1>KSP Crime Intelligence — Conversation Report</h1>
-    <p>Karnataka State Police · Confidential · Synthetic data</p></div></div>
-    <div class="info">Generated: ${now} &nbsp;·&nbsp; Role: ${esc(role)} &nbsp;·&nbsp; Language: ${language === 'kn' ? 'Kannada' : 'English'}</div>
-    ${turns}
-    <div class="ft">Every response is grounded in the crime database and traceable via the audit log. Generated by KSP Crime Intelligence AI on Zoho Catalyst.</div>
-  </body></html>`;
+  printReport({
+    title: 'KSP Crime Intelligence — Conversation Report',
+    info: `Generated: ${new Date().toLocaleString('en-IN')} &nbsp;·&nbsp; Role: ${esc(role)}`
+      + ` &nbsp;·&nbsp; Language: ${language === 'kn' ? 'Kannada' : 'English'}`,
+    bodyHtml: turns,
+    footer: 'Every response is grounded in the crime database and traceable via the audit log. '
+      + 'Generated by KSP Crime Intelligence AI on Zoho Catalyst.'
+  });
+}
 
-  const w = window.open('', '_blank');
-  if (!w) { alert('Please allow pop-ups to export the PDF.'); return; }
-  w.document.write(html);
-  w.document.close();
-  w.focus();
-  setTimeout(() => w.print(), 400);
+/**
+ * The open-source research report.
+ *
+ * Every source is included, not just the confirmed ones, and each carries its
+ * attribution band and the reasons behind it. An officer reading this later must be
+ * able to see what the engine was unsure about — a report that silently drops the
+ * "possible" rows reads as though the engine were certain.
+ */
+export function exportResearchPdf({ result, role }) {
+  const r = result || {};
+  const anchors = r.anchors || {};
+  const anchorLine = [
+    anchors.district && `district ${esc(anchors.district)}`,
+    anchors.station && `station ${esc(anchors.station)}`,
+    anchors.age && `age ${esc(anchors.age)}`,
+    (anchors.crimeNumbers || []).length && `FIR ${(anchors.crimeNumbers || []).map(esc).join(', ')}`,
+    (anchors.associates || []).length && `associates ${(anchors.associates || []).map(esc).join(', ')}`
+  ].filter(Boolean).join(' · ') || 'the name only — attribution is capped accordingly';
+
+  const tierName = ['', 'Official', 'Newsroom', 'Syndicated', 'Unvetted', 'Social'];
+  const rows = (r.findings || []).map((f) => `<tr>
+    <td class="band band-${esc(f.attribution)}">${f.marker ? `[${esc(f.marker)}] ` : ''}${esc(bandLabel(f.attribution))}
+      ${(f.matched || []).length ? `<div class="meta">matched: ${esc((f.matched || []).join(', '))}</div>` : ''}</td>
+    <td>${esc(f.title || f.url)}<div class="meta">${esc((f.why || []).join('; '))}</div></td>
+    <td>${esc(f.outlet || '')}
+      <div class="meta">${esc(tierName[f.tier] || 'tier ' + f.tier)}${f.language && f.language !== 'en' ? ' · ' + esc(f.language) : ''}${f.outlet_count > 1 ? ' · ' + esc(f.outlet_count) + ' outlets' : ''}</div></td>
+    <td>${esc((f.published || '').slice(0, 10)) || 'undated'}</td>
+    <td>${esc((f.via || []).join(', '))}</td>
+    <td><a href="${esc(f.url)}">${esc(f.url)}</a></td>
+  </tr>`).join('');
+
+  const timeline = (r.timeline || []).map((t) => `<tr>
+    <td>${esc(t.date)}</td><td>${esc(t.text)}</td><td><a href="${esc(t.url)}">source</a></td>
+  </tr>`).join('');
+
+  const counts = r.counts || {};
+  const body = [
+    `<h2>Subject</h2><div class="a"><b>${esc(r.subject)}</b> (${esc(r.kind)})`
+    + `<div class="meta">Anchored on: ${anchorLine}</div>`
+    + `<div class="meta">Mode: ${esc(r.mode)} &middot; ${esc(r.elapsed_s)}s`
+    + `${r.partial ? ' &middot; <b>partial: the run hit its time limit</b>' : ''}</div></div>`,
+
+    (r.records || []).length
+      ? `<h2>From our own records <span style="font-weight:400">— cited below as [DB]</span></h2>`
+        + `<table><tbody>${(r.records || []).map((x) => `<tr><td>${esc(x)}</td></tr>`).join('')}</tbody></table>`
+      : '',
+
+    r.summary
+      ? (r.summary_kind === 'no_match'
+        ? `<h2>No match</h2><div class="warn">Nothing retrieved could be attributed to this `
+          + `subject. The note below describes what came back instead.</div>`
+          + `<div class="atext">${esc(r.summary)}</div>`
+        : `<h2>Summary</h2><div class="atext">${esc(r.summary)}</div>`)
+      : '',
+
+    `<h2>Coverage</h2><div class="meta">`
+    + `${esc(counts.candidates || 0)} candidate sources found, ${esc(counts.readable || 0)} read, `
+    + `${esc(counts.stories || 0)} distinct stories after de-duplicating syndication. `
+    + `${esc(counts.kannada_sources || 0)} Kannada, ${esc(counts.official_sources || 0)} official.</div>`,
+
+    rows ? `<h2>Sources (${(r.findings || []).length}, every one retrieved)</h2>`
+      + `<table><thead><tr><th>Confidence</th><th>Source</th><th>Site</th>`
+      + `<th>Published</th><th>Found by</th><th>Link</th></tr></thead><tbody>${rows}</tbody></table>` : '',
+
+    timeline ? `<h2>Dated claims</h2><table><thead><tr><th>Date</th><th>Claim</th>`
+      + `<th></th></tr></thead><tbody>${timeline}</tbody></table>` : '',
+
+    (r.warnings || []).length
+      ? `<h2>What the engine withheld or could not do</h2>`
+        + (r.warnings || []).map((w) => `<div class="warn">${esc(w)}</div>`).join('')
+      : '',
+
+    `<div class="note">${esc(r.disclaimer || '')}</div>`
+  ].join('');
+
+  printReport({
+    title: 'KSP Crime Intelligence — Open-source Research Report',
+    info: `Generated: ${new Date().toLocaleString('en-IN')} &nbsp;·&nbsp; Role: ${esc(role)}`,
+    bodyHtml: body,
+    footer: 'Retrieved automatically from public sources and not verified by KSP. '
+      + 'Not evidence. Generated by KSP Crime Intelligence AI on Zoho Catalyst.'
+  });
+}
+
+function bandLabel(band) {
+  return {
+    confirmed: 'Confirmed', probable: 'Probable', possible: 'Possible',
+    different_person: 'Different person', unrelated: 'Unrelated'
+  }[band] || band;
 }
