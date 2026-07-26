@@ -278,3 +278,149 @@ test('wa tool: an unconfigured deployment says so instead of failing obscurely',
     { subject: 'Suresh Kumar', purpose: 'tracing an absconding accused' });
   assert.match(out.error, /not configured/i);
 });
+
+/* ============================ our own records ============================ */
+
+const RICH = {
+  ...FULL,
+  Arrests: [{ ArrestType: 'Arrested', ArrestDate: '2023-04-20', DistrictName: 'Mysuru' }],
+  OffenderRisk: [{ TotalCases: 3, ViolentCases: 1, RiskScore: 72, RiskBand: 'High', Factors: 'repeat' }]
+};
+
+test('records: our file is summarised as statements, not rows', async () => {
+  const app = fakeApp(RICH);
+  const { records } = await research.recordsFor(app, { kind: 'person', subject: 'Suresh Kumar' });
+  const joined = records.join('\n');
+  // Statements, because the engine has no database access and should not have any: what
+  // crosses that boundary is a sentence somebody could read out, not a schema.
+  assert.match(joined, /appears in our records as an accused in 1 case/);
+  assert.match(joined, /Recorded age: 34/);
+  assert.match(joined, /Arrests on record/);
+  assert.match(joined, /High/);
+  assert.match(joined, /Co-accused in our records/);
+  assert.ok(records.length <= 20, 'bounded');
+});
+
+test('records: a subject we hold nothing on says exactly that', async () => {
+  const app = fakeApp({ Cases: [], Accused: [], CoAccusedLinks: [], Arrests: [], OffenderRisk: [], Victims: [], Complainants: [] });
+  const { records } = await research.recordsFor(app, { kind: 'person', subject: 'Nobody At All' });
+  assert.match(records.join('\n'), /does not appear as an accused in our records/);
+});
+
+test('records: a failed lookup is never reported as an absence', async () => {
+  // The dangerous case. "Not in our records" and "we could not read our records" must
+  // never collapse into the same sentence.
+  const app = fakeApp(RICH, { failing: ['Accused'] });
+  const { records, notes } = await research.recordsFor(app, { kind: 'person', subject: 'Suresh Kumar' });
+  assert.ok(!records.some((r) => /does not appear/.test(r)), records.join(' | '));
+  assert.ok(notes.some((n) => /accused records unavailable/.test(n)), String(notes));
+});
+
+test('records: a case number pulls the case onto the record sheet', async () => {
+  const app = fakeApp(RICH);
+  const { records } = await research.recordsFor(app, { kind: 'crime', crimeNo: '118/2023' });
+  const joined = records.join('\n');
+  assert.match(joined, /Case 118\/2023 is on record/);
+  assert.match(joined, /Vijayanagar station, Mysuru district/);
+  assert.match(joined, /Sections invoked/);
+});
+
+test('records: travel in the request body alongside the anchors', async () => {
+  const app = fakeApp(RICH);
+  const { body } = await research._internals.requestBody(app, {
+    subject: 'Suresh Kumar', kind: 'person', purpose: 'tracing an absconding accused'
+  });
+  assert.ok(Array.isArray(body.records) && body.records.length > 0);
+  assert.equal(body.anchors.district, 'Mysuru', 'anchors still shape the search');
+});
+
+/* ============================ modes and callback ============================ */
+
+test('modes: quick is gone and an unknown mode becomes standard', async () => {
+  assert.deepEqual(research.MODES, ['standard', 'deep']);
+  assert.equal(typeof research.sync, 'undefined', 'the synchronous path is removed');
+  const app = fakeApp(RICH);
+  for (const [asked, expected] of [['deep', 'deep'], ['quick', 'standard'], ['', 'standard']]) {
+    const { body } = await research._internals.requestBody(app, {
+      subject: 'Suresh Kumar', purpose: 'tracing an absconding accused', mode: asked
+    });
+    assert.equal(body.mode, expected, `mode ${asked}`);
+  }
+});
+
+test('callback: only attached when one is asked for, and carries the key', async () => {
+  const app = fakeApp(RICH);
+  const bare = await research._internals.requestBody(app, {
+    subject: 'Suresh Kumar', purpose: 'tracing an absconding accused'
+  });
+  assert.ok(!('callback_url' in bare.body), 'no callback unless requested');
+
+  const withCb = await research._internals.requestBody(app, {
+    subject: 'Suresh Kumar', purpose: 'tracing an absconding accused',
+    callbackUrl: 'https://example.test/research/callback',
+    callbackContext: { channel: 'whatsapp', phone: '919000000000' }
+  });
+  assert.equal(withCb.body.callback_url, 'https://example.test/research/callback');
+  assert.deepEqual(withCb.body.callback_context.channel, 'whatsapp');
+});
+
+/* ============================ WhatsApp delivery ============================ */
+
+const waResearch = require('../lib/wa/research');
+
+const RESULT = {
+  subject: 'Suresh Kumar', mode: 'standard', summary_kind: 'findings',
+  summary: 'He was arrested in Mysuru [S1]. Our records show three cases [DB].',
+  counts: { candidates: 120, readable: 45, by_attribution: { confirmed: 2, probable: 1, possible: 7 } },
+  records: ['Suresh Kumar appears in our records as an accused in 3 case(s), in Mysuru.'],
+  disclaimer: 'Open-source material, not evidence.',
+  findings: [
+    { attribution: 'confirmed', title: 'Man held in Mysuru cheating case', outlet: 'thehindu.com', published: '2023-04-19', url: 'https://www.thehindu.com/news/cities/mysuru/man-held-12345/' },
+    { attribution: 'possible', title: 'Unrelated column', outlet: 'example.com', published: '2020-01-01', url: 'https://example.com/x' }
+  ]
+};
+
+test('wa delivery: the message carries the full article url', () => {
+  const parts = waResearch.format(RESULT, { subject: 'Suresh Kumar' });
+  const all = parts.join('\n');
+  assert.match(all, /https:\/\/www\.thehindu\.com\/news\/cities\/mysuru\/man-held-12345\//);
+  assert.match(all, /confirmed/);
+});
+
+test('wa delivery: our records are shown apart from the sources', () => {
+  const all = waResearch.format(RESULT, { subject: 'Suresh Kumar' }).join('\n');
+  assert.match(all, /From our own records/);
+  assert.match(all, /Sources/);
+  assert.ok(all.indexOf('From our own records') < all.indexOf('*Sources*'),
+    'records come first and are separately headed');
+});
+
+test('wa delivery: strong matches are shown, weak ones are not padded in', () => {
+  const all = waResearch.format(RESULT, { subject: 'Suresh Kumar' }).join('\n');
+  assert.match(all, /Man held in Mysuru/);
+  assert.ok(!/Unrelated column/.test(all), 'a possible match is not listed when a confirmed one exists');
+});
+
+test('wa delivery: with only weak matches, they are shown rather than nothing', () => {
+  const weak = { ...RESULT, findings: [RESULT.findings[1]] };
+  const all = waResearch.format(weak, { subject: 'Suresh Kumar' }).join('\n');
+  assert.match(all, /Unrelated column/);
+});
+
+test('wa delivery: a no-match run is labelled as one', () => {
+  const none = { ...RESULT, summary_kind: 'no_match', findings: [] };
+  const all = waResearch.format(none, { subject: 'Suresh Kumar' }).join('\n');
+  assert.match(all, /no source could be tied to this subject/);
+});
+
+test('wa delivery: Kannada renders in Kannada', () => {
+  const all = waResearch.format(RESULT, { subject: 'Suresh Kumar', language: 'kn' }).join('\n');
+  assert.match(all, /ಮೂಲಗಳು/);
+  assert.ok(!/\bSources\b/.test(all), 'no English dead-end in a Kannada delivery');
+});
+
+test('wa delivery: a callback with no phone is refused, not guessed at', async () => {
+  const out = await waResearch.deliver(fakeApp({}), { result: RESULT, context: {} });
+  assert.equal(out.delivered, false);
+  assert.match(out.reason, /no phone/);
+});
