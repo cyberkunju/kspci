@@ -26,6 +26,7 @@ tiers carry the weight and metasearch is opportunistic.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from urllib.parse import quote_plus, urljoin
 
@@ -535,7 +536,14 @@ async def mojeek(f: Fetcher, query: str, *, limit: int = 12) -> list[Hit]:
 #: `/news/search`, and there is no `/news` rule. Google News RSS was rejected for
 #: exactly the opposite reason — `Disallow: /` with an allow-list that excludes `/rss` —
 #: and it also hides the publisher url behind an unresolvable redirect.
-BING_NEWS_URL = "https://www.bing.com/news/search?q={q}&format=RSS&mkt=en-IN&count=30"
+BING_NEWS_URL = "https://www.bing.com/news/search?q={q}&format=RSS&mkt={mkt}&count=30"
+
+#: Markets to ask, not one. `mkt` changes which outlets Bing ranks, not just the interface
+#: language: the same query answered as en-IN, hi-IN and kn-IN returns three overlapping
+#: but distinctly different sets, and the vernacular ones are where local crime reporting
+#: actually lives. Three cheap requests per query rather than one, and duplicates cost
+#: nothing because rank fusion merges them and counts the agreement as a relevance signal.
+BING_MARKETS = ("en-IN", "hi-IN", "kn-IN")
 
 
 def _bing_publisher_url(link: str) -> str:
@@ -587,11 +595,32 @@ def _rss_date(raw: str) -> str:
         return ""
 
 
-async def bing_news(f: Fetcher, query: str, *, limit: int = 30) -> list[Hit]:
+async def bing_news_all(f: Fetcher, query: str, *, limit: int = 30) -> list[Hit]:
+    """One query against every market, concurrently. See BING_MARKETS."""
+    if not query.strip():
+        return []
+    results = await asyncio.gather(
+        *[bing_news(f, query, limit=limit, market=m) for m in BING_MARKETS],
+        return_exceptions=True)
+    out: list[Hit] = []
+    seen: set[str] = set()
+    for res in results:
+        if isinstance(res, BaseException):
+            continue
+        for h in res:
+            if h.url in seen:
+                continue
+            seen.add(h.url)
+            out.append(h)
+    return out
+
+
+async def bing_news(f: Fetcher, query: str, *, limit: int = 30,
+                    market: str = "en-IN") -> list[Hit]:
     """Bing News RSS. Keyless, multilingual, publisher urls included."""
     if not query.strip():
         return []
-    url = BING_NEWS_URL.replace("{q}", quote_plus(query))
+    url = BING_NEWS_URL.replace("{q}", quote_plus(query)).replace("{mkt}", market)
     r = await f.get(url, respect_robots=True, timeout_s=settings.search_timeout_s,
                     accept="application/rss+xml, application/xml, text/xml")
     if r["error"] or r["status"] != 200 or not r["content"]:
@@ -617,6 +646,67 @@ async def bing_news(f: Fetcher, query: str, *, limit: int = 30) -> list[Hit]:
             snippet=re.sub(r"<[^>]+>", "", it.get("description") or "")[:400],
             published=_rss_date(it.get("pubDate", "")),
             via="bingnews", tier=tier_for(u), query=query))
+    return out
+
+
+async def web_search(f: Fetcher, query: str, *, limit: int = 20) -> list[Hit]:
+    """General web results — forums, blogs, court listings, anything indexed.
+
+    THE GAP THIS FILLS. Every other tier in this engine is a news index or a publisher's
+    own search. That is the right backbone for crime reporting and it is structurally
+    blind to everything else: a discussion thread naming a fraud ring, a complaints board,
+    a blog post, a PDF on a district site. An officer asking "what does the internet say
+    about this person" means the internet, not the newspapers.
+
+    WHY THIS NEEDS A KEY WHEN NOTHING ELSE HERE DOES. Every keyless route was tried and
+    each one fails on its own terms, verified rather than assumed:
+
+      * Google and Bing web search — both disallow /search in robots.txt. Bing's NEWS
+        search is a different path with no rule, which is why the feed tier exists.
+      * DuckDuckGo — duckduckgo.com/robots.txt disallows /html and /lite. The identical
+        endpoints on html.duckduckgo.com carry an empty robots.txt, and using that
+        loophole against the operator's evident intent is not a standard we apply
+        elsewhere. It also answered HTTP 202 to a plain request and 0 links to the other,
+        so it is blocked for datacenters regardless.
+      * Reddit — robots.txt is Disallow: / and the search API answers 403.
+      * Mojeek — robots disallows /search. Kept behind a flag for the day a licensed API
+        is arranged.
+      * SearXNG — has no index of its own; it scrapes the engines above, which CAPTCHA
+        datacenter ranges. Self-hosting it would move the failure, not fix it.
+
+    So the honest options were a paid index or nothing, and nothing is not an answer to
+    the requirement. This adapter stays dark until `SERPER_API_KEY` is set, exactly like
+    marginalia and searxng, and `available()` reports it as off so a run never presents
+    news-only coverage as though it had searched the web.
+    """
+    key = settings.serper_key
+    if not key or not query.strip():
+        return []
+    if _cooling("web"):
+        return []
+    payload = json.dumps({"q": query, "gl": "in", "num": min(max(limit, 10), 20)})
+    r = await f.post_json("https://google.serper.dev/search", payload,
+                          headers={"X-API-KEY": key, "Content-Type": "application/json"},
+                          timeout_s=settings.search_timeout_s)
+    if r is None:
+        _cool("web", "search api did not answer")
+        return []
+    STATUS.pop("web", None)
+    out: list[Hit] = []
+    seen: set[str] = set()
+    # `organic` is the ranked web list. The knowledge panel and "people also ask" are
+    # deliberately ignored: they are Google's summary of other pages, and this engine
+    # cites pages.
+    for row in (r.get("organic") or [])[:limit]:
+        u = canonical_url(str(row.get("link") or ""))
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        out.append(Hit(url=u, title=" ".join(str(row.get("title") or "").split())[:200],
+                       snippet=str(row.get("snippet") or "")[:400],
+                       published=str(row.get("date") or "")[:10] if re.match(
+                           r"^\d{4}-\d{2}-\d{2}", str(row.get("date") or "")) else "",
+                       via="web", tier=tier_for(u), query=query))
     return out
 
 
@@ -655,6 +745,9 @@ def available() -> dict[str, bool]:
         "wikidata": True,
         "wayback": True,
         "onsite": bool(ONSITE),
+        # The general web — forums, blogs, anything outside the news tiers. Off means the
+        # run searched the press, not the internet, and the report must not imply otherwise.
+        "web": bool(settings.serper_key),
         "searxng": bool(settings.searxng_url),
         "mojeek": settings.mojeek_enabled,
         "marginalia": bool(settings.marginalia_key),

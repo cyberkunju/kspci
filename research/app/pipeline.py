@@ -144,9 +144,17 @@ async def _discover(f: Fetcher, queries: list[Query], gdelt_plan: GdeltPlan,
         return out
 
     async def news_leg(text: str) -> list[Hit]:
-        got = await sources.bing_news(f, text)
+        got = await sources.bing_news_all(f, text)
         if not got and "bingnews" in sources.STATUS:
             note = f"bingnews ({sources.STATUS['bingnews']})"
+            if note not in failed:
+                failed.append(note)
+        return got
+
+    async def web_leg(text: str) -> list[Hit]:
+        got = await sources.web_search(f, text)
+        if not got and "web" in sources.STATUS:
+            note = f"web ({sources.STATUS['web']})"
             if note not in failed:
                 failed.append(note)
         return got
@@ -178,6 +186,14 @@ async def _discover(f: Fetcher, queries: list[Query], gdelt_plan: GdeltPlan,
     # because it is one cheap request each.
     for q in queries[:5]:
         legs.append(news_leg(q.text))
+    # The general web, when a key is configured. Given the strongest queries and its own
+    # leg so rank fusion can see where a forum thread placed against the news tiers. This
+    # is the only tier that reaches discussion boards, blogs and complaint sites, so it is
+    # not treated as long-tail breadth like metasearch below.
+    if settings.serper_key:
+        for q in queries[:5]:
+            legs.append(web_leg(q.text.replace('"', "")))
+
     for q in queries[:budget.max_queries]:
         if "searxng" in q.routes and settings.searxng_url:
             legs.append(sources.searxng(f, q.text))
@@ -185,6 +201,14 @@ async def _discover(f: Fetcher, queries: list[Query], gdelt_plan: GdeltPlan,
             legs.append(sources.marginalia(f, q.text))
         if "wikipedia" in q.routes:
             legs.append(sources.wikipedia(f, q.text.replace('"', "")))
+
+    # Hindi and Kannada Wikipedia for the two strongest queries only. Cheap, and it is the
+    # one reference tier that can confirm or rule out a person whose notability exists only
+    # in a vernacular encyclopaedia — which for regional political and criminal figures is
+    # common. Capped at two queries because it is context, not coverage.
+    for q in queries[:2]:
+        for lang in ("hi", "kn"):
+            legs.append(sources.wikipedia(f, q.text.replace('"', ""), limit=3, lang=lang))
 
     await _emit(progress, "discover", f"querying {len(legs)} source legs", legs=len(legs))
     try:

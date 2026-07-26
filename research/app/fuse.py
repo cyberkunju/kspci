@@ -42,6 +42,11 @@ SOURCE_WEIGHT: dict[str, float] = {
     "onsite": 1.6,       # a publisher's own index of its own archive
     "gdelt": 1.2,        # a purpose-built news index, but ranked by date
     "bingnews": 1.0,     # broad and multilingual, ranked by recency and popularity
+    # A general web index ranked by its own relevance model rather than by date. Rated
+    # just under a purpose-built news index and above metasearch: its ordering is a real
+    # relevance judgment, but it is optimising for a general searcher, not an investigator,
+    # and it is the one tier that returns forums and blogs where quality varies wildly.
+    "web": 1.1,
     "wikipedia": 0.9,    # authoritative but rarely the coverage we are after
     "searxng": 0.7,      # ranking a ranking
     "marginalia": 0.7,

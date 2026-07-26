@@ -293,6 +293,33 @@ class Fetcher:
         out["error"] = "too many redirects"
         return out
 
+    async def post_json(self, url: str, body: str, *, headers: dict[str, str] | None = None,
+                        timeout_s: int | None = None) -> dict | None:
+        """POST to a machine API that requires it, and parse the JSON reply.
+
+        Separate from `get` on purpose: `get` exists to fetch attacker-influenceable pages
+        and carries the whole redirect-by-redirect SSRF defence for that reason. This talks
+        to one configured API endpoint with a credential attached, so a redirect is not
+        something to follow — it is something to refuse.
+        """
+        await self.start()
+        assert self._client is not None
+        host = host_of(url)
+        ok, why = await resolves_public(host)
+        if not ok:
+            return None
+        try:
+            r = await self._client.post(
+                url, content=body.encode("utf-8"), headers=headers or {},
+                timeout=httpx.Timeout(timeout_s or settings.search_timeout_s),
+                follow_redirects=False)
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            return data if isinstance(data, dict) else None
+        except Exception:  # noqa: BLE001 — a dead API contributes nothing and says so
+            return None
+
     async def get_json(self, url: str, *, timeout_s: int | None = None) -> dict | list | None:
         """Fetch a machine API. robots.txt is not consulted for these.
 
