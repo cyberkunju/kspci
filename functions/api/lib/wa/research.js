@@ -25,6 +25,8 @@
 
 const client = require('./client');
 const officers = require('./officers');
+const lang = require('./lang');
+const { messages } = require('./copy');
 
 //: How many sources to name in the message. The full list is in the exported report; a
 //: phone is for the answer, not the appendix.
@@ -59,14 +61,6 @@ function callbackUrl() {
   }
 }
 
-const BAND = {
-  confirmed: 'confirmed',
-  probable: 'probable',
-  possible: 'possible — unverified',
-  different_person: 'different person',
-  unrelated: 'not this subject'
-};
-
 /**
  * Render the result as WhatsApp messages.
  *
@@ -74,35 +68,51 @@ const BAND = {
  * so anything richer arrives as literal asterisks.
  */
 function format(result, { subject, language = 'en' } = {}) {
-  const kn = language === 'kn';
+  // Strings come from the pack rather than from a kn/en boolean. That boolean predated
+  // Hindi and silently rendered a Hindi officer's report in English — the one failure the
+  // copy pack exists to prevent, in the longest message the channel sends.
+  const m = messages(language);
   const r = result || {};
   const counts = r.counts || {};
   const bands = counts.by_attribution || {};
   const findings = r.findings || [];
 
-  const strong = findings.filter((f) => f.attribution === 'confirmed' || f.attribution === 'probable');
-  const shown = (strong.length ? strong : findings.filter((f) => f.attribution === 'possible'))
+  // The sources the summary actually cites come first, in marker order, so that "[S3]"
+  // in the prose above is item S3 in the list below.
+  //
+  // This used to number the list 1, 2, 3 by attribution band — a second ordering, in the
+  // same message, with no relation to the markers. Asked "what is the sixth source", the
+  // model had "[S6]" in the summary and a "6." in the list pointing at a different
+  // document, and answered confidently about the wrong one. Observed live.
+  const cited = findings.filter((f) => f.marker)
+    .sort((a, b) => (Number(a.marker.slice(1)) || 0) - (Number(b.marker.slice(1)) || 0));
+  const rest = findings
+    .filter((f) => !f.marker && (f.attribution === 'confirmed' || f.attribution === 'probable'));
+  const fallback = findings.filter((f) => !f.marker && f.attribution === 'possible');
+  const shown = [...cited, ...(cited.length || rest.length ? rest : fallback)]
     .slice(0, MAX_LINKS);
+  // An engine older than the marker field returns none, and then the list is numbered
+  // plainly as before rather than being left unlabelled.
+  const labelled = shown.some((f) => f.marker);
 
   const head = r.summary_kind === 'no_match'
-    ? (kn ? `*${subject}* — ಯಾವುದೇ ಮೂಲವನ್ನು ಈ ವ್ಯಕ್ತಿಗೆ ಜೋಡಿಸಲಾಗಿಲ್ಲ`
-      : `*${subject}* — no source could be tied to this subject`)
-    : (kn ? `*${subject}* — ಆನ್‌ಲೈನ್ ಸಂಶೋಧನೆ ಪೂರ್ಣಗೊಂಡಿದೆ`
-      : `*${subject}* — open-source research complete`);
+    ? m.researchHeadNoMatch(subject)
+    : m.researchHead(subject);
 
-  const stats = kn
-    ? `${counts.candidates || 0} ಲಿಂಕ್‌ಗಳು ಸಿಕ್ಕಿವೆ, ${counts.readable || 0} ಓದಲಾಗಿದೆ, `
-      + `${bands.confirmed || 0} ದೃಢಪಟ್ಟಿದೆ, ${bands.probable || 0} ಸಂಭವನೀಯ`
-    : `${counts.candidates || 0} links found, ${counts.readable || 0} read, `
-      + `${bands.confirmed || 0} confirmed, ${bands.probable || 0} probable, `
-      + `${bands.possible || 0} possible`;
+  const stats = m.researchStats({
+    candidates: counts.candidates || 0,
+    readable: counts.readable || 0,
+    confirmed: bands.confirmed || 0,
+    probable: bands.probable || 0,
+    possible: bands.possible || 0
+  });
 
   const first = [
     head,
     '',
-    (r.summary || (kn ? '(ಸಾರಾಂಶ ಲಭ್ಯವಿಲ್ಲ)' : '(no summary available)')),
+    (r.summary || m.researchNoSummary),
     '',
-    `_${stats}${r.partial ? (kn ? ' · ಸಮಯ ಮುಗಿದಿದೆ' : ' · ran out of time') : ''}_`
+    `_${stats}${r.partial ? m.researchPartial : ''}_`
   ].join('\n');
 
   // Records are shown separately from sources, always. A message that blends what our
@@ -111,18 +121,17 @@ function format(result, { subject, language = 'en' } = {}) {
   const second = shown.length || recordLines.length
     ? [
       recordLines.length
-        ? (kn ? '*ನಮ್ಮ ದಾಖಲೆಗಳು*' : '*From our own records*') + '\n'
-          + recordLines.map((x) => `• ${x}`).join('\n') + '\n'
+        ? m.researchRecords + '\n' + recordLines.map((x) => `• ${x}`).join('\n') + '\n'
         : '',
-      shown.length ? (kn ? '*ಮೂಲಗಳು*' : '*Sources*') : '',
+      shown.length ? m.researchSources : '',
       ...shown.map((f, i) => (
-        `${i + 1}. ${f.title || f.url}\n`
+        `${labelled ? (f.marker || '—') : String(i + 1)}. ${f.title || f.url}\n`
         + `   ${f.outlet || ''}${f.published ? ' · ' + String(f.published).slice(0, 10) : ''}`
-        + ` · ${BAND[f.attribution] || f.attribution}\n`
+        + ` · ${(m.researchBand || {})[f.attribution] || f.attribution}\n`
         + `   ${f.url}`
       )),
       '',
-      `_${r.disclaimer || ''}_`
+      `_${m.researchDisclaimer}_`
     ].filter(Boolean).join('\n')
     : '';
 
@@ -146,18 +155,14 @@ async function deliver(app, { result, context = {}, error = '', runId = '' }) {
     }
   } catch (_) { /* a dedupe lookup failure must not block the only delivery */ }
 
-  const language = context.language === 'kn' ? 'kn' : 'en';
+  // Three languages, resolved through the same normaliser the rest of the channel uses.
+  // A hard-coded `=== 'kn' ? kn : en` silently delivered Hindi officers an English report.
+  const language = lang.normalize(context.language) || 'en';
   const subject = context.subject || (result && result.subject) || 'subject';
 
-  let messages;
-  if (error || !result) {
-    messages = [language === 'kn'
-      ? `*${subject}* — ಆನ್‌ಲೈನ್ ಸಂಶೋಧನೆ ವಿಫಲವಾಯಿತು. ದಯವಿಟ್ಟು ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.`
-      : `*${subject}* — the open-source research run failed and produced no result. `
-        + 'Please try again, or use the desk workspace.'];
-  } else {
-    messages = format(result, { subject, language });
-  }
+  const parts = (error || !result)
+    ? [messages(language).researchFailed(subject)]
+    : format(result, { subject, language });
 
   // Outside Meta's 24-hour service window a free-form message is rejected. Say so rather
   // than letting the send fail opaquely; the result is not lost, it is in the desk UI.
@@ -174,7 +179,7 @@ async function deliver(app, { result, context = {}, error = '', runId = '' }) {
 
   let sent = 0;
   const failures = [];
-  for (const message of messages) {
+  for (const message of parts) {
     for (const chunk of client.chunkText(message)) {
       try {
         await client.sendText(phone, chunk, { previewUrl: false });
@@ -184,8 +189,22 @@ async function deliver(app, { result, context = {}, error = '', runId = '' }) {
       }
     }
   }
-  await record(app, dedupeKey, phone, failures.length && !sent ? 'failed' : 'sent',
-    `research delivered for ${subject} (${sent} message part(s))`);
+
+  if (sent) {
+    // The report itself goes into the ledger as an outbound turn, not just an audit line
+    // saying one was sent. It is the longest thing this channel ever tells an officer and
+    // it is full of numbered sources, so "tell me more about the third link" is the
+    // obvious next message — and `recentTurns` only sees `in`/`out` rows. Logged as one
+    // row under the dedupe key, so it remains the record that suppresses a repeat
+    // delivery as well as the context for a follow-up.
+    await officers.logMessage(app, {
+      msgId: dedupeKey, direction: 'out', phone, type: 'research-result',
+      body: parts.join('\n\n'), status: 'sent'
+    });
+  } else {
+    await record(app, dedupeKey, phone, 'failed',
+      `research delivery failed for ${subject}: ${failures.join('; ').slice(0, 300)}`);
+  }
   return { delivered: sent > 0, parts: sent, failures };
 }
 

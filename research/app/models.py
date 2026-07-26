@@ -216,3 +216,13 @@ class Finding:
     matched: list[str] = field(default_factory=list)
     outlet_count: int = 1
     error: str = ""
+    #: The citation marker this source carries in the summary — "S1", "S2" — or "" when
+    #: the summary does not rest on it.
+    #:
+    #: Without this the whole citation contract stops at the engine boundary. The summary
+    #: promises that every sentence names its source, and then every consumer showed the
+    #: officer "[S6]" beside a source list that resolved it to nothing. On WhatsApp it was
+    #: worse than useless: the list is numbered 1..6 in a different order, so an officer
+    #: reading "[S6]" and asking about "the sixth source" was asking about two different
+    #: documents at once.
+    marker: str = ""

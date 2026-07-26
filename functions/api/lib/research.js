@@ -353,7 +353,7 @@ async function call(path, { method = 'GET', body, timeoutMs } = {}) {
  */
 async function requestBody(app, {
   subject, kind = 'person', purpose = '', question = '', mode = 'standard',
-  role = 'investigator', officer = '', crimeNo = '',
+  role = 'investigator', officer = '', crimeNo = '', replyLanguage = 'en',
   callbackUrl = '', callbackContext = null
 }) {
   let anchors = { names: [clean(subject)].filter(Boolean) };
@@ -383,6 +383,11 @@ async function requestBody(app, {
       mode: MODES.includes(mode) ? mode : 'standard', role,
       officer: officer || 'unknown', crime_number: clean(crimeNo),
       subject_role: meta.subjectRole, anchors, records,
+      // The summary's language. The desk UI is English and omits it; the WhatsApp
+      // channel passes the officer's own. An unknown code falls back to English at the
+      // engine, so a bad value costs nothing.
+      reply_language: ['en', 'kn', 'hi'].includes(String(replyLanguage || '').slice(0, 2))
+        ? String(replyLanguage).slice(0, 2) : 'en',
       ...(callbackUrl ? {
         callback_url: callbackUrl,
         callback_key: INTERNAL_KEY,

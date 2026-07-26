@@ -90,6 +90,33 @@ const EN = {
   researchWait: (subject) => `Searching the open internet for *${subject}* now — news, court and government sources in English, Hindi and Kannada, plus whatever our own records hold. About a minute. I will send the findings here; you do not need to wait or ask again.`,
   researchWaitDeep: (subject) => `Running a *deep* search on *${subject}* — the same sources, read much wider. Up to five minutes. I will send the findings here when they are in; carry on with anything else meanwhile.`,
 
+  // The delivered report, which arrives minutes later as its own message. It is the
+  // longest thing this channel ever sends, so every part of it is a pack key: a report
+  // rendered in the wrong language is not a cosmetic slip when it is the answer.
+  researchHead: (subject) => `*${subject}* — open-source research complete`,
+  researchHeadNoMatch: (subject) => `*${subject}* — no source could be tied to this subject`,
+  researchStats: (c) => `${c.candidates} links found, ${c.readable} read, ${c.confirmed} confirmed, ${c.probable} probable, ${c.possible} possible`,
+  researchPartial: ' · ran out of time',
+  researchNoSummary: '(no summary available)',
+  researchRecords: '*From our own records*',
+  researchSources: '*Sources*',
+  // The confidence band printed against each source. These are the same five words the
+  // stats line already localises, so leaving them in English put "3 ದೃಢಪಟ್ಟಿದೆ" two lines
+  // above "confirmed" in the same message.
+  researchBand: {
+    confirmed: 'confirmed',
+    probable: 'probable',
+    possible: 'possible — unverified',
+    different_person: 'different person',
+    unrelated: 'not this subject'
+  },
+  researchFailed: (subject) => `*${subject}* — the open-source research run failed and produced no result. Please try again, or use the desk workspace.`,
+  // The engine ships its own disclaimer and it is authoritative for the desk workspace
+  // and the exported PDF. On this channel it comes from the pack instead: a caveat about
+  // what may not be acted on is the last line that should reach an officer in a language
+  // they did not choose.
+  researchDisclaimer: 'Open-source material, retrieved automatically and not verified by KSP. It is not evidence and is not grounds for action against any person. The confidence band on each source states how sure the engine is that it refers to this subject; anything below "confirmed" needs human checking before it is relied on.',
+
   /* --- undo --------------------------------------------------------------- */
   undoHint: (token) => `\n\n_Undo: reply ${token}_`,
   undoDone: (what) => `↩️ Reversed ${what}.`,
@@ -166,6 +193,22 @@ const KN = {
   undoHint: (token) => `\n\n_ಹಿಂತೆಗೆಯಲು: ${token} ಎಂದು ಕಳುಹಿಸಿ_`,
   researchWait: (subject) => `*${subject}* ಬಗ್ಗೆ ಈಗ ಆನ್‌ಲೈನ್ ಹುಡುಕುತ್ತಿದ್ದೇನೆ — ಇಂಗ್ಲಿಷ್, ಹಿಂದಿ ಮತ್ತು ಕನ್ನಡ news, court ಹಾಗೂ ಸರ್ಕಾರಿ ಮೂಲಗಳು, ಜೊತೆಗೆ ನಮ್ಮ ದಾಖಲೆಗಳೂ. ಸುಮಾರು ಒಂದು ನಿಮಿಷ. ಫಲಿತಾಂಶ ಇಲ್ಲಿಯೇ ಕಳುಹಿಸುತ್ತೇನೆ; ಕಾಯುವ ಅಥವಾ ಪುನಃ ಕೇಳುವ ಅಗತ್ಯವಿಲ್ಲ.`,
   researchWaitDeep: (subject) => `*${subject}* ಬಗ್ಗೆ *deep* ಹುಡುಕಾಟ ನಡೆಸುತ್ತಿದ್ದೇನೆ — ಅದೇ ಮೂಲಗಳು, ಹೆಚ್ಚು ವಿಸ್ತಾರವಾಗಿ. ಗರಿಷ್ಠ ಐದು ನಿಮಿಷ. ಸಿದ್ಧವಾದಾಗ ಇಲ್ಲಿಯೇ ಕಳುಹಿಸುತ್ತೇನೆ; ಅಷ್ಟರಲ್ಲಿ ಬೇರೆ ಕೆಲಸ ಮುಂದುವರಿಸಿ.`,
+  researchHead: (subject) => `*${subject}* — ಆನ್‌ಲೈನ್ ಸಂಶೋಧನೆ ಪೂರ್ಣಗೊಂಡಿದೆ`,
+  researchHeadNoMatch: (subject) => `*${subject}* — ಯಾವುದೇ ಮೂಲವನ್ನು ಈ ವಿಷಯಕ್ಕೆ ಜೋಡಿಸಲಾಗಿಲ್ಲ`,
+  researchStats: (c) => `${c.candidates} ಲಿಂಕ್‌ಗಳು ಸಿಕ್ಕಿವೆ, ${c.readable} ಓದಲಾಗಿದೆ, ${c.confirmed} ದೃಢಪಟ್ಟಿದೆ, ${c.probable} ಸಂಭವನೀಯ, ${c.possible} ಸಾಧ್ಯ`,
+  researchPartial: ' · ಸಮಯ ಮುಗಿದಿದೆ',
+  researchNoSummary: '(ಸಾರಾಂಶ ಲಭ್ಯವಿಲ್ಲ)',
+  researchRecords: '*ನಮ್ಮ ದಾಖಲೆಗಳು*',
+  researchSources: '*ಮೂಲಗಳು*',
+  researchBand: {
+    confirmed: 'ದೃಢಪಟ್ಟಿದೆ',
+    probable: 'ಸಂಭವನೀಯ',
+    possible: 'ಸಾಧ್ಯ — ಪರಿಶೀಲಿಸಿಲ್ಲ',
+    different_person: 'ಬೇರೆ ವ್ಯಕ್ತಿ',
+    unrelated: 'ಈ ವಿಷಯಕ್ಕೆ ಸಂಬಂಧಿಸಿಲ್ಲ'
+  },
+  researchFailed: (subject) => `*${subject}* — ಆನ್‌ಲೈನ್ ಸಂಶೋಧನೆ ವಿಫಲವಾಯಿತು, ಯಾವುದೇ ಫಲಿತಾಂಶ ಇಲ್ಲ. ದಯವಿಟ್ಟು ಪುನಃ ಪ್ರಯತ್ನಿಸಿ, ಅಥವಾ desk workspace ಬಳಸಿ.`,
+  researchDisclaimer: 'ಇದು ಆನ್‌ಲೈನ್‌ನಿಂದ ಸ್ವಯಂಚಾಲಿತವಾಗಿ ಸಂಗ್ರಹಿಸಿದ ಮಾಹಿತಿ, KSP ಪರಿಶೀಲಿಸಿಲ್ಲ. ಇದು ಸಾಕ್ಷ್ಯವಲ್ಲ ಮತ್ತು ಯಾರ ವಿರುದ್ಧವೂ ಕ್ರಮಕ್ಕೆ ಆಧಾರವಲ್ಲ. ಪ್ರತಿ ಮೂಲದ ಮೇಲಿನ ಬ್ಯಾಂಡ್ ಅದು ಈ ವಿಷಯಕ್ಕೆ ಸಂಬಂಧಿಸಿದೆ ಎಂಬ ವಿಶ್ವಾಸವನ್ನು ಮಾತ್ರ ಸೂಚಿಸುತ್ತದೆ; "ದೃಢಪಟ್ಟಿದೆ" ಗಿಂತ ಕಡಿಮೆ ಇರುವುದನ್ನು ಬಳಸುವ ಮೊದಲು ಮನುಷ್ಯರಿಂದ ಪರಿಶೀಲಿಸಬೇಕು.',
   undoDone: (what) => `↩️ ${what} ಹಿಂತೆಗೆಯಲಾಗಿದೆ.`,
   undoNotFound: 'ಆ undo ಕೋಡ್ ಸಿಗಲಿಲ್ಲ. ಅವಧಿ ಮುಗಿದಿರಬಹುದು, ಅಥವಾ ಈಗಾಗಲೇ ಬಳಸಿರಬಹುದು.',
   undoAlready: 'ಅದನ್ನು ಈಗಾಗಲೇ ಹಿಂತೆಗೆಯಲಾಗಿದೆ.',
@@ -237,6 +280,22 @@ const HI = {
 
   researchWait: (subject) => `*${subject}* के बारे में अभी खुले इंटरनेट पर खोज रहा हूँ — अंग्रेज़ी, हिंदी और कन्नड़ के news, court और सरकारी स्रोत, साथ में हमारे रिकॉर्ड भी. करीब एक मिनट. नतीजे यहीं भेज दूँगा; इंतज़ार करने या दोबारा पूछने की ज़रूरत नहीं.`,
   researchWaitDeep: (subject) => `*${subject}* पर *deep* खोज चल रही है — वही स्रोत, बहुत ज़्यादा गहराई से. पाँच मिनट तक लग सकते हैं. तैयार होने पर यहीं भेज दूँगा; तब तक कोई और काम देखते रहें.`,
+  researchHead: (subject) => `*${subject}* — खुले स्रोतों की खोज पूरी हुई`,
+  researchHeadNoMatch: (subject) => `*${subject}* — कोई भी स्रोत इस विषय से नहीं जोड़ा जा सका`,
+  researchStats: (c) => `${c.candidates} लिंक मिले, ${c.readable} पढ़े गए, ${c.confirmed} पुष्ट, ${c.probable} संभावित, ${c.possible} मुमकिन`,
+  researchPartial: ' · समय समाप्त हो गया',
+  researchNoSummary: '(सारांश उपलब्ध नहीं)',
+  researchRecords: '*हमारे रिकॉर्ड से*',
+  researchSources: '*स्रोत*',
+  researchBand: {
+    confirmed: 'पुष्ट',
+    probable: 'संभावित',
+    possible: 'मुमकिन — असत्यापित',
+    different_person: 'दूसरा व्यक्ति',
+    unrelated: 'इस विषय से असंबंधित'
+  },
+  researchFailed: (subject) => `*${subject}* — खुले स्रोतों की खोज विफल रही और कोई नतीजा नहीं मिला. दोबारा कोशिश करें, या desk workspace इस्तेमाल करें.`,
+  researchDisclaimer: 'यह खुले स्रोतों से अपने आप जुटाई गई सामग्री है, KSP ने इसकी पुष्टि नहीं की है. यह सबूत नहीं है और किसी के भी विरुद्ध कार्रवाई का आधार नहीं है. हर स्रोत पर लगा बैंड सिर्फ़ यह बताता है कि वह इसी विषय से जुड़ा होने का भरोसा कितना है; "पुष्ट" से नीचे की किसी भी चीज़ पर भरोसा करने से पहले उसकी मानवीय जाँच ज़रूरी है.',
 
   undoHint: (token) => `\n\n_पलटने के लिए: ${token} भेजें_`,
   undoDone: (what) => `↩️ ${what} पलट दिया.`,
