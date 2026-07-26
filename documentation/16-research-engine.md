@@ -67,6 +67,30 @@ Every source comes back in one of five bands, each with the reasons behind it:
 was not them, which is not the same as finding nothing. Wikidata is queried for how many
 public figures share the name, and a crowded name lowers the ceiling on every band.
 
+**Attribution grades what is shown, it does not decide what is shown.** Every retrieved
+link reaches the officer's table with its band, the reasons behind it, which anchors it
+matched, the site, the publication date, the language, the source authority, how many
+independent outlets carried it, and which tier found it — including links that could not
+be read at all. Cross-checking is the officer's job, and a tool that hides a weak match to
+protect its own precision has made that job harder.
+
+The summary follows the same posture with one refinement: it rests on sources at
+`probable` or better when any exist, and falls back to the weaker ones only when there is
+nothing better. Every claim carries its confidence into the prose — *"a report that may
+refer to the same person…"*, *"a lower-authority source…"* — and the run states how many
+weaker matches were listed but not summarised. When nothing at all could be attributed, a
+separate note is written saying so, what was searched for, and who the retrieved coverage
+was actually about. That replaces the old behaviour of returning an empty summary, which an
+officer cannot distinguish from a crash.
+
+### An alias is an anchor
+
+Two of the caller's distinct names in one document — a legal name and an alias — is the
+strongest identity evidence available when no case anchors exist. Aliases are split out of
+`"Vipul Singh alias Khooni"` once, in `plan.resolve_names`, and used by both the planner and
+the scorer; when only the planner split them the scorer went on hunting for the literal
+phrase, which no document contains, and graded every source `unrelated`.
+
 ---
 
 ## Source tiers
@@ -75,9 +99,30 @@ Grouped by **how each one fails**, because that is what determines how to use it
 
 | Tier | Sources | Why |
 |---|---|---|
-| **Datasets** | GDELT DOC 2.0, Wikipedia, Wikidata, Wayback CDX | Published for machines. No key, no quota, reliable from a datacenter. The backbone. |
-| **On-site** | 27 official domains + 16 Kannada outlets, 11 with a queryable search endpoint | For a court or a newsroom this is simply the correct method, and it reaches Kannada coverage no English-first index surfaces. |
+| **News feed** | Bing News RSS | The breadth tier, and the one that fixed the engine's worst blind spot. Keyless, answers from a datacenter, multilingual, and the item link embeds the **publisher's** url so there is no redirect to follow. |
+| **Datasets** | GDELT DOC 2.0, Wikipedia, Wikidata, Wayback CDX | Published for machines. No key, no quota, reliable from a datacenter. |
+| **On-site** | 27 official domains + 16 Kannada + 21 Hindi outlets; 13 with a queryable search endpoint | For a court or a newsroom this is simply the correct method, and it reaches vernacular coverage no English-first index surfaces. |
 | **Metasearch** | SearXNG, Marginalia, (Mojeek) | Long-tail breadth. Deliberately last, deliberately optional. |
+
+### Why a news feed, and why that one
+
+The on-site registry was Karnataka, national English and Kannada. A live test on a wanted
+man shot dead in Baghpat — covered the same day by Hindustan Times, ThePrint, Aaj Tak, ABP,
+Bhaskar and Live Hindustan — returned **zero attributable sources**, because not one of
+those outlets was queried. Crime reporting in India is local and vernacular first, so a
+registry that speaks one language knows one part of the country.
+
+Two dozen Hindi and national search endpoints were probed against that live subject before
+choosing. Most Indian newsrooms answer `/search` with a JavaScript shell and hand a crawler
+their front page; only ThePrint and New Indian Express returned real article urls, and those
+two were added. The rest of the country is reached through the feed instead, which is the
+honest place for it.
+
+**Google News RSS was rejected**, despite returning 56 Hindi items for the same subject:
+`news.google.com/robots.txt` is `Disallow: /` with an allow-list that excludes `/rss`, and
+its item links resolve to a search page rather than to the publisher. Bing's robots
+disallows `/search`, which does not match `/news/search`, and has no `/news` rule. Same
+standard that keeps Mojeek switched off.
 
 **Google is deliberately absent.** SearXNG has no index of its own — it scrapes Google
 and Bing, and those CAPTCHA datacenter ranges. Building discovery on it would work in
@@ -231,8 +276,26 @@ GDELT's rate-limit penalty window, and the run reported that rather than pretend
 otherwise. The on-site tier carried it, which is the argument for building discovery on
 publishers' own search rather than on a metasearch layer.
 
-Budgets (`research/app/config.py`): **quick** 25 s / 8 fetches, **standard** 90 s / 30,
-**deep** 300 s / 80. Deep mode has not been measured against live sources.
+Budgets (`research/app/config.py`): **quick** 25 s / 10 fetches, **standard** 90 s / 48,
+**deep** 300 s / 120. `max_fetch` is the number that matters: it decides how many
+discovered links are actually READ rather than merely listed, and only a read link can earn
+an attribution band. Deep mode has not been measured against live sources.
+
+A second live case, run on the deployed service — a wanted man in Baghpat, subject given as
+`"Vipul Singh alias Khooni"` with **no anchors at all**:
+
+| | |
+|---|---|
+| Time | 63.8 s engine, 66.7 s wall (discovery 31.6 s, retrieval 26 s, claims + summary 5 s) |
+| Found | 123 candidates → 48 read → 30 stories |
+| Graded | 1 probable, 10 possible, 18 unrelated, 1 different_person |
+| Summary | led with the correct finding — the encounter, the STF unit, the 38 cases across UP and Delhi — from the one `probable` source, and said that 10 weaker matches were listed but not summarised |
+
+Worth noting what that run illustrates: `Khooni` is also an ordinary Hindi word, so the
+feed returned film columns titled "Khooni Monday", a haunted stepwell, a renamed village
+and a 2013 political remark. All eleven are in the table at `possible` with their reasons.
+Only the one document that named **both** the legal name and the alias reached `probable`,
+and only that one was summarised.
 
 Nothing is persisted. Runs live in memory with a 30-minute TTL, a hard count cap and a
 concurrency gate — this is a real-time engine, there is no corpus and no document store,
@@ -414,6 +477,13 @@ control here is the internal key, and that is what is actually enforcing.
   reports their language, and a caller holding a Kannada-script name can pass it as
   another anchor. The consequence is real and visible in the pipeline test: a Kannada
   report that never spells the subject's name in a form we hold is graded `unrelated`.
+- **Recall is bought with noise, deliberately.** A subject whose name or alias is a common
+  word will return coverage of unrelated things at `possible`. That is the requested
+  tradeoff: everything found is shown, labelled, and left to the officer. The summary is
+  protected from it by preferring `probable` and above.
+- **Some publishers cannot be read even when they are found.** MSN, for example, is a
+  JavaScript shell — its copies of the correct story appear in the table with "could not be
+  read: no article text found" and a working link, but they cannot earn a band or a claim.
 - **The on-site article detector is a heuristic.** It requires the link to be on the
   searched site, to avoid known navigation paths, and to carry a long slug or a numeric id.
   Per-site templates change; a miss costs one source's hits for one run and the run says so,

@@ -17,7 +17,7 @@ Status legend: ✅ Done & live · 🟡 Partial / caveat · 🔵 Optional / not b
 | 9 | RBAC | ✅ | 5 roles, per‑route guards. |
 | + | OCR FIR ingestion | ✅ | Catalyst Zia OCR → LLM structuring → Data Store insert. |
 | + | WhatsApp field-officer channel | 🟡 | Built and tested (79 checks + smoke); needs Meta app provisioning to go live. See [15](./15-whatsapp-field-bot.md). |
-| + | Open-source research engine | ✅ | **Deployed and verified live on AppSail**: 35.2 s standard run, 13 confirmed of 29 stories, 19/19 claims span-verified, all governance refusals and the auth gate confirmed against the running service. 4 offline suites pass. Desk UI and WhatsApp tool wired; the function's `RESEARCH_*` env vars still need adding for the in-app route to work. See [16](./16-research-engine.md). |
+| + | Open-source research engine | ✅ | **Deployed and verified live on AppSail** on two real cases: a Bengaluru event (35 s, 13 confirmed of 29 stories, 19/19 claims span-verified) and an unanchored north-Indian subject given only as "name alias nickname" (64 s, 123 candidates, correct finding summarised from the one `probable` source). Recall-first: every retrieved link is shown with band, reasons, site, date, language, authority, corroboration and which tier found it. 4 offline suites pass. Desk UI and WhatsApp tool wired; the function's `RESEARCH_*` env vars still need adding for the in-app route to work. See [16](./16-research-engine.md). |
 
 ## 10‑point framework
 
