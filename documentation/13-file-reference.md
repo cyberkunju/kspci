@@ -6,7 +6,7 @@ A map of every meaningful file in the repository and what it does.
 
 | File | Purpose |
 |---|---|
-| `catalyst.json` | Catalyst deploy config — functions target `api` (source `functions/`), client source `client/dist`, AppSail service `research` (container image `localhost/ksp-research:latest`, port 9000). |
+| `catalyst.json` | Catalyst deploy config — functions target `api` (source `functions/`), client source `client/dist`, AppSail service `research` (container image `localhost/ksp-research:latest`, 1024 MB, port 9000). On the container path the CLI honours `memory` and `port` but not `env_variables` or `catalyst_auth`; see [16](./16-research-engine.md). |
 | `.catalystrc` | Project/env binding — Project‑Rainfall, env `60079622152`, India DC, Asia/Kolkata. |
 | `.gitignore` | Excludes node_modules, build output, secrets/config, ML data/venv, seed/train CSVs, the confidential ER‑diagram PDF. |
 | `Police_FIR_ER_Diagram.pdf` | The datathon's source ER diagram (git‑ignored, confidential). |

@@ -332,17 +332,76 @@ curl -s -H 'x-research-key: dev' localhost:9099/health | jq
 catalyst deploy --only appsail:research
 ```
 
+See **Deployment state** below for the two non-obvious steps around that last command.
+
 The function's own tests, including the anchor logic, run with `npm test` in
 `functions/api` (95 checks).
 
-> **Known blocker on the current build host.** `catalyst deploy` uploads the image to
-> `cr-<env>-<project>.zohostratus.in` (169.148.149.161), and TCP 443 to that address is
-> unreachable from this network — 100% packet loss, while `api.catalyst.zoho.in` responds
-> normally. The deploy therefore fails with `ETIMEDOUT` before any upload starts. This is
-> a network path problem, not a configuration one; `catalyst.json` is correct and the
-> deploy will complete unchanged from a host that can reach Zoho Stratus. The alternative
-> is the console path: push the image to Docker Hub / ECR / Artifact Registry and deploy
-> from the console, where Catalyst pulls it server-side.
+### Deployment state
+
+**Deployed and verified live.** AppSail service `research` at
+`https://research-50044266480.development.catalystappsail.in` — 1024 MB, port 9000,
+QuickML model configured, twelve environment variables including a 43-character random
+`RESEARCH_INTERNAL_KEY`.
+
+Verified against the running service, not just against the image:
+
+| Surface | Result |
+|---|---|
+| `GET /health` | 200; model configured, eight source tiers reported |
+| `POST /research` without the key | **401** |
+| Purpose `"check"` | **403** `purpose` |
+| `subject_role: victim` | **403** `subject_role` |
+| `role: policymaker` on a person | **403** `role` |
+| `GET /research/<unknown>` | **404** |
+| Full standard run, "Rameshwaram Cafe blast" | **35.2 s** — 44 candidates → 30 read → 29 stories, **13 confirmed / 1 probable / 15 unrelated**, 6 Kannada, 2 official, **19/19 claims span-verified**, cited summary naming Whitefield, the IED, and the NIA arrests |
+| `POST /research/sync` quick mode | **16.2 s**, comfortably inside the calling function's 27 s cap |
+
+The GDELT out-of-range warning fired correctly in production for the 2024 incident date:
+*"GDELT indexes only the last three months, which does not reach 2024-03-01…"*
+
+Two things about deploying it are worth knowing, because neither is obvious.
+
+**The image upload target may be unreachable from your network.** `catalyst deploy` asks
+the API for a signed URL and then PUTs the image to
+`cr-<env>-<project>.zohostratus.in`. On the build host used here that address answered
+100% packet loss on TCP 443 while `api.catalyst.zoho.in` responded in 60 ms — an ISP path
+problem, not a configuration one, and it presents as a bare `ETIMEDOUT` after four
+retries. If you hit it, the deploy works unchanged through any egress that can reach Zoho
+Stratus. What was used here: an SSH SOCKS tunnel to a cloud host, plus a small local HTTP
+CONNECT proxy, because the Catalyst CLI is built on `request` v2 and therefore honours
+`HTTPS_PROXY` but speaks CONNECT rather than SOCKS.
+
+```bash
+ssh -N -D 127.0.0.1:1080 <a-host-that-can-reach-zoho-stratus>   # SOCKS5
+# any HTTP-CONNECT-to-SOCKS bridge on 127.0.0.1:3128, then:
+HTTPS_PROXY=http://127.0.0.1:3128 catalyst deploy --only appsail:research
+```
+
+**Only `memory` and `port` are read from `catalyst.json` on the container path.** The
+default memory is 256 MB, which is not enough, so it is declared. `env_variables` and
+`catalyst_auth` are *not* read — the CLI hard-codes `catalyst_auth: true` for
+container-image sources (`lib/util_modules/config/lib/appsail.js`) and never sends
+environment variables on that path.
+
+Environment variables therefore live on the service, not in the repo. They are set
+through `POST /baas/v1/project/<project>/appsail/<id>/configuration` with a body of
+`{"environment": {"variables": {…}}}` — flat, because nesting them under a
+`configuration` key is accepted with HTTP 200 and silently ignored — or through
+**Console → AppSail → research → Configurations**. Either way they survive a redeploy;
+all three redeploys here preserved the twelve variables.
+
+The hard-coded `catalyst_auth: true` is inert for a custom runtime and needs no action:
+an unauthenticated `curl` carrying only `x-research-key` reached the app and was answered,
+and the same call without the key was refused by the app's own gate with 401. Access
+control here is the internal key, and that is what is actually enforcing.
+
+> One transient condition worth recognising if you meet it: for about ten minutes after
+> the first deploy every route on the project — the research service, the forecasting
+> service and the main API function alike — answered
+> `SUBSCRIPTION_USAGE_LIMIT_REACHED`. It cleared on its own. It reads like a permanent
+> billing wall and is not necessarily one; check whether the *other* services are also
+> refusing before concluding anything about the new one.
 
 ---
 
@@ -361,9 +420,10 @@ The function's own tests, including the anchor logic, run with `npm test` in
   and a false positive is discarded when extraction finds no article text.
 - **`deep` mode is unmeasured** against live sources.
 - **GDELT reaches back only three months.** Historical breadth for an older case therefore
-  comes from the on-site tier alone, and the run states that. The absolute-window
-  parameters are built to GDELT's documented contract but were **not live-verified**,
-  because our IP has been in GDELT's rate-limit penalty window since testing.
+  comes from the on-site tier alone, and the run states that. Verified live: an in-window
+  `startdatetime` returns dated results, and a 2024 subject queried with `timespan=3months`
+  returns an empty object — which is exactly the "no coverage exists" mirage the warning
+  exists to prevent.
 - **The daily cap and the run registry are in memory**, so both reset on restart. That is
   honest for a single always-on instance and it is a guard-rail, not a billing control.
 - **Nothing here is evidence**, and the product says so in the result, in the UI banner and
