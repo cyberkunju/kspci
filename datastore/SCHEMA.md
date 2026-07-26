@@ -1,5 +1,11 @@
 # KSP Crime AI — Catalyst Data Store schema (console creation spec)
 
+> **What is actually loaded, what is not, why, and how to finish it:
+> [`DATA_STATE.md`](DATA_STATE.md).** Read that before running any bulk load — Catalyst bills
+> Data Store inserts **per row** (₹0.006), so the full 8.24M-row corpus costs about ₹49,400 and
+> exhausting the plan takes the whole environment offline, not just the load.
+
+
 Lean, denormalized model optimized for LLM text-to-ZCQL and instant analytics.
 Create these **10 tables** in the Catalyst console (Data Store → Create Table), with the
 columns below. Column names must match **exactly** (the seeder maps CSV headers to these).

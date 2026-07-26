@@ -115,6 +115,7 @@ client/ (React+Vite SPA, served at /app)  ──►  API Gateway  ──►  fun
 ├─ client/                 # React + Vite SPA (builds to client/dist, served at /app)
 ├─ datastore/
 │  ├─ SCHEMA.md            # 10-table Data Store schema
+│  ├─ DATA_STATE.md        # what is loaded vs generated, cost model, how to load the rest
 │  ├─ generate.js          # calibrated ETAS crime simulator
 │  ├─ load.js              # streaming Data-Store seeder (parses locally, POSTs batches)
 │  ├─ seed/                # generated app CSVs (git-ignored)
@@ -140,8 +141,10 @@ cd functions/api && npm install
 # 5. Deploy (functions + client)
 catalyst deploy --ignore-scripts
 
-# 6. Seed the Data Store (after the 10 tables exist per SCHEMA.md)
-node datastore/load.js
+# 6. Seed the Data Store (after the tables exist per SCHEMA.md)
+#    Inserts are billed per row — price the load first and cap it. See datastore/DATA_STATE.md.
+node tools/usage.js                                  # remaining balance, expressed as rows
+CONCURRENCY=8 MAX_ROWS=1016380 node datastore/load.js --only Cases
 ```
 
 ## Tech stack
