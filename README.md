@@ -31,6 +31,7 @@ full audit trail.
 | 9 | Role-based access control | 4-tier RBAC (investigator/analyst/supervisor/policymaker/admin) | API Gateway, Auth |
 | + | **OCR FIR ingestion** | Catalyst Zia OCR → LLM (GLM) structuring → Data Store insert | Functions |
 | + | **AI analyst brief** | GLM-4.7-Flash narrates the live forecast into a leadership brief | Functions |
+| + | **WhatsApp field-officer channel** | the same platform from a phone: model-routed natural language in English/Kannada, photo identification, OCR, voice notes, location, and proactive alerts — [documentation/15-whatsapp-field-bot.md](documentation/15-whatsapp-field-bot.md) | Functions, Data Store, Stratus, Zia, Job Scheduling, Cron |
 
 ---
 
@@ -111,15 +112,17 @@ client/ (React+Vite SPA, served at /app)  ──►  API Gateway  ──►  fun
 .
 ├─ catalyst.json           # project config (functions + client)
 ├─ functions/api/          # Advanced I/O Node function (Express) behind API Gateway
-│  └─ lib/                 # chat, llm, forecast, backtest, analytics, ocr, csv, guard, schema
+│  ├─ lib/                 # chat, llm, forecast, backtest, analytics, ocr, csv, guard, schema
+│  └─ lib/wa/              # WhatsApp field channel: agent, tools, copy, lang, frames, photo, alerts
 ├─ client/                 # React + Vite SPA (builds to client/dist, served at /app)
 ├─ datastore/
-│  ├─ SCHEMA.md            # 10-table Data Store schema
+│  ├─ SCHEMA.md            # Data Store schema (10 app tables + forecast and field-channel tables)
 │  ├─ DATA_STATE.md        # what is loaded vs generated, cost model, how to load the rest
 │  ├─ generate.js          # calibrated ETAS crime simulator
 │  ├─ load.js              # streaming Data-Store seeder (parses locally, POSTs batches)
 │  ├─ seed/                # generated app CSVs (git-ignored)
 │  └─ train/               # full event log + weekly feature panel (git-ignored)
+├─ tools/                  # console automation over CDP (schema, bucket, cron, job pool, usage)
 └─ scripts/                # offline forecast harness, test-FIR generator
 ```
 

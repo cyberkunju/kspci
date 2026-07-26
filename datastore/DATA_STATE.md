@@ -333,9 +333,18 @@ Applied through the console over CDP (the CLI cannot change Data Store schema �
 - `Victims` **+** `Caste`, `Religion`
 - `Forecasts` — new, 22 columns, holds the batch-scored snapshot
 - `ForecastMetrics` — new, 10 columns, one row of scalar context per scope
+- `Officers` — new, 19 columns, the WhatsApp channel's roster and per-officer conversational state
+- `WaMessages` — new, 14 columns, the channel's message and biometric-use audit ledger
+- `PersonPhotos` — new, 21 columns, the field-enrolled face gallery (blobs live in Stratus)
 
 Column definitions are in `SCHEMA.md`. The tables are additive: with them absent the forecast
 routes fall back to live computation.
+
+The three WhatsApp tables carry **no generated data and are not part of the corpus above**. They
+fill only from real field use: an admin registering officers, officers messaging, and photos
+enrolled in the field. A fresh deployment therefore matches no faces, and the bot says exactly
+that rather than implying a search happened. Nothing in `datastore/load.js` writes to them, so
+they cost nothing until the channel is used.
 
 `functions/api/lib/forecast.js` also tolerates a `Cases` table **without** `StateName`, because a
 schema migration and a code deploy cannot be made atomic.

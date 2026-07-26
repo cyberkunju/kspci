@@ -253,8 +253,17 @@ difference between a four-second answer and a four-minute one.
 
 ## Alerts
 
-A Catalyst cron calls `/whatsapp/alerts/dispatch`, which reads the live forecast
-from `lib/backtest`, works out who is subscribed to which district, and pushes.
+A Catalyst cron calls `/whatsapp/alerts/dispatch`, which reads the forecast, works out
+who is subscribed to which district, and pushes.
+
+**It reads the batch-scored snapshot, not a live recompute.** `backtest.earlyWarningPreferSnapshot`
+exists for two reasons. Assembling a national panel inside the dispatch exceeds ZCQL's
+processing ceiling past a million rows in `Cases`, so the original direct call to
+`computeEarlyWarning` failed every cycle with an opaque 400. And even where it
+succeeds, an officer's push has to say the same thing the dashboard says — both
+reading one snapshot is the only way to guarantee that, since two independent
+computations diverge the moment either side is retrained. It falls through to live
+computation when no snapshot exists, so a fresh environment still works.
 
 - **Officers are opted out by default.** An alert goes only to someone with a
   district on their roster row or a subscription they set over WhatsApp. Blanket
@@ -266,7 +275,10 @@ from `lib/backtest`, works out who is subscribed to which district, and pushes.
 - **Inside Meta's 24-hour service window** (the officer messaged us today) the push
   is free-form and detailed. **Outside it**, Meta permits only an approved
   template, so the template path is used — and if no template is configured, the
-  alert is skipped and reported, not silently dropped.
+  alert is skipped and reported, not silently dropped. Note that
+  `configured.alertTemplate` in `/whatsapp/health` means a *name is set*, not that
+  Meta has approved it; an unapproved template still fails at send time, per officer,
+  and lands a `alert-blocked` ledger row rather than being retried next cycle.
 - The AI advisory line is generated **once per district** and reused for every
   officer watching it, rather than once per recipient.
 
@@ -310,9 +322,38 @@ individual. Reply to this message for detail.
 | Self-harm / harm enablement | The same deterministic `lib/guard.js` pre-check as the web channel, ahead of the model |
 | Secrets | Server-side only. The officer's handset never sees a key, and `/whatsapp/health` reports which pieces are configured, never their values |
 
-## Provisioning — what only you can do
+## Provisioning
 
-Code is complete; these are account-level steps.
+### Already done in this environment
+
+| Resource | State |
+|---|---|
+| `Officers`, `WaMessages`, `PersonPhotos` | created, `Pending` is Text (max) |
+| Stratus bucket `ksp-field-photos` | permission **authenticated**, data encryption **on**, PII/ePHI **on**, versioning off |
+| Job pool `kspwaturns` | type Webhook, max concurrent 5 — `WA_JOBPOOL` set, turns verified queueing |
+| Cron `ksp_wa_early_warning` | daily 06:30 IST → `POST /whatsapp/alerts/dispatch` with `x-wa-internal-key` |
+| `WA_APP_SECRET`, `WA_VERIFY_TOKEN`, `WA_INTERNAL_KEY` | generated into the gitignored function config |
+| Catalyst SDK | **3.4.0** — required; see below |
+
+Each console resource has an idempotent step in `tools/steps/`: `create-bucket.js`,
+`create-jobpool.js`, `create-cron.js`. Rerunning one reports what it found rather
+than duplicating it.
+
+**The SDK version is load-bearing.** `app.stratus()` and `app.jobScheduling()` exist
+only in `zcatalyst-sdk-node` 3.x. On 2.x — which `^2.1.1` resolved to — photo
+enrolment throws on the first real photo, and the async webhook path can never
+succeed: it falls back inline forever, silently, because losing the queue must not
+lose an officer's message. Do not relax that dependency range.
+
+A second trap in the same path: Catalyst caps `job_name` at 20 characters and rejects
+the whole submission when it is longer, so a name built from a wamid was too long and
+every turn fell back inline. Both failures were reported healthy by a config-reading
+health check, which is why `/whatsapp/health` now probes the SDK namespaces and
+resolves the job pool for real, and why the webhook replies with event counts
+(`received`, `queued`, `duplicates`, `inline`, `enqueueError`) — never message
+content, on an endpoint no unauthenticated caller can reach.
+
+### What only you can do
 
 **1 · Meta (developers.facebook.com + Business Manager)**
 - A Meta app with **WhatsApp** added, attached to a WhatsApp Business Account.
@@ -327,20 +368,17 @@ Code is complete; these are account-level steps.
   without that subscription.
 - Create the alert template above and wait for approval.
 
-**2 · Catalyst console**
-- Data Store: create `Officers`, `WaMessages`, `PersonPhotos` (`datastore/SCHEMA.md`).
-  `Officers.Pending` must be **Text (max)** — it holds the JSON conversational state.
-- Stratus: create the bucket `ksp-field-photos`.
-- Job Scheduling: create a **Webhook** job pool → `WA_JOBPOOL`.
-- Cron: recurring (daily is sensible), target **Webhook**,
-  `POST https://ksp.cyberkunju.com/server/api/whatsapp/alerts/dispatch`,
-  header `x-wa-internal-key: <WA_INTERNAL_KEY>`.
-- Zia: confirm Face Analytics and Identity Scanner are enabled. Facial comparison
-  in the console is IN-DC only, which this project is.
+**2 · Catalyst console** — done, except: confirm Zia **Face Analytics** and **Identity
+Scanner** are enabled on the account. Facial comparison is IN-DC only, which this
+project is. Recreating the rest in a new environment is three step invocations, and
+the console traps they encode are worth knowing before doing it by hand: a cron name
+must use underscores and reject hyphens, a job pool name must use neither, and the job
+pool dialog sends **no request at all** when the name is wrong, so it looks like a dead
+button rather than a validation failure.
 
-**3 · Function config** — add the `WA_*` block from
-`functions/api/catalyst-config.example.json` to `catalyst-config.json`, then
-`catalyst deploy --only functions`.
+**3 · Function config** — put `WA_PHONE_NUMBER_ID` and `WA_ACCESS_TOKEN` (and the real
+`WA_APP_SECRET`) into `catalyst-config.json`, then `catalyst deploy --only functions`.
+Everything else in the `WA_*` block is already set.
 
 **4 · Register officers**
 
@@ -352,13 +390,23 @@ curl -X POST https://ksp.cyberkunju.com/server/api/admin/officers \
         "language":"en","alertSeverity":"critical"}]'
 ```
 
+Revoking access day-to-day is the same endpoint with `{"active": false}`: the roster
+lookup refuses an inactive row, and the row stays as the record that this number once
+held access. `DELETE /admin/officers` removes the row outright, for the different case
+of a number that should never have been registered — a typo, or a test registration —
+where an inactive row would leave a live police roster permanently listing a number
+nobody owns. The `WaMessages` ledger is kept unless `purgeLedger: true` is passed,
+because it is the audit trail for data that number was shown; the purge runs whether or
+not a roster row existed, since the number most needing its ledger cleared is one that
+was never an officer.
+
 **5 · Verify**
 
 ```bash
-# Health is admin-guarded: row counts and "which pieces are configured" are
-# operational intelligence about a police system.
+# Health is admin-guarded and reports capability, not configuration: it probes the SDK
+# namespaces and resolves the job pool, so it cannot claim a queue that cannot run.
 curl -s https://ksp.cyberkunju.com/server/api/whatsapp/health \
-     -H "x-admin-key: $ADMIN_KEY"                                      # all flags true
+     -H "x-admin-key: $ADMIN_KEY"        # all flags true, jobPool "resolved"
 curl -s -X POST "https://ksp.cyberkunju.com/server/api/whatsapp/alerts/dispatch?dryRun=true" \
      -H "x-wa-internal-key: $WA_INTERNAL_KEY"                          # who would be pushed
 cd functions/api && npm test                                           # lint + unit tests + turn smoke

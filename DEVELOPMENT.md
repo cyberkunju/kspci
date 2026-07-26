@@ -370,3 +370,82 @@ Inserts are also not exactly-once: a request can fail at the client after succee
 server, and its retry writes a duplicate. `POST /admin/forecast/dedupe` repairs that; it refuses
 to treat a row as its own duplicate, because under the old offset paging the same physical row
 appeared on two pages and "removing the older copy" deleted real districts.
+
+---
+
+## 12. WhatsApp field-officer channel — provisioned state
+
+Design and security model: `documentation/15-whatsapp-field-bot.md`. This section is only what
+is live in this environment and what still needs an account-level action.
+
+### Provisioned
+
+| Resource | Value | How |
+|---|---|---|
+| Data Store tables | `Officers` (19 cols), `WaMessages` (14), `PersonPhotos` (21) | `tools/steps/create-table.js` + `add-column.js` over CDP |
+| Stratus bucket | `ksp-field-photos` — permission **authenticated**, encryption **on**, PII/ePHI **on**, versioning off | `node tools/drive.js tools/steps/create-bucket.js ksp-field-photos` |
+| Job pool | `kspwaturns` — type Webhook, max concurrent 5 | `node tools/drive.js tools/steps/create-jobpool.js` |
+| Alert cron | `ksp_wa_early_warning` — daily 06:30 IST, `POST /whatsapp/alerts/dispatch` with `x-wa-internal-key` | `node tools/drive.js tools/steps/create-cron.js` |
+| Secrets | `WA_APP_SECRET`, `WA_VERIFY_TOKEN`, `WA_INTERNAL_KEY`, `WA_JOBPOOL` + tuning keys | gitignored `functions/api/catalyst-config.json` |
+
+All three steps are idempotent and re-runnable. Verify with:
+
+```bash
+curl -s https://ksp.cyberkunju.com/server/api/whatsapp/health -H "x-admin-key: $ADMIN_KEY"
+```
+
+### Still pending — only a Meta account can supply these
+
+`WA_PHONE_NUMBER_ID` and `WA_ACCESS_TOKEN` (permanent System User token, not the 24-hour test
+one), the real `WA_APP_SECRET` from the Meta app, the `WA_VERIFY_TOKEN` pasted into Meta's
+webhook form against `https://ksp.cyberkunju.com/server/api/whatsapp/webhook` with the
+`messages` field subscribed, and an approved Utility template named `ksp_early_warning`.
+Until the token exists, `configured.send` is `false` and every outbound send fails loudly —
+which is correct, and is how the send path was verified.
+
+### Traps, all of which cost real time
+
+**The SDK version is load-bearing.** `app.stratus()` and `app.jobScheduling()` only exist in
+`zcatalyst-sdk-node` **3.x**; the `^2.1.1` range resolved to 2.5.1, where photo enrolment throws
+on the first real photo and the async webhook path can never succeed. Neither failure is visible:
+enqueue is *designed* to fall back inline rather than lose an officer's message. Every namespace
+the rest of the API uses keeps the same surface in 3.4.0.
+
+**`job_name` is capped at 20 characters** and Catalyst rejects the entire submission when it is
+longer (`job_name should be within 1-20 char length`). A name built from a wamid was 26, so every
+turn fell back inline. This is why `/whatsapp/health` now *probes* the SDK namespaces and resolves
+the job pool instead of reporting whether an env var is set, and why the webhook answers with
+`{received, queued, duplicates, inline, enqueueError}` — counts only, never content, on an
+HMAC-gated endpoint. Without that, a broken queue and a working one are indistinguishable.
+
+**Console naming rules contradict each other and fail silently.** A cron name must be
+alphanumeric *and underscores*, hyphens rejected — the API says so in a response body the console
+never renders, so the form just sits there looking saved. A job pool name must be alphanumeric
+*only*, no underscores, and the console sends **no request at all**, so it is indistinguishable
+from a dead button. Both rules are encoded in the steps, which now surface the API's own rejection.
+
+**The Stratus create dialog defaults are wrong for this bucket.** It holds face photographs of
+identifiable people, and Public sits one radio button from the default while encryption and
+PII/ePHI are off unless ticked. `create-bucket.js` sets all three and refuses to create a public
+bucket, which is why it is a step and not a docs instruction.
+
+**Alerts must read the snapshot, not recompute.** `dispatchAlerts` originally called
+`computeEarlyWarning`, which assembles a national panel and therefore hits the §11 ZCQL ceiling at
+a million rows — every cron cycle failed with an opaque 400. `backtest.earlyWarningPreferSnapshot`
+reads the batch-scored snapshot and falls back to live computation on a fresh environment, which
+also guarantees an officer's push says the same thing the dashboard says.
+
+### Removing a number from the roster
+
+Day-to-day revocation is `POST /admin/officers` with `{"active": false}` — the lookup refuses an
+inactive row and the row remains as the record that this number held access. `DELETE
+/admin/officers` is for a number that should never have been registered:
+
+```bash
+curl -X DELETE .../admin/officers -H "x-admin-key: $ADMIN_KEY" \
+  -H 'Content-Type: application/json' -d '{"phone":"919999900001","purgeLedger":true}'
+```
+
+The `WaMessages` ledger is kept by default because it is the audit trail for data that number was
+shown. `purgeLedger` runs whether or not a roster row existed — the number that most needs its
+ledger cleared is one that was never an officer.
