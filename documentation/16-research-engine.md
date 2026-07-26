@@ -418,9 +418,17 @@ worth taking for a progress bar.
   filterable source table with attribution bands, the dated-claims timeline, and PDF
   export via `client/src/lib/pdf.js`.
 - **WhatsApp** — the `open_source_research` tool in `functions/api/lib/wa/tools.js`, with
-  **the same two modes as the desk**. Operational roles only; purpose required and not
-  defaulted, because a default would satisfy the check while destroying the thing it
-  protects.
+  **the same two modes as the desk**. Purpose required and not defaulted, because a
+  default would satisfy the check while destroying the thing it protects.
+
+  The tool is **not** role-gated as a whole, and that is a correction. It used to be
+  restricted to operational roles, which is coarser than the rule it was mirroring: the
+  engine requires an operational role for a *person*, and permits aggregate kinds — an
+  organisation, an event, a crime pattern — to a read-only policymaker. Because a tool
+  missing from the catalogue is invisible to the model, the effect was that a policymaker
+  asking about an organisation was told *"I cannot search the open internet"* — the system
+  disclaiming a capability it has. The kind-level check now mirrors the engine exactly and
+  names the officer's access level when it refuses.
 
   The tool is *terminal*: it starts the run, tells the officer what is happening and
   roughly how long ("about a minute" / "up to five minutes"), and ends the turn. Anything
@@ -431,6 +439,37 @@ worth taking for a progress bar.
   by run id so the engine's retry cannot double-send, and refused with a recorded reason
   rather than an opaque failure if the officer has fallen outside Meta's 24-hour service
   window — the result is still in the desk workspace.
+
+  Four things about that delivery were wrong when it was first exercised against a real
+  handset, and are worth recording because none of them show up in a unit test:
+
+  * **It rendered in the wrong language.** The formatter chose between Kannada and English
+    on a boolean that predated Hindi, so a Hindi officer received an English report — in
+    the longest message the channel sends. Every string now comes from `lib/wa/copy.js`,
+    including the confidence bands and the disclaimer. The *summary* is written in the
+    officer's language by the engine (`reply_language`); source titles and claim quotations
+    stay as published, because a translated quotation is not a quotation.
+  * **The report was not part of the conversation.** Only an audit line saying one had been
+    sent was stored, so `recentTurns` never saw it and a follow-up had nothing to read. The
+    report body is now logged as an outbound turn under the same dedupe key.
+  * **History truncated it in the worst possible place.** Turns are capped at 1200
+    characters, which keeps the summary and cuts the numbered source list — so "what did
+    the fifth source say" reached the model with sources one and two visible, and it
+    answered anyway, from nothing. `research-result` rows are capped at 4000.
+  * **The list had its own numbering.** Sources were numbered 1..6 by attribution band
+    while the summary cited `[S1]`, `[S2]` in a different order. Two orderings in one
+    message: asked about "the sixth source" the model confidently described whichever
+    document was sixth by band. `Finding.marker` now carries the summary's own citation
+    marker, the WhatsApp list is labelled with it (`S1.`, `S2.`, `—.` for a source the
+    summary does not cite), and the desk table and the PDF show it too. Before this, `[S3]`
+    in the summary resolved to nothing on any screen — the every-sentence-is-cited contract
+    was unverifiable by the one person who needed to verify it.
+
+  A fifth, subtler one: asked about a source in a delivered report, the model sometimes
+  started the entire search again. The tool description said not to and nothing enforced
+  it, so a duplicate run on a subject already reported in the visible history is now
+  refused with a pointer to the report — unless the officer explicitly asks for a fresh
+  search.
 
 ---
 
@@ -468,12 +507,24 @@ a flat `{"response": ...}` rather than OpenAI's `choices[0].message.content` —
 the OpenAI shape yields a working model that looks unconfigured. Also, **Zoho rate-limits
 refresh-token grants**, so the access token is cached module-level for its full lifetime.
 
-**On the function:** `RESEARCH_SERVICE_URL` and the same `RESEARCH_INTERNAL_KEY`. See
-`functions/api/catalyst-config.example.json`.
+**On the function:** `RESEARCH_SERVICE_URL`, the same `RESEARCH_INTERNAL_KEY`, and
+optionally `RESEARCH_START_TIMEOUT_MS` / `RESEARCH_POLL_TIMEOUT_MS`. See
+`functions/api/catalyst-config.example.json`. All of these are set on the deployed
+function and verified live.
 
 ---
 
 ## Build, test, deploy
+
+> **Build the image first, every time.** `catalyst.json` points at
+> `docker://localhost/ksp-research:latest`, so `catalyst deploy` ships whatever is under
+> that tag — it does not build from `research/`. Skip the build and the deploy reports
+> `DEPLOYMENT SUCCESSFUL` and publishes the previous code. That failure is silent and
+> total: two deploys were "verified" against a service still running the old image before
+> anyone noticed. If a change refuses to take effect, probe the deployed schema before
+> suspecting the change — `POST /research` with `"reply_language": 5` answers **422** on
+> current code and **200** on stale code, because pydantic v2 rejects an int for a `str`
+> field it knows about and ignores a field it does not.
 
 ```bash
 # Build the image (must be tagged into the local registry for AppSail)
@@ -538,9 +589,13 @@ Stratus. What was used here: an SSH SOCKS tunnel to a cloud host, plus a small l
 CONNECT proxy, because the Catalyst CLI is built on `request` v2 and therefore honours
 `HTTPS_PROXY` but speaks CONNECT rather than SOCKS.
 
+The bridge is in the repo now — `tools/connect-proxy.js`, fifty lines, no dependencies —
+because reconstructing it from this paragraph on each deploy is how the workaround gets
+mis-set-up and blamed on the deploy.
+
 ```bash
-ssh -N -D 127.0.0.1:1080 <a-host-that-can-reach-zoho-stratus>   # SOCKS5
-# any HTTP-CONNECT-to-SOCKS bridge on 127.0.0.1:3128, then:
+ssh -N -D 127.0.0.1:1080 <a-host-that-can-reach-zoho-stratus> &   # SOCKS5
+node tools/connect-proxy.js &                                     # CONNECT → SOCKS
 HTTPS_PROXY=http://127.0.0.1:3128 catalyst deploy --only appsail:research
 ```
 

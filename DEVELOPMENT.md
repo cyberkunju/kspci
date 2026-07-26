@@ -129,6 +129,26 @@ await browser.close(); // detaches; does NOT close the user's Chrome
 This shares the **logged-in** console session, so anything you do in the browser
 is authenticated as the signed-in user.
 
+### Driving the deployed app, not just the console
+
+`tools/steps/check-research.js` exercises the *Open Sources* panel the same way — role
+switch, the purpose gate, a real run with its live stages, the graded source table, and the
+export document. Two traps it encodes, because both cost time:
+
+- **A `goto` that only changes the hash does not remount the SPA**, so a second run inherits
+  the first run's filled form and any assertion about a disabled button silently passes.
+  Reload.
+- **Chrome's print preview is modal.** The PDF export calls `window.print()`, and one
+  preview left open makes every later step time out on an unrelated page. The step stubs
+  `window.open` and inspects the generated HTML instead; `tools/steps/close-print.js` and
+  `list-tabs.js --close-blank` clear a wedged browser.
+
+```bash
+node tools/drive.js tools/steps/check-research.js analyst "Karnataka High Court" organisation
+node tools/drive.js tools/steps/check-research.js policymaker "Suresh Kumar" person   # expect a refusal
+node tools/drive.js tools/steps/check-research.js admin "X" organisation --form-only  # gates only, no run
+```
+
 ### Playwright MCP (separate, headless)
 The Playwright MCP runs its own headless browser — good for testing the local
 dev app (`127.0.0.1:5173`) and screenshots, but it is **not** logged into Catalyst.
@@ -147,6 +167,9 @@ Full credits in `CREDITS.md`. Condensed map for development:
 | LLM (chat → ZCQL, FIR structuring, briefs) | Catalyst **QuickML** — GLM-4.7-Flash | OAuth self-client refresh-token flow via `accounts.zoho.in` |
 | OCR (scanned FIR) | Catalyst **Zia** OCR | EN / Kannada / Hindi |
 | Forecasting ML | Catalyst **AppSail** (FastAPI + scikit-learn) | seasonal + Holt + Hawkes + HistGBM ensemble, conformal intervals; JS fallback in the function |
+| Open-source research | Catalyst **AppSail** (FastAPI, custom Docker) `research` | `research/` — a separate service because a run takes 40–300 s and a function is killed at 30. Reached through `functions/api/lib/research.js`, which supplies the anchors from our own records. See [documentation/16](documentation/16-research-engine.md) |
+| Cross-encoder reranking | **Cohere Rerank v4.0 Pro** on Azure AI Foundry (third party) | picks which ~48 of ~140 candidates a run reads; losing it degrades a run rather than failing it |
+| Web search tier | **Firecrawl** `/v2/search` (third party) | the only tier that reaches forums, video, social and district-level local sites. Unset it and the engine searches the press only, and says so |
 | Speech (STT/TTS) | **Sarvam AI** (third party) | `saarika:v2.5` / `bulbul:v3` — only non-Catalyst service |
 | Hosting | Catalyst **Web Client Hosting** + **API Gateway** + **Domain Mapping** | `/app` and `/server` |
 | Token cache | Catalyst **Cache** | QuickML OAuth access token |
@@ -173,8 +196,10 @@ functions/api/     Express Advanced I/O function (Catalyst)
   lib/             chat, analytics, forecast, ocr, llm, oauth, guard, ...
   seed/            CSV seed data
 ml/                Python forecasting service (AppSail) + offline harness
+research/          Python OSINT research engine (AppSail, custom Docker) + selftests
 datastore/         schema + synthetic data generator
-documentation/     product/architecture docs (01–14)
+documentation/     product/architecture docs (01–18)
+tools/             CDP driver + steps, Catalyst usage, WhatsApp send/log, deploy proxy
 CREDITS.md         services + **live credentials appendix (local only)**
 ```
 
@@ -190,10 +215,30 @@ curl -s https://project-rainfall-60079622152.development.catalystserverless.in/s
 curl -s https://kspforecast-50044266480.development.catalystappsail.in/
 # Real data
 curl -s -H "x-user-role: analyst" https://ksp.cyberkunju.com/server/api/analytics/overview
+# Research engine, through the function
+curl -s -H "x-user-role: admin" https://ksp.cyberkunju.com/server/api/research/health
+# Is the model reachable at all? Distinguishes an outage from a code fault — without it
+# every model-backed surface fails identically with "something went wrong".
+curl -s -H "x-admin-key: $ADMIN_KEY" "https://ksp.cyberkunju.com/server/api/admin/status?llm=1"
+# WhatsApp channel: a real signed webhook, then read the conversation back
+node tools/wa-send.js 918330040958 "who am i"
+node tools/wa-log.js 918330040958 6
+# Tests
+cd functions/api && npm test        # 120 checks + copy lint + smoke turn
 # Frontend build + syntax
 cd client && npm run build
 node --check functions/api/index.js
 ```
+
+### Diagnosing "everything says something went wrong"
+
+If web chat *and* WhatsApp both fail at once, it is the model, not the feature. Check
+`?llm=1` above. The failure that produced this was `INVALID_OAUTHTOKEN`: Zoho invalidates a
+self-client's earlier access tokens when a newer one is minted, so a token cached with
+fifty minutes left on its stated expiry can already be dead — and nothing discarded it, so
+every retry used the same dead credential indefinitely. `lib/llm.js` now retries once after
+throwing the token away (`invalidateQuickMLToken`), which is safe because a chat completion
+that failed authentication ran nothing.
 
 ---
 
@@ -583,3 +628,64 @@ curl -X DELETE .../admin/officers -H "x-admin-key: $ADMIN_KEY" \
 The `WaMessages` ledger is kept by default because it is the audit trail for data that number was
 shown. `purgeLedger` runs whether or not a roster row existed — the number that most needs its
 ledger cleared is one that was never an officer.
+
+### Testing the channel without Meta
+
+Two small tools, both reading credentials from the gitignored `catalyst-config.json`:
+
+```bash
+node tools/wa-send.js 918330040958 "who am i"          # real HMAC-signed inbound webhook
+node tools/wa-send.js 918330040958 --button "English"   # a tap, not typed text
+node tools/wa-log.js  918330040958 8                    # the conversation, receipts hidden
+node tools/wa-log.js  918330040958 8 --all --full       # everything, untruncated
+```
+
+`wa-send.js` fakes only the origin. The payload has Meta's exact shape and a genuine
+`X-Hub-Signature-256`, so it goes through signature verification, the job pool, the agent,
+the tool gate, grounding and the outbound send — and the handset really does receive the
+reply. It exists because every channel test before it was a shell one-liner rebuilding the
+HMAC from memory, and getting that wrong presents as a 401 that looks like a code defect.
+
+`wa-log.js` hides `status` rows by default. Meta sends up to three delivery receipts per
+outbound message, so a naive `LIMIT 4` on `WaMessages` shows four receipts and no
+conversation.
+
+---
+
+## 13. Open-source research on the WhatsApp channel
+
+Full design in `documentation/16-research-engine.md`. What is specific to the channel:
+
+A run takes 40–300 s and this function is killed at 30, so the tool is **terminal**: it
+starts the run, says roughly how long, and ends the turn. The engine POSTs the finished
+report to `/research/callback` and `lib/wa/research.js` sends it as two messages — summary,
+then sources with full article urls — chunked to WhatsApp's 4096-character limit and deduped
+by run id.
+
+Three things make follow-up questions work, and each was broken first:
+
+1. **The report is logged as an outbound turn**, not just an audit line saying one was sent.
+   Otherwise `recentTurns` never sees it and "tell me about the third link" has nothing to
+   read.
+2. **`research-result` rows are truncated at 4000 characters, not 1200.** The numbered source
+   list is at the *bottom* of the report, so the ordinary cap kept the summary and cut
+   exactly the part follow-ups ask about — and the model answered anyway.
+3. **The list is labelled with the summary's own citation markers** (`S1.`, `S2.`, `—.` for a
+   source the summary does not cite). It used to be numbered 1..6 by attribution band, which
+   put two unrelated orderings in one message; asked about "the sixth source" the model
+   described whichever document was sixth by band, confidently.
+
+A duplicate run on a subject already reported in the visible history is refused with a
+pointer to the report, unless the officer's own words ask for a fresh search — the tool
+description always said not to search twice and nothing enforced it.
+
+The summary is written in the officer's language (`reply_language`, threaded through to the
+engine's summariser). Source titles and claim quotations stay as published. One thing to
+know if you change that prompt: the language instruction has to appear in the **closing
+instruction** of the user prompt, not only as a rule in the system prompt — with it only in
+the system prompt a live Kannada run came back entirely in English.
+
+The engine's protected-attribute guard was English-only, which meant it screened none of the
+Kannada and Hindi claims — about half of what a run reads. It now covers all three scripts,
+and exempts a cited publisher's own name, because *The Hindu* is in our source registry and
+"The Hindu reported the arrest" was having the whole summary discarded.
