@@ -160,7 +160,13 @@ const TOOLS = {
       const zcql = enforceRowLimit(args.zcql);
       const rows = await runZcql(ctx.app, zcql);
       ctx.executed.push({ zcql, purpose: args.purpose || '', rowCount: rows.length, rows });
-      return { rowCount: rows.length, rows: flat(rows) };
+      const out = { rowCount: rows.length, rows: flat(rows) };
+      // A result for a period the records do not cover says nothing about crime there,
+      // and saying so in the observation is the only reliable way to stop the model
+      // reporting it as "no cases".
+      const note = require('./window').outOfWindowNote(zcql);
+      if (note) out.note = note;
+      return out;
     }
   },
 

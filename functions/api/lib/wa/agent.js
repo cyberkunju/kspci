@@ -46,6 +46,25 @@ const MAX_STEPS = Number(process.env.WA_AGENT_STEPS || 6);
 
 /* ------------------------------ system prompt ------------------------------ */
 
+/**
+ * Tell the model how far the records reach.
+ *
+ * Without this the model queries the current calendar year, gets zero, and reports
+ * "no cases in Hoshiarpur this year" — true about the table and completely wrong to
+ * an officer reading it. It happened on the first live turn.
+ *
+ * See `window.js` for why this is configuration rather than a measurement, and for the
+ * matching note the tool layer attaches to an empty result — the prompt alone was not
+ * enough, because the model reports the coverage correctly when asked and still read a
+ * zero for 2026 as "no cases this year".
+ */
+function dataWindowLine() {
+  const w = require('./window').prose();
+  return w
+    ? `- The case records cover ${w}. There is nothing after that: it is the end of the data, not a quiet period.`
+    : '- The case records are historical and stop some months before today. Treat any period near the present as possibly uncovered.';
+}
+
 function systemPrompt(ctx) {
   const o = ctx.officer;
   const posting = [o.station, o.district, o.state].filter(Boolean).join(', ') || 'not recorded';
@@ -83,6 +102,11 @@ Officers will ask things nobody anticipated. That is normal and it is not a fail
 - If the request is about the force, procedure, an act or a section rather than the database, answer from your own knowledge, say plainly that it is general knowledge and not from the records, and offer the lookup that would confirm it.
 - If it is genuinely outside what this channel can reach, say what it would take and who to ask.
 - NEVER end a reply without either an answer or a concrete next move. A reply that only says you did not understand is a failure of this system, not of the officer.
+
+WHAT THE RECORDS ACTUALLY COVER
+${dataWindowLine()}
+- A zero count is only ever a statement about the records, never about the district. If a count for a recent period comes back zero, say the records do not reach that period yet and give the figure for the latest period they do cover. Never write "no cases in X this year" when the records simply stop earlier — to an officer that reads as "no crime here", and it is the most damaging wrong answer this channel can give.
+- When the officer says "this year", "this month" or "recently" without a date, answer over the latest period the records cover and say which period that is.
 
 GROUNDING — THIS IS THE WHOLE POINT
 - Every factual claim about a case, person, count or date must come from data a tool returned in THIS conversation. Nothing from memory.
