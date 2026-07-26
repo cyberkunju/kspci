@@ -59,12 +59,13 @@ async function clearScope(app, table, scope, onlyState = null) {
   const stateFilter = onlyState
     ? ` AND StateName='${String(onlyState).replace(/'/g, "''")}'` : '';
   const t = app.datastore().table(table);
-  // ZCQL caps LIMIT at 300, so this pages. The loop is bounded rather than `while (true)`:
-  // an unbounded delete loop inside a request that can time out mid-way is how you get a
-  // partially cleared scope and no record of where it stopped.
+  // Pages of 200: deleteRows rejects more than 200 ids at a time, and ZCQL caps LIMIT at 300, so
+  // 200 is the binding constraint. The loop is bounded rather than `while (true)` — an unbounded
+  // delete loop inside a request that can time out mid-way is how you get a partially cleared
+  // scope with no record of where it stopped.
   for (let page = 0; page < 400; page++) {
     const res = await zcql.executeZCQLQuery(
-      `SELECT ROWID FROM ${table} WHERE Scope='${esc}'${stateFilter} LIMIT 0, 300`);
+      `SELECT ROWID FROM ${table} WHERE Scope='${esc}'${stateFilter} LIMIT 0, 200`);
     const ids = (res || []).map((r) => (r[table] || {}).ROWID).filter(Boolean);
     if (!ids.length) return page;
     await t.deleteRows(ids);
@@ -95,7 +96,14 @@ async function writeSnapshot(app, route, opts, payload, { partialState = null } 
   // arbitrary one.
   await clearScope(app, META_TABLE, scope);
 
-  const rows = units.map((f) => ({
+  // Sequence number per row within its state, assigned here.
+  //
+  // This exists because reading the scope back reliably turned out to be the hard part. ZCQL's
+  // OFFSET paging returned overlapping pages, and keyset paging on ROWID skipped rows because
+  // Catalyst ROWIDs are not monotonic across insert batches — both failures lost districts
+  // silently. Seq is dense and contiguous per state by construction, so the read can request
+  // explicit half-open ranges and depend on neither ORDER BY nor OFFSET.
+  const rows = units.map((f, i) => ({
     Scope: scope,
     Level: opts.level || 'district',
     StateName: f.state || null,
@@ -115,6 +123,10 @@ async function writeSnapshot(app, route, opts, payload, { partialState = null } 
     Zscore: num(f.z),
     Severity: f.severity || null,
     ComputedAt: computedAt,
+    // Dense and contiguous across the whole snapshot, so the read can ask for explicit ranges.
+    // A partial per-state refresh cannot maintain a global sequence; it is numbered within the
+    // state and the read detects the shortfall and falls back — see readSnapshot.
+    Seq: i,
   }));
 
   const inserted = rows.length ? await insertChunked(app, TABLE, rows) : 0;
@@ -171,11 +183,26 @@ async function readSnapshot(app, route, opts, { maxAgeHours = 0 } = {}) {
     if (Number.isFinite(ageH) && ageH > maxAgeHours) return null;
   }
 
+  const COLS = 'ROWID, StateName, DistrictName, UnitName, Predicted, Baseline, TrendPct, Low, ' +
+    'High, Band, Latitude, Longitude, Zscore, Severity, Seq';
+  const expected = Number(meta.UnitCount) || 0;
+
+  /**
+   * Read a scope in explicit half-open Seq ranges.
+   *
+   * Two paging approaches failed here before this one, both silently losing districts: ZCQL's
+   * OFFSET returned overlapping pages, and keyset paging on ROWID skipped rows because Catalyst
+   * ROWIDs are not monotonic across insert batches. Fixed ranges over a sequence we assign
+   * ourselves depend on neither ORDER BY nor OFFSET, so there is nothing left to be unreliable.
+   */
   const forecasts = [];
-  for (let offset = 0; offset < 4000; offset += 300) {
+  const PAGE = 200;
+  for (let lo = 0; lo < Math.max(expected, PAGE) + PAGE; lo += PAGE) {
+    if (expected && lo >= expected) break;
     const res = await zcql.executeZCQLQuery(
-      `SELECT StateName, DistrictName, UnitName, Predicted, Baseline, TrendPct, Low, High, Band, Latitude, Longitude, Zscore, Severity FROM ${TABLE} WHERE Scope='${scope}' ORDER BY Predicted DESC LIMIT ${offset}, 300`);
+      `SELECT ${COLS} FROM ${TABLE} WHERE Scope='${scope}' AND Seq >= ${lo} AND Seq < ${lo + PAGE}`);
     const batch = (res || []).map((r) => r[TABLE] || {});
+    if (!batch.length && lo > 0) break;
     for (const r of batch) {
       forecasts.push({
         state: r.StateName, district: r.DistrictName, name: r.UnitName,
@@ -185,9 +212,44 @@ async function readSnapshot(app, route, opts, { maxAgeHours = 0 } = {}) {
         z: num(r.Zscore), severity: r.Severity || undefined,
       });
     }
-    if (batch.length < 300) break;
+  }
+
+  // If the ranges did not account for every stored row, the snapshot was written by a partial
+  // per-state refresh whose Seq is state-local. Fall back to one query per state, which needs no
+  // paging at all because no state has more than ~71 districts.
+  if (expected && forecasts.length < expected) {
+    const states = await zcql.executeZCQLQuery(
+      `SELECT DISTINCT StateName FROM ${TABLE} WHERE Scope='${scope}'`);
+    const names = [...new Set((states || []).map((r) => (r[TABLE] || {}).StateName).filter(Boolean))];
+    forecasts.length = 0;
+    for (const st of names) {
+      const res = await zcql.executeZCQLQuery(
+        `SELECT ${COLS} FROM ${TABLE} WHERE Scope='${scope}' AND StateName='${String(st).replace(/'/g, "''")}'`);
+      for (const raw of (res || [])) {
+        const r = raw[TABLE] || {};
+        forecasts.push({
+          state: r.StateName, district: r.DistrictName, name: r.UnitName,
+          predicted: num(r.Predicted), baseline: num(r.Baseline), trendPct: num(r.TrendPct),
+          low: num(r.Low), high: num(r.High), band: r.Band,
+          lat: num(r.Latitude), lng: num(r.Longitude),
+          z: num(r.Zscore), severity: r.Severity || undefined,
+        });
+      }
+    }
+  }
+
+  if (forecasts.length) {
+    // Belt and braces: even with keyset paging, a duplicate physically present in the table would
+    // reach the client. One row per unit is a property callers rely on, so it is enforced here.
+    const byUnit = new Map();
+    for (const f of forecasts) byUnit.set(`${f.state || ''}|${f.district || ''}`, f);
+    if (byUnit.size !== forecasts.length) {
+      forecasts.length = 0;
+      forecasts.push(...byUnit.values());
+    }
   }
   if (!forecasts.length) return null;
+  forecasts.sort((a, b) => (b.predicted || 0) - (a.predicted || 0));
 
   let context = {};
   try { context = JSON.parse(meta.Payload || '{}'); } catch (_) { context = {}; }
@@ -207,4 +269,52 @@ async function readSnapshot(app, route, opts, { maxAgeHours = 0 } = {}) {
   };
 }
 
-module.exports = { TABLE, META_TABLE, scopeKey, writeSnapshot, readSnapshot, clearScope };
+/**
+ * Remove duplicate units from a scope, keeping the most recently computed row.
+ *
+ * Duplicates are not a bug that can be designed away: `insert` retries on a failed request, and
+ * a request can fail at the client after succeeding at the server, so the retry writes a second
+ * copy. On the map that shows up as one district drawn twice, and in any aggregate as a unit
+ * counted twice. Cheaper and more reliable to detect and repair than to attempt exactly-once
+ * delivery over a plain HTTP insert.
+ */
+async function dedupeScope(app, scope) {
+  const zcql = app.zcql();
+  const esc = scope.replace(/'/g, "''");
+  const seen = new Map();          // 'state|district' -> { rowid, computedAt }
+  const extra = [];
+  let lastRowId = 0;
+  // Keyset paging, for the same reason as readSnapshot: offset paging returned overlapping pages.
+  for (let page = 0; page < 40; page++) {
+    const res = await zcql.executeZCQLQuery(
+      `SELECT ROWID, StateName, DistrictName, ComputedAt FROM ${TABLE} WHERE Scope='${esc}' AND ROWID > ${lastRowId} ORDER BY ROWID LIMIT 200`);
+    const batch = (res || []).map((r) => r[TABLE] || {});
+    if (!batch.length) break;
+    for (const r of batch) {
+      const id = Number(r.ROWID);
+      if (Number.isFinite(id) && id > lastRowId) lastRowId = id;
+      const key = `${r.StateName || ''}|${r.DistrictName || ''}`;
+      const prev = seen.get(key);
+      if (!prev) { seen.set(key, { rowid: r.ROWID, computedAt: r.ComputedAt }); continue; }
+      // Never treat a row as its own duplicate. With the offset paging this used to do, the same
+      // physical row could appear on two pages, and deleting the "older copy" deleted the row
+      // itself — this silently destroyed real districts before the paging was fixed.
+      if (String(prev.rowid) === String(r.ROWID)) continue;
+      // Keep the newer row, discard the older one.
+      if (String(r.ComputedAt || '') >= String(prev.computedAt || '')) {
+        extra.push(prev.rowid);
+        seen.set(key, { rowid: r.ROWID, computedAt: r.ComputedAt });
+      } else {
+        extra.push(r.ROWID);
+      }
+    }
+    if (batch.length < 200) break;
+  }
+  const t = app.datastore().table(TABLE);
+  for (let i = 0; i < extra.length; i += 200) {
+    await t.deleteRows(extra.slice(i, i + 200));
+  }
+  return { units: seen.size, removed: extra.length };
+}
+
+module.exports = { TABLE, META_TABLE, scopeKey, writeSnapshot, readSnapshot, clearScope, dedupeScope };

@@ -432,6 +432,88 @@ app.get('/analytics/watchlist', requireRole('analyst', 'supervisor', 'policymake
  * reported per scope rather than aborting the run, because a national refresh that dies on one
  * state should still leave the other scopes correct.
  */
+/**
+ * Delete a whole forecast scope, ignoring StateName.
+ *
+ * Needed because the per-state refresh deletes only its own state's rows, which cannot clear
+ * two kinds of stale row: those written by an earlier national run before StateName existed
+ * (StateName is null, so no state filter matches them), and duplicates left when a request times
+ * out on the client but its inserts land afterwards. Rebuilding a scope from empty is cheap —
+ * a few hundred rows — and is the only way to be certain it holds exactly one row per unit.
+ */
+app.post('/admin/forecast/purge', adminGuard, async (req, res) => {
+  try {
+    const store = require('./lib/forecastStore');
+    const adminApp = catalyst.initialize(req, { scope: 'admin' });
+    const level = req.body && req.body.level === 'state' ? 'state' : 'district';
+    const routes = Object.values(SNAPSHOT_ROUTES);
+    const out = {};
+    for (const route of routes) {
+      const scope = store.scopeKey(route, { level, state: null });
+      out[route] = {
+        rows: await store.clearScope(adminApp, store.TABLE, scope),
+        meta: await store.clearScope(adminApp, store.META_TABLE, scope),
+      };
+    }
+    res.json({ level, purged: out });
+  } catch (e) {
+    res.status(500).json({ error: 'purge_failed', message: String((e && e.message) || e) });
+  }
+});
+
+/**
+ * Repair a scope: drop duplicate units, keeping the newest row per unit.
+ *
+ * An insert can fail at the client after succeeding at the server, so its retry writes a second
+ * copy. Exactly-once delivery is not available here, so the snapshot is made self-healing.
+ */
+app.post('/admin/forecast/dedupe', adminGuard, async (req, res) => {
+  try {
+    const store = require('./lib/forecastStore');
+    const adminApp = catalyst.initialize(req, { scope: 'admin' });
+    const level = req.body && req.body.level === 'state' ? 'state' : 'district';
+    const out = {};
+    for (const route of Object.values(SNAPSHOT_ROUTES)) {
+      out[route] = await store.dedupeScope(adminApp, store.scopeKey(route, { level, state: null }));
+    }
+    res.json({ level, result: out });
+  } catch (e) {
+    res.status(500).json({ error: 'dedupe_failed', message: String((e && e.message) || e) });
+  }
+});
+
+/**
+ * Store a forecast payload computed elsewhere.
+ *
+ * Why this exists. Assembling the national district-month panel and scoring it takes ~45s, past
+ * a Function's execution ceiling, which is why the in-Catalyst refresh has to work one state at a
+ * time. But a per-state model loses the thing that makes the gradient-boosted model strong —
+ * pooling across all 640 districts — and it shows: per-state scoring lands at MASE 0.95 against
+ * the pooled model's 0.79 on the same data.
+ *
+ * Nothing requires the scoring to happen inside Catalyst. This endpoint accepts a payload scored
+ * by the same engine package running anywhere, so the served forecast is the strong pooled one
+ * and the write costs a few hundred rows.
+ */
+app.post('/admin/forecast/put', adminGuard, async (req, res) => {
+  try {
+    const store = require('./lib/forecastStore');
+    const adminApp = catalyst.initialize(req, { scope: 'admin' });
+    const { route, payload } = req.body || {};
+    const level = req.body && req.body.level === 'state' ? 'state' : 'district';
+    if (!Object.values(SNAPSHOT_ROUTES).includes(route)) {
+      return res.status(400).json({ error: 'unknown route', route, allowed: Object.values(SNAPSHOT_ROUTES) });
+    }
+    if (!payload || !(Array.isArray(payload.forecasts) || Array.isArray(payload.alerts))) {
+      return res.status(400).json({ error: 'payload must carry forecasts[] or alerts[]' });
+    }
+    const result = await store.writeSnapshot(adminApp, route, { level, state: null }, payload);
+    res.json({ route, level, result });
+  } catch (e) {
+    res.status(500).json({ error: 'put_failed', message: String((e && e.message) || e) });
+  }
+});
+
 app.post('/admin/forecast/refresh', adminGuard, async (req, res) => {
   const started = Date.now();
   try {
