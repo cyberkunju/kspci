@@ -118,8 +118,8 @@ which is what lets the engine tell one Suresh Kumar from another.
 
 | Method | Path | Roles | Returns |
 |---|---|---|---|
-| POST | `/research` | any header role; the engine enforces the real rule | `{ id, state, mode, poll, stream, anchors, anchorNotes }`. Body: `subject`, `kind` (`person`\|`crime`\|`event`\|`organisation`\|`identifier`\|`topic`), `purpose` (**required**, ≥3 real words, recorded), `question?`, `mode?` (`quick`\|`standard`\|`deep`), `crimeNo?`. |
-| POST | `/research/sync` | as above | The complete result inside the request. Quick mode only, capped at 27 s so this function does not time out holding the connection. For WhatsApp and voice. |
+| POST | `/research` | any header role; the engine enforces the real rule | `{ id, state, mode, poll, stream, anchors, anchorNotes }`. Body: `subject`, `kind` (`person`\|`crime`\|`event`\|`organisation`\|`identifier`\|`topic`), `purpose` (**required**, ≥3 real words, recorded), `question?`, `mode?` (`standard`\|`deep`), `crimeNo?`, `callbackUrl?` + `callbackContext?` for channels that cannot poll. |
+| POST | `/research/callback` | internal (`x-research-callback-key`) | Where the engine POSTs a finished run. Dispatches on `context.channel` — today that means WhatsApp delivery. There is **no** `/research/sync`: it existed for a `quick` mode that read eight pages, which was answering a different question from the one the officer asked. Both were removed. |
 | GET | `/research/:id` | as above | `{ state, stage, message, events[], result? }`. `state` ∈ queued/running/done/failed/cancelled. |
 | DELETE | `/research/:id` | as above | cancels a running job |
 | GET | `/research/health` | any | engine reachability, which source tiers are live, whether a model is configured |

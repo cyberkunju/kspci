@@ -19,8 +19,14 @@ AppSail service — a container with no request ceiling — and the function sta
 there and polls.
 
 Everything else follows from that one fact: the run registry, the poll endpoint, the
-progress stream, and the sync endpoint that exists only for the callers (WhatsApp, voice)
-that cannot poll and are willing to accept quick mode's smaller budget in exchange.
+progress stream, and — for the callers that cannot poll at all, like WhatsApp — a callback
+the engine POSTs the finished run to when it is ready.
+
+There used to be a third mode, `quick`, sized to fit inside the function's 30-second
+ceiling, and a `POST /research/sync` that returned it inline. Both are gone. Ten pages read
+is a sample, not research, and an officer who asks what the open internet says about a
+person deserves the same answer whichever channel they asked from. WhatsApp now starts a
+real run and the findings arrive as a separate message.
 
 ---
 
@@ -513,7 +519,9 @@ Verified against the running service, not just against the image:
 | `role: policymaker` on a person | **403** `role` |
 | `GET /research/<unknown>` | **404** |
 | Full standard run, "Rameshwaram Cafe blast" | **35.2 s** — 44 candidates → 30 read → 29 stories, **13 confirmed / 1 probable / 15 unrelated**, 6 Kannada, 2 official, **19/19 claims span-verified**, cited summary naming Whitefield, the IED, and the NIA arrests |
-| `POST /research/sync` quick mode | **16.2 s**, comfortably inside the calling function's 27 s cap |
+| Full standard run, "Vipul Singh alias Khooni" | **39 s** — 165 candidates → 48 read, 45 readable, 2 probable, 9 Kannada, summary on two independent sources plus `[DB]` records |
+| Full deep run, same subject | **40 s** — 311 candidates → 120 read, 117 readable, **2 rounds**, 25 Kannada, 3 probable |
+| Attribution evaluation (`python -m app.eval_attribution`) | **0 of 11** false confirms, **0 of 6** wrongly dismissed, 4 of 5 graded confident |
 
 The GDELT out-of-range warning fired correctly in production for the 2024 incident date:
 *"GDELT indexes only the last three months, which does not reach 2024-03-01…"*

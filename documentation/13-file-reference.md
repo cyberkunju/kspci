@@ -30,10 +30,10 @@ A map of every meaningful file in the repository and what it does.
 | `lib/investigator.js` | `caseSupport` — 360° case dossier (record, entities, timeline, similar cases + disposition, LLM leads). |
 | `lib/ocr.js` | Catalyst Zia OCR (`extractOpticalCharacters`) → `structureFir` (GLM) → `insertIngestedCase` (Data Store). |
 | `lib/oauth.js` | Zoho QuickML GLM OAuth token (the active LLM auth path). |
-| `lib/research.js` | Bridge to the AppSail research engine: gathers the identity anchors from the Data Store, determines the subject's role from our own records, and proxies start/poll/cancel with the internal key. |
-| `lib/wa/*` | WhatsApp field-officer channel — see [15-whatsapp-field-bot.md](./15-whatsapp-field-bot.md). `tools.js` also hosts the `open_source_research` tool. |
-| `test/research.test.js` | Anchor-gathering, subject-role and proxy-failure tests (16 checks). |
-| `test/wa.test.js` | WhatsApp channel logic tests (79 checks). |
+| `lib/research.js` | Bridge to the AppSail research engine: gathers the identity anchors from the Data Store, summarises what our own records hold for the `[DB]` half of the report, determines the subject's role from our own records, and proxies start/poll/cancel with the internal key. |
+| `lib/wa/*` | WhatsApp field-officer channel — see [15-whatsapp-field-bot.md](./15-whatsapp-field-bot.md). `tools.js` hosts the `open_source_research` tool, which starts a run and ends the turn; `wa/research.js` formats and delivers the finished run when the engine calls back. |
+| `test/research.test.js` | Anchor-gathering, subject-role, proxy-failure, `[DB]` record-summary, WhatsApp tool and callback-delivery tests. |
+| `test/wa.test.js` | WhatsApp channel logic tests. |
 | `seed/*.csv` | Seed data bundled with the function (`Cases`, `Accused`, `Victims`, `Complainants`, `Arrests`, `CoAccusedLinks`, `OffenderRisk`, `FinancialTxns`). |
 
 ## `client/` — React SPA
@@ -102,22 +102,26 @@ Full design notes in [16-research-engine.md](./16-research-engine.md).
 |---|---|
 | `Dockerfile` | Custom OCI runtime for AppSail (`python:3.12-slim`, non-root uid 10001, uvicorn on `X_ZOHO_CATALYST_LISTEN_PORT`). |
 | `requirements.txt` | fastapi, uvicorn, httpx, pydantic, trafilatura, lxml, pypdf. |
-| `app/main.py` | HTTP surface: start / sync / poll / cancel / SSE stream / health, all behind `x-research-key`, failing closed. |
-| `app/config.py` | `Budget` (quick / standard / deep) and environment-driven `Settings`. |
+| `app/main.py` | HTTP surface: start / poll / cancel / SSE stream / callback / health, all behind `x-research-key`, failing closed. |
+| `app/config.py` | `Budget` (standard / deep) and environment-driven `Settings`. Records why there is no headless-browser tier. |
 | `app/models.py` | `Tier`, `Anchors` (with `strength()`), `Hit`, `Document`, `Story`, `Claim`, `Finding`. |
 | `app/governance.py` | Purpose binding, subject-type gate, role gate, daily cap, audit line, disclaimer. |
 | `app/plan.py` | Name variants, query neutralisation, anchor-driven query set, GDELT plan + absolute date window. |
-| `app/tiers.py` | 27 official domains, 16 Kannada outlets, and the 11 on-site search endpoints. |
-| `app/sources.py` | Discovery adapters: GDELT (rate-limited, cooldown), Wikipedia, Wikidata, Wayback, on-site search, SearXNG, Mojeek, Marginalia. |
-| `app/net.py` | Fetcher with SSRF defence on every redirect hop, robots, per-host limits, rate limiter. |
+| `app/tiers.py` | 27 official domains, 16 Kannada and 21 Hindi outlets, and the 9 on-site search endpoints — 6 through Quintype's JSON API, 3 by reading the results page. |
+| `app/sources.py` | Discovery adapters: GDELT (rate-limited, cooldown), Bing News RSS across three markets, the general-web tier, on-site search, Wikipedia in three languages, Wikidata, Wayback, SearXNG, Mojeek, Marginalia. |
+| `app/net.py` | Fetcher with SSRF defence on every redirect hop (including IPv4-mapped and CGNAT addresses and a cloud-metadata floor), robots, per-host limits, and per-host 429 penalties read from `Retry-After`. |
 | `app/extract.py` | Trafilatura article extraction, PDF text, script-based language, prompt-injection screen. |
 | `app/cluster.py` | Simhash clustering so syndication counts once; containment for truncated copies. |
 | `app/attribute.py` | The attribution bands and the reasons behind each, person- and topic-shaped scoring. |
 | `app/claims.py` | Span-verified claim extraction and marker-validated synthesis. |
 | `app/llm.py` | One model interface: `openai` / `quickml` / `none`, with `none` as a supported mode. |
-| `app/pipeline.py` | The run: deadline, stages, degradation, findings and counts. |
+| `app/pipeline.py` | The run: deadline, stages, degradation, cross-encoder read ordering, deep mode's lead-following second round, findings and counts. |
 | `app/runs.py` | In-memory run registry with TTL, eviction and a concurrency gate. |
-| `app/selftest.py`, `selftest_reason.py`, `selftest_claims.py`, `selftest_pipeline.py` | Four offline suites — extraction, attribution reasoning, claims, and the whole pipeline plus the HTTP surface. |
+| `app/fuse.py` | Weighted reciprocal-rank fusion across tiers, with field-level merging of duplicates. |
+| `app/verdict.py` | Per-publisher record of whether a static fetch ever yields article text, used to order the read budget and to explain an unreadable page. |
+| `app/rerank.py` | Cohere Rerank v4.0 Pro — which ~48 of ~165 candidates are worth reading. Falls back to lexical ordering. |
+| `app/selftest.py`, `selftest_reason.py`, `selftest_claims.py`, `selftest_pipeline.py`, `selftest_fuse.py` | Five offline suites — extraction and network policy, attribution reasoning, claims, fusion and publisher verdicts, and the whole pipeline plus the HTTP surface. |
+| `app/eval_attribution.py` | The labelled evaluation: 17 hand-labelled documents, gating false confirms and wrongly-dismissed sources at zero. The only suite that asks whether the answer is right. |
 
 ## `documentation/` — this documentation set
 
