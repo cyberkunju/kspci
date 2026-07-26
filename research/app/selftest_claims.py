@@ -12,7 +12,8 @@ from __future__ import annotations
 import sys
 
 from .attribute import confidence_note
-from .claims import _PROTECTED, admitted, marker_map, verify_span
+from .claims import (_language_rule, _write_now, admitted, marker_map, protected,
+                     verify_span)
 from .cluster import cluster
 from .models import Claim, Document, Story, Tier
 
@@ -62,11 +63,50 @@ def main() -> None:
                    "a Lingayat businessman from the district",
                    "the man, a Muslim trader, was questioned",
                    "the BJP MLA denied the allegation"]:
-        check(f"excluded: {phrase[:40]}", bool(_PROTECTED.search(phrase)))
+        check(f"excluded: {phrase[:40]}", protected(phrase))
     for phrase in ["the accused was produced before a magistrate",
                    "a case was registered under section 318",
                    "the complainant reported a loss of forty thousand rupees"]:
-        check(f"not flagged: {phrase[:40]}", not _PROTECTED.search(phrase))
+        check(f"not flagged: {phrase[:40]}", not protected(phrase))
+
+    # Half of what this engine reads is Kannada or Hindi, and claims are quoted in the
+    # language they were published in. An English-only guard was screening none of them.
+    for phrase in ["ಆರೋಪಿಯ ಜಾತಿಯನ್ನು ವರದಿ ಉಲ್ಲೇಖಿಸಿದೆ",
+                   "ಆರೋಪಿ ಬಿಜೆಪಿ ಕಾರ್ಯಕರ್ತ ಎಂದು ಹೇಳಲಾಗಿದೆ",
+                   "अभियुक्त की जाति का उल्लेख किया गया",
+                   "आरोपी एक मुस्लिम व्यापारी है"]:
+        check(f"excluded in script: {phrase[:28]}", protected(phrase))
+    for phrase in ["ಮೈಸೂರಿನಲ್ಲಿ ಒಬ್ಬ ವ್ಯಕ್ತಿ ಬಂಧನ",
+                   "धर्मस्थल में एक व्यक्ति गिरफ्तार हुआ",
+                   "ಪ್ರಕರಣ ದೇವರಾಜ ಠಾಣೆಯಲ್ಲಿ ದಾಖಲಾಗಿದೆ"]:
+        check(f"not flagged in script: {phrase[:28]}", not protected(phrase))
+
+    # A cited publisher's name is not a claim about anybody. The Hindu is one of the
+    # largest sources in the registry, and "The Hindu reported the arrest" used to have
+    # the entire summary discarded.
+    check("a cited outlet's name is not a protected attribute",
+          not protected("The Hindu reported the arrest of the accused.", ["thehindu.com"]))
+    check("nor when the outlet arrives as its own name",
+          not protected("The Hindu reported it.", ["The Hindu"]))
+    check("but the word still fails when it is about a person",
+          protected("The Hindu says a Muslim man was named.", ["thehindu.com"]))
+    check("and the exemption needs the outlet to have been cited",
+          protected("A Hindu trader was questioned.", ["ndtv.com"]))
+
+    print("\n— summary language —")
+    check("Kannada is instructed explicitly", "KANNADA" in _language_rule("kn"))
+    check("Hindi is instructed explicitly", "HINDI" in _language_rule("hi"))
+    check("names and numbers are protected from translation",
+          "transliterate" in _language_rule("kn"))
+    check("English adds no instruction", _language_rule("en") == "")
+    check("an unknown code falls back to English rather than failing",
+          _language_rule("xx") == "" and _language_rule("") == "")
+    # The system prompt alone did not hold: a live Kannada run came back in English until
+    # the closing instruction named the language too.
+    check("the closing instruction repeats the language",
+          _write_now("kn").endswith("in Kannada."), _write_now("kn"))
+    check("and says nothing extra for English",
+          _write_now("en").strip() == "Write the summary now.", _write_now("en"))
 
     print("\n— admission —")
 

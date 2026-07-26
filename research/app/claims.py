@@ -23,6 +23,7 @@ Two smaller rules that matter as much in this domain:
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 
 from . import llm
 from .attribute import admissible, confidence_note
@@ -37,7 +38,103 @@ _PROTECTED = re.compile(
     r"\bsc/st\b|obc|muslim|hindu|christian|sikh|jain|buddhist|religion|communal|"
     r"bjp|congress|jds|rss|political\s+affiliation)\b", re.I)
 
-_SENT = re.compile(r"(?<=[.!?])\s+")
+#: The same categories in Kannada and Devanagari.
+#:
+#: Not a nicety. This guard also screens CLAIMS, and a claim is quoted in the language its
+#: source published in — roughly half our sources are Kannada or Hindi, so until now a
+#: vernacular article naming a man's caste passed a filter that exists precisely to stop
+#: that. Writing the summary in the officer's language would have widened the same hole.
+#:
+#: No trailing word boundary: these languages inflect by suffix (ಜಾತಿ → ಜಾತಿಯ, ಜಾತಿಗೆ), so a
+#: `\b` at the end would match only the bare stem. Stems that collide with common place
+#: and personal names are deliberately absent — bare ಧರ್ಮ / धर्म would fire on
+#: Dharmasthala and on anyone called Dharmendra — and the specific community names below
+#: cover the cases those words were there for.
+_PROTECTED_INDIC = re.compile(
+    "ಜಾತಿ|ದಲಿತ|ಬ್ರಾಹ್ಮಣ|ಲಿಂಗಾಯತ|ಒಕ್ಕಲಿಗ|ಕುರುಬ|ಪರಿಶಿಷ್ಟ|ಮುಸ್ಲಿ|ಹಿಂದೂ|ಕ್ರಿಶ್ಚಿಯನ್|ಸಿಖ್|ಜೈನ|"
+    "ಧಾರ್ಮಿಕ|ಕೋಮು|ಬಿಜೆಪಿ|ಕಾಂಗ್ರೆಸ್|ಜೆಡಿಎಸ್|"
+    "जाति|जातीय|दलित|ब्राह्मण|लिंगायत|वोक्कालिग|कुरुबा|अनुसूचित|मुस्लि|हिंदू|हिन्दू|ईसाई|"
+    "सिख|जैन|बौद्ध|धार्मिक|सांप्रदायिक|भाजपा|कांग्रेस|आरएसएस")
+
+
+#: Publisher names that contain one of the words above, with the surface forms a model
+#: actually writes. `doc.outlet` is a registrable domain on most documents and the site's
+#: own name on the ones that declare it, so both are masked.
+#:
+#: This is a bug fix, not a refinement. *The Hindu* is one of the largest sources in our
+#: own registry, and a summary reading "The Hindu reported the arrest" tripped `hindu` and
+#: was discarded whole — replaced by a warning about a protected attribute it had never
+#: mentioned. The table is short because the collision is rare and specific; a generic
+#: rule that stripped every cited outlet could not produce "The Hindu" from
+#: "thehindu.com" anyway, and guessing at surface forms would start excusing real hits.
+#: ponytail: add a row when a publisher's name collides, rather than loosening the regex.
+_OUTLET_SURFACE: dict[str, tuple[str, ...]] = {
+    "thehindu.com": ("the hindu", "thehindu.com", "thehindu"),
+    "hindutamil.in": ("hindu tamil", "hindutamil.in"),
+}
+
+
+def protected(text: str, outlets: Iterable[str] = ()) -> bool:
+    """Does this text name a caste, religion or political affiliation?
+
+    The publishers this run actually cited are masked out first: an outlet's name is not
+    a claim about anybody. Only cited outlets, so the exemption cannot be used to smuggle
+    the word in — a summary that says "Hindu" without having read The Hindu still fails.
+    """
+    probe = text
+    for name in {str(o).strip().lower() for o in outlets if o}:
+        for surface in (name, *_OUTLET_SURFACE.get(name, ())):
+            if len(surface) > 3:
+                probe = re.sub(re.escape(surface), " ", probe, flags=re.I)
+    return bool(_PROTECTED.search(probe) or _PROTECTED_INDIC.search(probe))
+
+
+#: Sentence break. `।` is the Devanagari full stop, so a Hindi summary was one long
+#: sentence to the unmarked-assertion check below and never flagged anything.
+_SENT = re.compile(r"(?<=[.!?।])\s+")
+
+#: How to name the officer's language to the model. Anything else falls back to English,
+#: which is the safe direction: an unfamiliar code produces a report the officer can read
+#: with a translator, not an empty one.
+_LANGUAGE_NAME = {"en": "English", "kn": "Kannada", "hi": "Hindi"}
+
+
+def _language_name(reply_language: str) -> str:
+    """The officer's language, or '' for English and anything unrecognised."""
+    name = _LANGUAGE_NAME.get(str(reply_language or "").lower()[:2], "")
+    return "" if name == "English" else name
+
+
+def _language_rule(reply_language: str) -> str:
+    """The system-prompt half of the language instruction, and its guard rails.
+
+    Names, case numbers, dates and URLs stay verbatim. A transliterated name is not the
+    name that appears in the file, and an officer who copies it into a search finds
+    nothing — which is worse than the report being in English.
+    """
+    name = _language_name(reply_language)
+    if not name:
+        return ""
+    return (
+        f"\n\nOUTPUT LANGUAGE: {name.upper()}. Write the entire summary in {name}. Every "
+        f"rule above still applies unchanged. Keep source markers ([S1], [DB]), numbers, "
+        f"dates, case and FIR numbers, section numbers and URLs exactly as given. Do NOT "
+        f"transliterate or translate a person's name, a place name or an outlet's name — "
+        f"write them in the script they were given in, because the officer will search "
+        f"our records for them.")
+
+
+def _write_now(reply_language: str, what: str = "summary") -> str:
+    """The closing line of the user prompt.
+
+    The language belongs here as well as in the system prompt, and that is not
+    belt-and-braces. With the instruction only in the system prompt — one bullet at the
+    end of ten — a live run asked for Kannada came back entirely in English. Restating it
+    in the final sentence, which is the instruction the model acts on, is what made it
+    hold.
+    """
+    name = _language_name(reply_language)
+    return f"\n\nWrite the {what} now" + (f", in {name}." if name else ".")
 
 
 def _normalise_for_match(s: str) -> str:
@@ -165,7 +262,7 @@ async def _extract_batch(stories: list[Story], *, max_chars: int = 5000) -> list
         c = Claim(text=text, span=span, story_id=story.id, document_url=doc.final_url,
                   tier=doc.tier, date=doc.published)
         c.verified = verify_span(span, doc.text)
-        if _PROTECTED.search(text):
+        if protected(text, story.outlets):
             c.excluded = "withheld: describes a protected attribute"
         elif not c.verified:
             # The signature failure: a fluent claim whose quote is not in the document.
@@ -256,7 +353,7 @@ _COVERAGE_SYSTEM = (
 
 
 async def synthesise(stories: list[Story], claims: list[Claim], *, subject: str,
-                     question: str = "",
+                     question: str = "", reply_language: str = "en",
                      records: list[str] | None = None) -> tuple[str, list[str]]:
     """Write the cited summary. Returns (text, warnings).
 
@@ -288,8 +385,9 @@ async def synthesise(stories: list[Story], claims: list[Claim], *, subject: str,
               + (f"QUESTION: {question}\n" if question else "")
               + _records_block(records or [])
               + "\nOPEN-SOURCE CLAIMS:\n" + "\n".join(lines)
-              + "\n\nWrite the summary now.")
-    text = await llm.chat(_SUMMARY_SYSTEM, prompt, max_tokens=700, temperature=0.1)
+              + _write_now(reply_language))
+    text = await llm.chat(_SUMMARY_SYSTEM + _language_rule(reply_language), prompt,
+                          max_tokens=700, temperature=0.1)
     if not text:
         return "", ["the model did not return a summary; the source list is unaffected"]
 
@@ -322,7 +420,8 @@ async def synthesise(stories: list[Story], claims: list[Claim], *, subject: str,
     if unmarked:
         warnings.append(f"{len(unmarked)} summary sentence(s) carry no source marker")
 
-    if _PROTECTED.search(text):
+    cited = {o for s in stories for o in s.outlets}
+    if protected(text, cited):
         text = ""
         warnings.append("summary withheld: it referenced a protected attribute")
 
@@ -331,6 +430,7 @@ async def synthesise(stories: list[Story], claims: list[Claim], *, subject: str,
 
 async def synthesise_coverage(stories: list[Story], *, subject: str, anchors=None,
                              aliases: list[str] | None = None,
+                             reply_language: str = "en",
                              records: list[str] | None = None) -> tuple[str, list[str]]:
     """The note written when nothing retrieved could be tied to the subject.
 
@@ -363,11 +463,12 @@ async def synthesise_coverage(stories: list[Story], *, subject: str, anchors=Non
     prompt = ("SEARCHED FOR:\n" + "\n".join(searched)
               + _records_block(records or [])
               + "\n\nRETRIEVED COVERAGE (none of it attributable to the subject):\n"
-              + "\n".join(listed) + "\n\nWrite the note now.")
-    text = await llm.chat(_COVERAGE_SYSTEM, prompt, max_tokens=400, temperature=0.1)
+              + "\n".join(listed) + _write_now(reply_language, "note"))
+    text = await llm.chat(_COVERAGE_SYSTEM + _language_rule(reply_language), prompt,
+                          max_tokens=400, temperature=0.1)
     if not text:
         return "", ["the model did not return a coverage note"]
-    if _PROTECTED.search(text):
+    if protected(text, {o for s in stories for o in s.outlets}):
         return "", ["coverage note withheld: it referenced a protected attribute"]
     return text.strip(), []
 
