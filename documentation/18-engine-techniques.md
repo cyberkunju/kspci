@@ -29,6 +29,7 @@ KSP's legal team, not a `git clone`.
 | [Firecrawl](https://github.com/firecrawl/firecrawl) | AGPL-3.0 (SDKs MIT) | per-host "will a cheap fetch work" verdict | any code; their Node/Redis/worker/proxy infrastructure; **the headless-browser engine — probed and rejected, see §3** |
 | [SearXNG](https://github.com/searxng/searxng) | AGPL-3.0 | weighted reciprocal-rank fusion across sources; typed failure classes driving per-source suspension; duplicate merging that keeps the best fields | any code; its scraped-SERP discovery model |
 | Perplexity | closed | published/standard retrieval technique only — see below | nothing else exists to take |
+| [Hermes Agent](https://github.com/NousResearch/hermes-agent) | **MIT** | connect-time SSRF posture: judge resolved addresses not input literals, an always-blocked metadata floor, IPv4-mapped and CGNAT handling; never retry a 429; re-validate on every read path | its browser subsystem, its provider plugin layer, its content store — see §7 |
 
 ---
 
@@ -306,6 +307,106 @@ So the choice was a paid index or no general web at all, and `available()` repor
 false` rather than letting a press-only run look like an internet-wide one.
 
 ---
+
+## 7. Hermes Agent — what it actually is, and what we took
+
+Read because it was described as having a large crawling engine. **It has no crawler.**
+Worth recording precisely, because the expectation is a natural one.
+
+Its fetching is delegated to paid vendors (Firecrawl by default, then Tavily, Exa,
+Parallel). Its browser automation shells out to an external Node CLI — there is no
+Playwright import in the Python at all. Its own hosted service, `managed_tool_gateway.py`,
+resolves to `firecrawl-gateway.nousresearch.com`: a billing and auth proxy in front of
+Firecrawl for their subscribers, not an index. Of eight search providers exactly one is
+keyless, and it works by scraping DuckDuckGo through a community package. Their SearXNG
+and DuckDuckGo "skills" are a 22-line and a 28-line bash script.
+
+Verified rather than assumed, by grep across the whole subsystem: **zero** occurrences of
+`robots`, `crawl-delay`, `page.route`, `abort(`, `networkidle`, `domcontentloaded` or
+`resource_type`. No robots handling, no rate limiting, no per-host concurrency, no
+backoff, no 429 handling, no resource blocking, no wait strategy, no article extraction,
+no PDF. The 8,088 lines of browser code are roughly 600 on resolving five backends, 500 on
+one alternative engine's fallback, 450 on orphan-process reaping, 700 on SSRF guards. Real
+browser driving is a few hundred lines.
+
+Two findings from it are load-bearing for this engine.
+
+**It reinforces the render-tier rejection from a new direction.** A well-funded agent
+framework took browser automation seriously across five backends and still has no resource
+blocking and no wait strategy, because for interactive control neither matters. Its browser
+produces an accessibility tree for clicking things, not article text. Their bot-detection
+posture is also ours, reached independently: match a handful of substrings in the page title
+(`captcha`, `just a moment`, `cloudflare`), report it, and accept that some sites are
+unavoidable. No CAPTCHA solving, no fingerprint patching in their own code.
+
+**Its SSRF work is better than ours was, in three specific ways** — all now fixed in
+`net.py`, all now tested:
+
+| Their technique | What it fixed here |
+|---|---|
+| Validate the ADDRESSES DNS RESOLVES TO, never the input literal | We already did this. It is why obfuscated forms like `2130706433` and `0177.0.0.1` were never a hole. |
+| Explicitly enumerate `::ffff:` duplicates AND unwrap `ipv4_mapped` | Real gap. Python treats `::ffff:169.254.169.254` as a distinct object from the bare IPv4, so neither `is_private` nor our metadata set matched it — the cloud metadata endpoint was reachable by spelling it differently. |
+| Block RFC 6598 CGNAT `100.64.0.0/10` explicitly | Real gap. Python reports that range as neither private nor global, so every `is_private` check missed it, and it is where Tailscale, WireGuard and carrier NAT live. |
+| A metadata floor evaluated before any config toggle | Adopted, and widened: ECS task metadata at `169.254.170.2` hands out task IAM credentials, plus the Azure wire server and AWS IPv6 metadata. `metadata.google.internal` is refused on the NAME before DNS, because resolving it first means trusting the resolver to agree with us. |
+
+**And their 429 discipline, which fixed a bug of ours.** Their `_http.py` raises on a 429
+immediately and never retries, with the reasoning stated: asking again when the upstream
+says you are over quota only wastes time. Ours guessed a flat 180-second cooldown, so each
+run re-asked GDELT while the previous penalty was still open and earned a longer one —
+which is why GDELT was reported as failed in every run of a whole testing session. Now
+`Retry-After` is parsed (seconds or HTTP-date, clamped), the window is recorded per host and
+outlives the run, and it is checked before every request and on every redirect hop.
+
+**What we did not take, and why.** Their provider plugin layer duplicates its selection
+logic in two files with divergent preference orders and a `plugin.yaml` capability field
+that nothing parses. Their default extract path is sequential — five URLs at a 60-second
+timeout each, verified on `main`. Their search schema has no date field at all, so
+publication dates from Brave, Tavily and Exa are discarded; copying that would have broken
+our timeline. They have no runtime fallback between providers, which with nine tiers would
+be fatal for us. And their content store has no TTL, size cap or eviction, which we cannot
+have because we persist nothing.
+
+**A source list we investigated and rejected.** Their `osint-investigation` skill ships 16
+stdlib-only keyless fetchers, and three looked directly applicable to financial-crime work:
+OFAC SDN, ICIJ Offshore Leaks, OpenCorporates. Reading the endpoints killed all three for a
+real-time engine. ICIJ is a 69.7 MB bulk ZIP. OFAC is three bulk CSVs behind expiring
+signed S3 redirects, not a query API. OpenCorporates needs a token, with HTML scraping as
+the alternative. All three want a periodic download and a persistent index, which is the
+one thing this engine deliberately does not have. Worth revisiting only if the no-datastore
+constraint ever changes.
+
+The lesson from reading it twice over: what looks like an engine is often an integration,
+and the endpoint is the only thing that tells you which. Two recommendations in this study
+were reversed by fetching the endpoint rather than reading the file list.
+
+## 8. Following leads — deep mode's second round
+
+`Budget.max_rounds` was 2 for `deep`, documented as "follows leads discovered in round 1",
+and referenced by nothing outside test fixtures. `deep` was `standard` with a bigger fetch
+budget. What it does now, and the three constraints that are enforced in code rather than
+trusted to the prompt — each because of something a live run did:
+
+- **Anchored.** A lead must name the subject. The documents we read also name the
+  investigating officer, the victim, and whoever was quoted; a follow-up on any of them
+  spends the remaining budget researching the wrong person.
+- **Additive.** A lead must contribute a term we did not already hold. The first live deep
+  run returned six leads and every one was a rephrasing of the original query
+  ("…Baghpat encounter details", "…police encounter details Baghpat"). They cost 110 extra
+  fetches and produced no new attributable source. A round that only rephrases is worse than
+  no round, because it looks like work.
+- **Budgeted.** Round one takes 70% of `max_fetch` in a multi-round mode. This is why
+  `max_rounds` could never have worked: round one read all 120 pages and left round two with
+  zero. 70 rather than 50 because round one is what finds the leads, so it must still be a
+  full-strength search on its own.
+
+Round two skips GDELT — its penalty window outlives the run and round one has already spent
+what this run can afford. Everything after discovery is unchanged: new documents join the
+same clustering and grading, and everything is re-graded together, because a second-round
+report may be the third outlet on a first-round story and corroboration is counted per story.
+
+After the fixes: 72 s, 241 candidates against 133, 119 of 120 pages readable, Kannada
+sources 18 → 28, and the leads were *Sushil Moonch gang*, *Bhabhisa village Shamli*,
+*UP STF Meerut*, *50,000 reward*.
 
 ## What none of them do, and why we still exist
 
