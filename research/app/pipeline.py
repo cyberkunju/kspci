@@ -17,6 +17,7 @@ source list; no GDELT means less breadth, named in the report. Nothing cascades.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
@@ -99,7 +100,8 @@ async def _emit(progress: Progress | None, stage: str, message: str, **data) -> 
 
 async def _discover(f: Fetcher, queries: list[Query], gdelt_plan: GdeltPlan,
                     budget: Budget, dl: Deadline,
-                    progress: Progress | None) -> tuple[list[Hit], list[str], dict, list[str]]:
+                    progress: Progress | None,
+                    include_gdelt: bool = True) -> tuple[list[Hit], list[str], dict, list[str]]:
     """Run every query against its routes, concurrently, and merge.
 
     GDELT is handled apart from the rest because it is rate-limited to one call every
@@ -126,8 +128,13 @@ async def _discover(f: Fetcher, queries: list[Query], gdelt_plan: GdeltPlan,
         queries = [sources.gdelt_query(gdelt_plan.must)]
         if gdelt_plan.any_of:
             queries.append(sources.gdelt_query(gdelt_plan.must, gdelt_plan.any_of))
-        for a in gdelt_plan.aliases:
-            queries.append(sources.gdelt_query([a]))
+        # Alias legs only in deep mode. GDELT permits one request every five seconds and
+        # enforces it with a penalty window that outlives the run, so each extra leg
+        # costs 5.5s of a 90s budget AND raises the odds of losing the tier entirely for
+        # the next run too. Two legs is the honest ration for `standard`; the aliases are
+        # already covered by the news-feed and on-site tiers, which have no such limit.
+        if budget.max_rounds > 1:
+            queries.extend(sources.gdelt_query([a]) for a in gdelt_plan.aliases)
 
         out: list[Hit] = []
         for q in queries:
@@ -171,7 +178,12 @@ async def _discover(f: Fetcher, queries: list[Query], gdelt_plan: GdeltPlan,
     legs: list[Awaitable[list[Hit]]] = []
     # Order matters from here on: each leg's own ranking is the signal rank fusion reads,
     # so legs are kept as separate ordered lists rather than concatenated.
-    if "gdelt" in {r for q in queries for r in q.routes} or True:
+    #
+    # `include_gdelt` is False for a second round. GDELT's rate limit is one request
+    # every five seconds with a penalty window that outlives the run, and round one has
+    # already spent the calls this run can afford; asking again on follow-up queries
+    # would buy a few extra records at the price of losing the tier for the next run.
+    if include_gdelt:
         legs.append(gdelt_leg())
 
     # On-site search is the most reliable tier, so it gets the strongest queries. It is
@@ -371,6 +383,96 @@ async def _rank_candidates(hits: list[Hit], terms: list[str], *, subject: str,
     return ranked, ""
 
 
+# ── following leads (deep mode's second round) ──────────────────────────────────
+
+_LEAD_SYSTEM = """You plan follow-up web searches for a police researcher.
+
+You are given a research subject and the headlines of documents already found that are
+probably about that subject. Propose follow-up search queries that would find MORE about
+the SAME subject, using specifics the first round revealed — a gang or organisation named
+alongside them, a co-accused, a place, a case or FIR number, an employer, an alias not
+already known.
+
+Rules:
+- Every query must be anchored to this subject: include the subject's name or a known alias.
+- Every query must ALSO introduce at least one NEW specific term that came from the findings
+  and is not already in the subject line, the known names, or the place. A gang, a village,
+  a co-accused, a police station, a case number, an employer.
+- Do not restate the subject with different generic words. "Vipul Singh Khooni Baghpat
+  encounter details" adds nothing and will be rejected. "Vipul Singh Sushil Moonch gang" and
+  "Khooni Bhabhisa village Shamli" are useful.
+- No boolean operators, no quotes, no site: filters. Plain keyword queries.
+- If the findings reveal nothing new and specific, return an empty list. An empty list is a
+  correct answer and is far better than a list of rephrasings.
+
+Reply with only a JSON array of strings, at most 6."""
+
+
+async def _lead_queries(subject: str, anchors: Anchors, stories: list[Story], *,
+                        limit: int = 6) -> list[str]:
+    """Ask the model what round one revealed that is worth searching for.
+
+    This is what `Budget.max_rounds` was always supposed to drive. It was set to 2 for
+    `deep` mode, documented as "follows leads discovered in round 1", and never read by
+    anything — so `deep` was `standard` with a bigger fetch budget. This closes that.
+
+    Only stories attributed at `probable` or better are shown to the model. Feeding it the
+    unrelated ones is how a second round wanders off to research whoever else happened to
+    be in the news that day, which is worse than not having a second round at all.
+    """
+    if not llm.available():
+        return []
+    strong = [s for s in stories
+              if ATTRIBUTION_RANK[s.attribution] >= ATTRIBUTION_RANK["probable"]]
+    if not strong:
+        return []
+    lines = []
+    for s in strong[:8]:
+        d = s.lead
+        snippet = " ".join((d.text or "")[:300].split())
+        lines.append(f"- {d.title or d.url} ({d.outlet}, {d.published or 'undated'}): {snippet}")
+    known = ", ".join([subject, *[n for n in anchors.names if n.lower() != subject.lower()]])
+    place = ", ".join(x for x in (anchors.district, anchors.state) if x)
+    user = (f"SUBJECT: {subject}\nKNOWN NAMES: {known}\n"
+            + (f"PLACE: {place}\n" if place else "")
+            + "\nFOUND SO FAR:\n" + "\n".join(lines))
+    raw = await llm.chat_json(_LEAD_SYSTEM, user, max_tokens=400)
+
+    # Two conditions, both enforced here rather than trusted to the prompt.
+    #
+    # ANCHORED: the query must name the subject. A lead that does not is a lead about
+    # somebody else — the investigating officer, the victim, a politician quoted in the
+    # same report — and chasing it spends the remaining fetch budget on the wrong person.
+    #
+    # ADDITIVE: the query must contribute a term we did not already have. Measured, not
+    # assumed: the first live deep run produced six leads and every one was a rephrasing
+    # of the original query ("...Baghpat encounter details", "...police encounter details
+    # Baghpat"). They cost 110 extra candidate fetches and produced no new attributable
+    # source. A round that only rephrases is worse than no round, because it looks busy.
+    kept: set[str] = set()
+    known_tokens = {t.lower() for t in re.findall(r"\w{3,}", f"{known} {place} {subject}")}
+    generic = {"encounter", "details", "case", "cases", "news", "report", "police",
+               "arrest", "arrested", "killed", "wanted", "criminal", "shootout", "gang"}
+    out: list[str] = []
+    for item in llm.as_list(raw):
+        text = " ".join(str(item).split()) if isinstance(item, str) else ""
+        if isinstance(item, dict):
+            text = " ".join(str(item.get("query") or item.get("text") or "").split())
+        text = text[:160]
+        if len(text) < 8 or text in kept:
+            continue
+        tokens = {t.lower() for t in re.findall(r"\w{3,}", text)}
+        if not (tokens & known_tokens):
+            continue                                  # not anchored to the subject
+        if not (tokens - known_tokens - generic):
+            continue                                  # adds nothing we did not have
+        kept.add(text)
+        out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
 # ── retrieval ───────────────────────────────────────────────────────────────────
 
 async def _retrieve(f: Fetcher, hits: list[Hit], budget: Budget, dl: Deadline,
@@ -476,7 +578,14 @@ async def run(*, subject: str, kind: str, anchors: Anchors, budget: Budget,
             if rank_warning:
                 out.warnings.append(rank_warning)
             reranked = sum(1 for h in ordered if h.extra.get("rerank_score") is not None)
-            docs = await _retrieve(f, ordered, budget, dl, progress)
+            # In a multi-round mode, round one may not spend the whole fetch budget —
+            # otherwise there is nothing left to follow a lead with, which is exactly why
+            # `max_rounds` sat unused: deep mode read all 120 pages in round one and then
+            # had 0 reads for round two. 70/30 because round one is what finds the leads,
+            # so it must still be a full-strength search on its own.
+            first = budget if budget.max_rounds < 2 else Budget(
+                **{**budget.__dict__, "max_fetch": max(8, int(budget.max_fetch * 0.7))})
+            docs = await _retrieve(f, ordered, first, dl, progress)
         out.stages.append("retrieve")
         readable = [d for d in docs if d.ok]
         await _emit(progress, "retrieve", f"{len(readable)} of {len(docs)} readable",
@@ -494,11 +603,64 @@ async def run(*, subject: str, kind: str, anchors: Anchors, budget: Budget,
                     stories=len(stories),
                     confirmed=sum(1 for s in stories if s.attribution == "confirmed"))
 
+        # 5b. FOLLOW LEADS — deep mode only, and only when round one found something to
+        # follow. This is what `Budget.max_rounds` exists for. Everything after it is
+        # unchanged: the new documents join the same clustering and grading, so a
+        # second-round source is held to exactly the same standard as a first-round one.
+        rounds = 1
+        remaining_fetch = budget.max_fetch - len(docs)
+        if budget.max_rounds > 1 and remaining_fetch > 4 and dl.remaining > 45:
+            leads = await _lead_queries(subject, anchors, stories)
+            if leads:
+                rounds = 2
+                out.queries.extend({"text": t, "purpose": "lead", "pins": []} for t in leads)
+                await _emit(progress, "discover", f"following {len(leads)} leads",
+                            leads=len(leads))
+                lead_qs = [Query(text=t, purpose="lead",
+                                 routes=("onsite", "bingnews", "web")) for t in leads]
+                more, more_failed, more_used, _ = await _discover(
+                    f, lead_qs, gdelt_plan, budget, dl, progress, include_gdelt=False)
+                for name, n in more_used.items():
+                    used[name] = used.get(name, 0) + n
+                out.sources_used = used
+                for note in more_failed:
+                    if note not in out.sources_failed:
+                        out.sources_failed.append(note)
+                seen = {d.url for d in docs} | {d.final_url for d in docs if d.final_url}
+                fresh = [h for h in more if h.url not in seen]
+                if fresh:
+                    ordered2, warn2 = await _rank_candidates(
+                        fresh, terms, subject=subject, anchors=anchors,
+                        question=question, dl=dl, progress=progress)
+                    if warn2:
+                        out.warnings.append(warn2)
+                    round2 = Budget(**{**budget.__dict__, "max_fetch": remaining_fetch})
+                    extra = await _retrieve(f, ordered2, round2, dl, progress)
+                    if extra:
+                        docs.extend(extra)
+                        hits = hits + fresh
+                        reranked += sum(1 for h in ordered2
+                                        if h.extra.get("rerank_score") is not None)
+                        # Re-cluster and re-grade EVERYTHING, not just the new documents:
+                        # a second-round report may be the third outlet on a first-round
+                        # story, and corroboration is counted per story, not per round.
+                        stories = attribute.apply(
+                            cluster.cluster(docs), anchors, subject=subject,
+                            namesakes=len(namesakes), kind=kind)
+                        out.stages.append("follow_leads")
+                        await _emit(progress, "attribute",
+                                    f"{len(stories)} stories after following leads",
+                                    stories=len(stories))
+                else:
+                    out.warnings.append(
+                        "the leads found in round one returned only sources already read")
+
         # The source list is built now, BEFORE any model work. It is the part the
         # officer can act on, so it must exist even if everything after this fails.
         out.findings = _findings(stories, docs)
         out.counts = _counts(stories, docs, hits)
         out.counts["reranked"] = reranked
+        out.counts["rounds"] = rounds
 
         # 6-7. CLAIMS AND SUMMARY — the optional half.
         admitted, refused = claims_mod.admitted(stories)

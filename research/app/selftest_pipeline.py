@@ -404,12 +404,69 @@ def test_api() -> None:
           "OUR RECORDS" in _records_block(["x"]) and "[DB]" in _records_block(["x"]))
 
 
+def test_leads() -> None:
+    """Deep mode's second round: what it will and will not chase.
+
+    The risk in a second round is not that it finds nothing — it is that it wanders. A
+    document about our subject also names the investigating officer, the victim and three
+    unrelated politicians, and a follow-up query about any of them spends the remaining
+    fetch budget researching the wrong person.
+    """
+    head("following leads")
+    from . import llm
+    from .models import Document, Story
+
+    doc = Document(url="https://thehindu.com/a", final_url="https://thehindu.com/a",
+                   title="Vipul Singh alias Khooni killed; Sushil Moonch gang link probed",
+                   text="Police said Vipul Singh was a member of the Sushil Moonch gang.",
+                   outlet="thehindu.com", tier=Tier.NEWS, status=200, via=["test"])
+    strong = Story(id="S1", documents=[doc])
+    strong.attribution = "probable"
+    weak = Story(id="S2", documents=[doc])
+    weak.attribution = "unrelated"
+    anchors = Anchors(names=["Vipul Singh alias Khooni"], state="Uttar Pradesh")
+
+    real_available, real_json = llm.available, llm.chat_json
+    proposed: list = []
+
+    async def fake_json(system, user, **kw):
+        proposed.append(user)
+        return ["Vipul Singh Sushil Moonch gang",      # anchored + additive: keep
+                "Khooni Bhabhisa village Shamli",      # anchored + additive: keep
+                "Rahul Gandhi press conference",       # unanchored: drop
+                "Vipul Singh Khooni encounter details",  # rephrasing only: drop
+                "x"]                                   # too short: drop
+    llm.available = lambda: True                                    # type: ignore[assignment]
+    llm.chat_json = fake_json                                       # type: ignore[assignment]
+    try:
+        leads = asyncio.run(pipe._lead_queries("Vipul Singh alias Khooni", anchors, [strong]))
+        check("leads that are anchored AND additive are kept", len(leads) == 2, str(leads))
+        check("a lead about somebody else is refused",
+              not any("gandhi" in l.lower() for l in leads), str(leads))
+        # The failure observed on the first live deep run: six leads, all rephrasings of
+        # the original query, 110 wasted fetches, no new attributable source.
+        check("a lead that only rephrases the subject is refused",
+              not any("details" in l.lower() for l in leads), str(leads))
+        check("the model is only shown probable-or-better stories",
+              proposed and "Sushil Moonch" in proposed[0])
+        # Nothing attributable means nothing to follow. Chasing the unrelated pile is how
+        # a second round researches whoever else was in the news that day.
+        check("no strong story means no second round",
+              asyncio.run(pipe._lead_queries("Vipul Singh", anchors, [weak])) == [])
+        llm.available = lambda: False                               # type: ignore[assignment]
+        check("no model means no second round, not a crash",
+              asyncio.run(pipe._lead_queries("Vipul Singh", anchors, [strong])) == [])
+    finally:
+        llm.available, llm.chat_json = real_available, real_json     # type: ignore[assignment]
+
+
 if __name__ == "__main__":
     test_run()
     test_deadline()
     test_prefilter()
     test_window()
     test_api()
+    test_leads()
     print("\n" + ("all pipeline and API checks passed" if not FAILS
                   else f"{len(FAILS)} FAILED: {FAILS}"))
     sys.exit(1 if FAILS else 0)
