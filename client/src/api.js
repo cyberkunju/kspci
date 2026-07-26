@@ -51,6 +51,8 @@ export const api = {
   // Open-source research. A run outlives a single request, so it is started and
   // polled; the function proxies to the AppSail engine and supplies the anchors.
   researchHealth: (role) => req('/research/health', { role }),
+  // Two modes: 'standard' (about a minute) and 'deep' (up to five). Both outlive a
+  // single request, so a run is started and polled.
   researchStart: ({ subject, kind, purpose, question, mode, crimeNo, role, userId }) =>
     req('/research', { method: 'POST', role, userId, body: { subject, kind, purpose, question, mode, crimeNo } }),
   researchPoll: (id, role) => req(`/research/${encodeURIComponent(id)}`, { role }),

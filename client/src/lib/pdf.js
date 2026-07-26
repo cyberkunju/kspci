@@ -108,6 +108,11 @@ export function exportResearchPdf({ result, role }) {
     + `<div class="meta">Mode: ${esc(r.mode)} &middot; ${esc(r.elapsed_s)}s`
     + `${r.partial ? ' &middot; <b>partial: the run hit its time limit</b>' : ''}</div></div>`,
 
+    (r.records || []).length
+      ? `<h2>From our own records <span style="font-weight:400">— cited below as [DB]</span></h2>`
+        + `<table><tbody>${(r.records || []).map((x) => `<tr><td>${esc(x)}</td></tr>`).join('')}</tbody></table>`
+      : '',
+
     r.summary
       ? (r.summary_kind === 'no_match'
         ? `<h2>No match</h2><div class="warn">Nothing retrieved could be attributed to this `

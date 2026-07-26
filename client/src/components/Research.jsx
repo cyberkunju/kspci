@@ -20,10 +20,11 @@ const KINDS = [
 
 // What each mode costs the officer in waiting time, stated up front. A tool that
 // silently takes five minutes gets abandoned at ninety seconds.
+// Two depths. A third, "quick", was removed: it existed only to fit inside a serverless
+// function's 30-second ceiling, and ten pages read is a sample rather than research.
 const MODES = [
-  { value: 'quick', label: 'Quick', hint: 'about 25 seconds' },
-  { value: 'standard', label: 'Standard', hint: 'about a minute' },
-  { value: 'deep', label: 'Deep', hint: 'up to five minutes' },
+  { value: 'standard', label: 'Standard', hint: 'about a minute · reads up to 48 sources' },
+  { value: 'deep', label: 'Deep', hint: 'up to five minutes · reads up to 120' },
 ];
 
 const BANDS = {
@@ -262,6 +263,20 @@ export default function Research({ role }) {
                 <Stat value={counts.kannada_sources} label="Kannada" icon={Languages} />
                 <Stat value={counts.official_sources} label="official" icon={Landmark} />
               </Grid>
+              {(result.records || []).length > 0 && (
+                <>
+                  <Divider />
+                  <Stack gap={1}>
+                    <Text type="label" color="tertiary">FROM OUR OWN RECORDS — cited as [DB]</Text>
+                    {/* Kept visibly apart from the source table. A report that blends the
+                        police file with open-source material is unusable as either, and
+                        the engine is instructed never to let [DB] corroborate a source. */}
+                    {(result.records || []).map((r, i) => (
+                      <Text key={i} type="supporting" color="secondary">· {r}</Text>
+                    ))}
+                  </Stack>
+                </>
+              )}
               {(result.namesakes || []).length > 1 && (
                 <>
                   <Divider />
