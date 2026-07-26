@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import sys
 
-from .attribute import admissible, apply, score
+from .attribute import admissible, apply, confidence_note, score
 from .cluster import cluster, hamming, independence, simhash
 from .models import Anchors, Document, Story, Tier
 from .plan import name_variants, neutralise, plan_queries
@@ -200,10 +200,19 @@ def test_attribution() -> None:
     check("a different-person story is never admissible", not ok2, why2)
     low = Story(id="S5", documents=[doc("https://blog.example/x", WIRE, tier=Tier.UNKNOWN)])
     low.attribution = "probable"
-    ok3, why3 = admissible(low, independent_outlets=1)
-    check("an uncorroborated unknown blog is not admissible", not ok3, why3)
-    ok4, _ = admissible(low, independent_outlets=2)
-    check("two independent outlets admit it", ok4)
+    # Admissible now, but labelled. The gate used to drop it, which lost real material
+    # about the subject rather than qualifying it.
+    ok3, _ = admissible(low, independent_outlets=1)
+    check("an uncorroborated unknown blog is admissible but labelled", ok3)
+    check("and the label says both things",
+          "uncorroborated" in confidence_note(low, independent_outlets=1)
+          and "lower-authority" in confidence_note(low, independent_outlets=1),
+          confidence_note(low, independent_outlets=1))
+    unrelated = Story(id="S6", documents=[doc("https://blog.example/y", WIRE, tier=Tier.NEWS)])
+    unrelated.attribution = "unrelated"
+    ok4, why4 = admissible(unrelated, independent_outlets=5)
+    check("an unrelated story is never admissible, however well corroborated",
+          not ok4, why4)
 
 
 if __name__ == "__main__":

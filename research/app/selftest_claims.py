@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 
+from .attribute import confidence_note
 from .claims import _PROTECTED, admitted, marker_map, verify_span
 from .cluster import cluster
 from .models import Claim, Document, Story, Tier
@@ -84,16 +85,35 @@ def main() -> None:
     lone_blog = story("D", Tier.UNKNOWN, ["someblog.example"], "probable")
     two_blogs = story("E", Tier.UNKNOWN, ["a.example", "b.example"], "probable")
 
-    keep, refused = admitted([confirmed_news, possible_news, namesake, lone_blog, two_blogs])
+    unrelated = story("F", Tier.NEWS, ["thehindu.com"], "unrelated")
+    keep, refused = admitted([confirmed_news, possible_news, namesake, lone_blog,
+                              two_blogs, unrelated])
     ids = {s.id for s in keep}
     check("a confirmed newsroom story is summarised", "A" in ids, str(ids))
-    check("a POSSIBLE story is shown but never summarised",
-          "B" not in ids and "B" in refused, refused.get("B", ""))
+
+    # The posture: anything that COULD be the subject is summarised, and its confidence
+    # travels into the prose. Refusing to summarise a weak match produced an empty
+    # summary on a subject the engine had actually read material about, which is the
+    # least useful answer available to a tool whose user cross-checks everything.
+    check("a POSSIBLE story is summarised, with its uncertainty carried",
+          "B" in ids, str(ids))
+    check("and its confidence note says so",
+          "POSSIBLY" in confidence_note(possible_news, independent_outlets=1),
+          confidence_note(possible_news, independent_outlets=1))
+    check("a lone unknown blog is summarised as uncorroborated",
+          "D" in ids and "uncorroborated" in confidence_note(lone_blog, independent_outlets=1),
+          confidence_note(lone_blog, independent_outlets=1))
+    check("corroboration is stated when it exists",
+          "2 independent outlets" in confidence_note(two_blogs, independent_outlets=2),
+          confidence_note(two_blogs, independent_outlets=2))
+    check("two independent unknown outlets are summarised", "E" in ids, str(ids))
+
+    # What is still refused is only what is positively about somebody else. Summarising
+    # that as though it were the subject is not caution, it is error.
     check("a namesake story is never summarised",
           "C" not in ids and "C" in refused, refused.get("C", ""))
-    check("a lone unknown blog is not summarised",
-          "D" not in ids and "D" in refused, refused.get("D", ""))
-    check("two independent unknown outlets are summarised", "E" in ids, str(ids))
+    check("an unrelated story is never summarised",
+          "F" not in ids and "F" in refused, refused.get("F", ""))
     check("every refusal carries a reason",
           all(bool(v) for v in refused.values()), str(refused))
 
