@@ -17,7 +17,7 @@ Status legend: ✅ Done & live · 🟡 Partial / caveat · 🔵 Optional / not b
 | 9 | RBAC | ✅ | 5 roles, per‑route guards. |
 | + | OCR FIR ingestion | ✅ | Catalyst Zia OCR → LLM structuring → Data Store insert. |
 | + | WhatsApp field-officer channel | 🟡 | Built and tested (79 checks + smoke); needs Meta app provisioning to go live. See [15](./15-whatsapp-field-bot.md). |
-| + | Open-source research engine | 🟡 | Engine built, live-verified against real sources (41.5 s, 13 confirmed of 29 stories, 26/26 span-verified claims), 4 offline suites pass. Function routes, desk UI and WhatsApp tool wired. **Not deployed** — `catalyst deploy` cannot reach Zoho Stratus from the build host. See [16](./16-research-engine.md). |
+| + | Open-source research engine | ✅ | **Deployed and verified live on AppSail**: 35.2 s standard run, 13 confirmed of 29 stories, 19/19 claims span-verified, all governance refusals and the auth gate confirmed against the running service. 4 offline suites pass. Desk UI and WhatsApp tool wired; the function's `RESEARCH_*` env vars still need adding for the in-app route to work. See [16](./16-research-engine.md). |
 
 ## 10‑point framework
 
@@ -42,7 +42,7 @@ Status legend: ✅ Done & live · 🟡 Partial / caveat · 🔵 Optional / not b
 | Advanced I/O Function `api` | ✅ | Node 18, 1 GB, all routes live. |
 | Data Store (10 tables) | ✅ | Seeded ~1.5 lakh rows. |
 | AppSail Python ML service | ✅ | Live; scale‑to‑zero (not 24×7). Deps vendored (or Dockerfile). |
-| AppSail research engine `research` | 🟡 | Image builds and runs; `catalyst.json` entry in place. Deploy blocked by an unreachable Zoho Stratus upload host from this network (`169.148.149.161:443`, 100% packet loss) — not a config problem. |
+| AppSail research engine `research` | ✅ | Live at `research-50044266480.development.catalystappsail.in` — 1024 MB, 12 env vars, QuickML model reachable, health and governance verified against the running service. |
 | Client hosting `/app` | ✅ | Astryx SPA. |
 | Custom domain + SSL (`ksp.cyberkunju.com`) | ✅ | `/app` and `/server/api` both route. |
 
