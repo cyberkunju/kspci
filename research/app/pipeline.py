@@ -46,6 +46,11 @@ class RunResult:
     #: when nothing could be attributed and the text describes what was found instead.
     #: The UI must not present the second as though it were the first.
     summary_kind: str = "findings"
+    #: What OUR OWN records say about this subject, supplied by the caller from the KSP
+    #: Data Store. Carried through and shown, because a report that quietly blends
+    #: internal records with open-source material is unusable as either — and because a
+    #: subject we hold nothing on is itself worth stating.
+    records: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     claims: list[dict] = field(default_factory=list)
@@ -287,9 +292,11 @@ async def _retrieve(f: Fetcher, hits: list[Hit], budget: Budget, dl: Deadline,
 # ── the run ─────────────────────────────────────────────────────────────────────
 
 async def run(*, subject: str, kind: str, anchors: Anchors, budget: Budget,
-              question: str = "", progress: Progress | None = None) -> RunResult:
+              question: str = "", records: list[str] | None = None,
+              progress: Progress | None = None) -> RunResult:
     dl = Deadline(budget.wall_s)
-    out = RunResult(subject=subject, kind=kind, mode=budget.name)
+    records = [r for r in (records or []) if str(r).strip()][:20]
+    out = RunResult(subject=subject, kind=kind, mode=budget.name, records=records)
     f = Fetcher()
 
     try:
@@ -383,7 +390,7 @@ async def run(*, subject: str, kind: str, anchors: Anchors, budget: Budget,
                 "no retrieved source could be attributed to this subject; the note below "
                 "describes what was found instead")
             text, warns = await claims_mod.synthesise_coverage(
-                stories, subject=subject, anchors=anchors,
+                stories, subject=subject, anchors=anchors, records=records,
                 aliases=[n for n in anchors.names if n.lower() != subject.lower()])
             out.summary = text
             out.summary_kind = "no_match"
@@ -428,7 +435,8 @@ async def run(*, subject: str, kind: str, anchors: Anchors, budget: Budget,
 
             if not dl.expired:
                 text, warns = await claims_mod.synthesise(
-                    stories, all_claims, subject=subject, question=question)
+                    stories, all_claims, subject=subject, question=question,
+                    records=records)
                 out.summary = text
                 out.warnings.extend(warns)
                 out.stages.append("summary")

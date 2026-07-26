@@ -209,8 +209,27 @@ _SUMMARY_SYSTEM = (
     "- Where claims disagree, say they disagree and give both with their markers. Where a "
     "later claim supersedes an earlier one (an acquittal after an arrest), say so.\n"
     "- Never mention caste, religion, community or political affiliation.\n"
+    "- You may also be given OUR RECORDS: facts from the police force's own database. "
+    "Cite those as [DB]. They are internal records, NOT open-source material: never "
+    "present a [DB] fact as though a source reported it, never let [DB] corroborate an "
+    "open-source claim, and never use it to upgrade how certain an open-source claim is. "
+    "Where our records and a source agree, say that they agree and mark both. Where they "
+    "disagree, say so. If no records were given, do not mention records at all.\n"
     "- Plain prose, at most 220 words, no markdown headings, no bullet characters."
 )
+
+
+def _records_block(records: list[str]) -> str:
+    """The internal-records section of the prompt, or nothing at all.
+
+    Empty when we hold no records, and the model is told not to mention them in that
+    case — "our database contains no entry for this person" is a sentence only the
+    officer's own query can honestly produce, not one the summariser should guess at.
+    """
+    if not records:
+        return ""
+    lines = "\n".join(f"- {r}" for r in records[:20])
+    return f"\nOUR RECORDS (police database, cite as [DB]):\n{lines}\n"
 
 #: Written when NOTHING retrieved could be tied to the subject. Deliberately a separate
 #: prompt rather than a blank summary: the old behaviour returned an empty string, and an
@@ -229,12 +248,16 @@ _COVERAGE_SYSTEM = (
     "3. names, briefly, who the retrieved coverage was actually about, if the outlet and "
     "headline list makes that clear (for example other people sharing the name);\n"
     "4. does not speculate about the subject, and asserts nothing about them.\n"
-    "No markdown headings, no bullet characters, no source markers."
+    "If OUR RECORDS are given, state briefly what the police database already holds on "
+    "the subject and mark those statements [DB], keeping them clearly separate from the "
+    "open-source coverage. If no records are given, do not mention records.\n"
+    "No markdown headings, no bullet characters, no source markers other than [DB]."
 )
 
 
 async def synthesise(stories: list[Story], claims: list[Claim], *, subject: str,
-                     question: str = "") -> tuple[str, list[str]]:
+                     question: str = "",
+                     records: list[str] | None = None) -> tuple[str, list[str]]:
     """Write the cited summary. Returns (text, warnings).
 
     Marker ids are assigned here, from the admitted stories only, so a marker in the
@@ -263,7 +286,8 @@ async def synthesise(stories: list[Story], claims: list[Claim], *, subject: str,
 
     prompt = (f"SUBJECT: {subject}\n"
               + (f"QUESTION: {question}\n" if question else "")
-              + "\nCLAIMS:\n" + "\n".join(lines)
+              + _records_block(records or [])
+              + "\nOPEN-SOURCE CLAIMS:\n" + "\n".join(lines)
               + "\n\nWrite the summary now.")
     text = await llm.chat(_SUMMARY_SYSTEM, prompt, max_tokens=700, temperature=0.1)
     if not text:
@@ -272,22 +296,28 @@ async def synthesise(stories: list[Story], claims: list[Claim], *, subject: str,
     # A sentence resting on two claims from the SAME story cites it twice — [S1][S1].
     # Harmless but it reads like sloppiness, and an officer counting citations would
     # over-count the corroboration.
-    text = re.sub(r"(\[S\d+\])(?:\s*\1)+", r"\1", text)
+    text = re.sub(r"(\[(?:S\d+|DB)\])(?:\s*\1)+", r"\1", text)
 
     # A marker the prose invented resolves to nothing, so it is removed rather than
-    # shown as a citation that cannot be followed.
+    # shown as a citation that cannot be followed. [DB] is valid only when records were
+    # actually supplied — otherwise the model has attributed something to a database it
+    # was never shown.
     valid = set(marker.values())
-    used = set(re.findall(r"\[(S\d+)\]", text))
+    if records:
+        valid.add("DB")
+    used = set(re.findall(r"\[(S\d+|DB)\]", text))
     for bad in used - valid:
         text = text.replace(f"[{bad}]", "")
-        warnings.append(f"removed an invented source marker [{bad}]")
+        warnings.append(
+            f"removed an invented source marker [{bad}]" if bad != "DB" else
+            "removed a [DB] citation: no internal records were supplied to this run")
 
     # A sentence of substance with no marker is an unsourced assertion. Flagged rather
     # than deleted: mid-summary deletion produces incoherent prose, and the officer is
     # better served by knowing which sentence to distrust.
     unmarked = [
         s.strip() for s in _SENT.split(text)
-        if len(s.split()) > 8 and not re.search(r"\[S\d+\]", s)
+        if len(s.split()) > 8 and not re.search(r"\[(?:S\d+|DB)\]", s)
     ]
     if unmarked:
         warnings.append(f"{len(unmarked)} summary sentence(s) carry no source marker")
@@ -300,7 +330,8 @@ async def synthesise(stories: list[Story], claims: list[Claim], *, subject: str,
 
 
 async def synthesise_coverage(stories: list[Story], *, subject: str, anchors=None,
-                             aliases: list[str] | None = None) -> tuple[str, list[str]]:
+                             aliases: list[str] | None = None,
+                             records: list[str] | None = None) -> tuple[str, list[str]]:
     """The note written when nothing retrieved could be tied to the subject.
 
     No claim extraction and no markers: there is nothing about the subject to cite. What
@@ -330,6 +361,7 @@ async def synthesise_coverage(stories: list[Story], *, subject: str, anchors=Non
             searched.append("associates: " + ", ".join(anchors.associates[:3]))
 
     prompt = ("SEARCHED FOR:\n" + "\n".join(searched)
+              + _records_block(records or [])
               + "\n\nRETRIEVED COVERAGE (none of it attributable to the subject):\n"
               + "\n".join(listed) + "\n\nWrite the note now.")
     text = await llm.chat(_COVERAGE_SYSTEM, prompt, max_tokens=400, temperature=0.1)
