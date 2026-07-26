@@ -243,6 +243,33 @@ that broke the lexical path:
    we do actually have. The underlying cause was also fixed: those results were untitled
    because the search page links each judgment twice and the furniture link came first.
 
+**Why not GLM-4.7-Flash, which we already run?** A fair question — the engine already pays
+for that model to extract claims and write the summary, and using it here would remove a
+dependency on an Azure resource this project does not own. So it was measured rather than
+argued about: listwise scoring (the RankGPT approach — hand the model a numbered list, ask
+for a relevance score per item), four batches of 35, against the same 132 candidates and the
+same query.
+
+| | Cohere Rerank v4.0 Pro | GLM-4.7-Flash listwise |
+|---|---|---|
+| Wall clock | **1.9 s** | 8.8 s |
+| Model calls | **1** | 4 of the run's budget of 12 |
+| Known-noise items inside the top 20 | **0** | 4 |
+| Correct source | #1 | #1 |
+| Top-20 agreement between the two | 6 / 20 | |
+
+Both find the right report. The difference is everything else they admit: GLM put "Khooni
+Monday" (a box-office column), "Be Khooni in English" (a dictionary entry) and "Khooni
+Darwaza" (a Delhi monument) inside the top twenty, and scored an untitled Indian Kanoon
+result — no text at all — into fifth place. Those are exactly the reads the reranker exists
+to stop wasting. It is also 4.6× slower and spends a third of the run's model budget on a
+task that is not generation.
+
+So a cross-encoder, because that is what a cross-encoder is for. The right mitigation for
+the ownership risk is for KSP to own the Cohere deployment, not to substitute a weaker
+ranker — and if the resource ever disappears, the lexical fallback below is what shipped for
+months and still works.
+
 **What the lexical pass still does.** It is the fallback when reranking is unavailable, the
 tiebreak between equal scores, and the ordering of what the model gets shown. One rule
 outranks the model: a publisher we have learned we cannot read statically still goes last,
