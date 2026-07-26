@@ -214,6 +214,14 @@ async def _discover(f: Fetcher, queries: list[Query], gdelt_plan: GdeltPlan,
         if leg:
             ordered_legs.append(leg)
 
+    # A source that contributed hits is not a failed source, however many of the run's
+    # individual queries came back empty for it. On-site search is run once per query, so
+    # one narrow phrasing returning nothing used to put the source in `sources_failed` —
+    # and a report reading "onsite:theprint failed" while ThePrint supplied the very
+    # article the summary rests on is worse than saying nothing at all.
+    contributed = {name for name, n in used.items() if n}
+    failed = [f for f in failed if f.split(" (")[0] not in contributed]
+
     # Weighted reciprocal-rank fusion, rather than keeping whichever copy arrived first.
     # Agreement between independent tiers is the strongest relevance signal available
     # before a single page is fetched, and it used to be computed and thrown away.
