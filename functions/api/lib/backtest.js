@@ -418,6 +418,29 @@ async function computeForecast(app, { level, state } = {}) {
   };
 }
 
+/**
+ * Early warning, preferring the batch-scored snapshot over recomputing.
+ *
+ * Two reasons this exists rather than callers using computeEarlyWarning directly:
+ *
+ *  - Assembling the national panel live exceeds ZCQL's processing ceiling past ~1M rows in
+ *    Cases, so the recompute fails outright with an opaque 400. The WhatsApp alert dispatch hit
+ *    exactly this.
+ *  - Even where it succeeds, an officer's push must say the same thing the dashboard says. Both
+ *    reading the same snapshot is the only way to guarantee that; two independent computations
+ *    drift the moment either side is retrained.
+ *
+ * Falls through to live computation when no snapshot exists, so a fresh environment still works.
+ */
+async function earlyWarningPreferSnapshot(app, { level = 'district', state = null, maxAgeHours = 168 } = {}) {
+  try {
+    const store = require('./forecastStore');
+    const snap = await store.readSnapshot(app, 'earlywarning', { level, state }, { maxAgeHours });
+    if (snap && Array.isArray(snap.alerts)) return snap;
+  } catch (_) { /* fall through to live computation */ }
+  return computeEarlyWarning(app, { level, state });
+}
+
 async function computeEarlyWarning(app, { level, state } = {}) {
   const fc = await computeForecast(app, { level, state });
   if (fc.error) return fc;
@@ -491,4 +514,7 @@ async function computeWatchlist(app, { limit = 20 } = {}) {
   };
 }
 
-module.exports = { runBacktest, computeForecast, computeEarlyWarning, computeBacktest, computeWatchlist, nextTimeMonth };
+module.exports = {
+  runBacktest, computeForecast, computeEarlyWarning, earlyWarningPreferSnapshot,
+  computeBacktest, computeWatchlist, nextTimeMonth,
+};

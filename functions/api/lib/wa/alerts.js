@@ -98,7 +98,10 @@ function freeFormBody(alert, advisory, horizon) {
  */
 async function dispatchAlerts(app, { dryRun = false } = {}) {
   const engine = require('../backtest');
-  const ew = await engine.computeEarlyWarning(app);
+  // Read the batch-scored snapshot rather than recomputing. Recomputing the national panel here
+  // exceeds ZCQL's processing ceiling past ~1M rows in Cases, and even where it succeeds an
+  // officer's push has to say the same thing the dashboard says.
+  const ew = await engine.earlyWarningPreferSnapshot(app);
   if (ew.error) return { error: ew.error };
 
   const alerts = (ew.alerts || []).filter((a) => RANK[a.severity]);
