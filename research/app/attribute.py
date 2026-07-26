@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import re
 
-from .models import ATTRIBUTION_RANK, Anchors, Attribution, Story
+from .models import ATTRIBUTION_RANK, Anchors, Attribution, Story, Tier
 from .plan import name_variants, normalise_name
 
 # Indian places that a document may pin a namesake to. Not exhaustive, and not meant
@@ -269,6 +269,22 @@ def score_topic(story: Story, anchors: Anchors, *,
 
     band: Attribution = "confirmed" if points >= 9 else (
         "probable" if points >= 5 else "possible")
+
+    # THE KEYSTONE ALONE IS NOT THE SUBJECT. When a subject has other distinctive terms
+    # and not one of them appears, all we have is its rarest single word — and a single
+    # word is a coincidence waiting to happen. "Sushil" without "Moonch" is a common given
+    # name; "Devaraja" without "market" is a road, a temple and a ward.
+    #
+    # This is the same rule the person scorer applies to names, and it is here because of a
+    # measured false confirm: researching the "Sushil Moonch gang" graded "Supreme Court
+    # cancels Olympian Sushil Kumar's bail" as `probable` — keystone in the headline, four
+    # points plus two, nothing else required. See app/eval_attribution.py, which now fails
+    # the build if that comes back.
+    if others and not hit_others and ATTRIBUTION_RANK[band] > ATTRIBUTION_RANK["possible"]:
+        band = "possible"
+        reasons.append(
+            f"capped: only '{keystone}' matched, and none of "
+            f"{', '.join(others[:3])} — one word of a multi-word subject is not the subject")
     return band, reasons, sorted(set(matched))
 
 
@@ -440,6 +456,28 @@ def score(story: Story, anchors: Anchors, *, subject: str,
     if namesakes >= 3 and len(matched) == 1 and band != "different_person":
         band = "possible"
         reasons.append(f"{namesakes} different public figures share this name")
+
+    # A story made only of social, forum and unvouched pages cannot exceed `possible`.
+    #
+    # This is not snobbery about sources — every one of them is still retrieved, listed
+    # and shown. It is about what the document IS. A social profile or a video channel
+    # page carries a person's name many times over BECAUSE IT BELONGS TO THEM, so the
+    # multi-name signal that makes a news report convincing fires just as hard on a
+    # namesake's own account. Measured, not theorised: switching the general-web tier on
+    # put a YouTube video titled "From Gaon to Ghar Ghar: My journey of social impact" at
+    # `probable` for a subject who had been shot dead by the UP STF. Different Vipul
+    # Singh, and a confident false identification is the worst output this engine can
+    # produce.
+    #
+    # One authoritative or newsroom document anywhere in the cluster lifts the cap, because
+    # then the identification rests on the report and the social page merely corroborates.
+    if band in {"confirmed", "probable"} and not any(
+            int(d.tier) <= int(Tier.AGGREGATOR) for d in story.documents):
+        band = "possible"
+        reasons.append(
+            "capped: the only sources for this are social, forum or unvouched pages, "
+            "which carry a name because it is the account holder's, not because they "
+            "report on them")
 
     story.score = points
     return band, reasons, sorted(set(matched))
