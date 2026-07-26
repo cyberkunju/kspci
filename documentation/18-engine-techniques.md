@@ -26,7 +26,7 @@ KSP's legal team, not a `git clone`.
 
 | Studied | Licence | What we took | What we did not |
 |---|---|---|---|
-| [Firecrawl](https://github.com/firecrawl/firecrawl) | AGPL-3.0 (SDKs MIT) | engine waterfall with capability flags; per-host "will a cheap fetch work" verdict; per-domain engine pinning | any code; their Node/Redis/worker/proxy infrastructure |
+| [Firecrawl](https://github.com/firecrawl/firecrawl) | AGPL-3.0 (SDKs MIT) | per-host "will a cheap fetch work" verdict | any code; their Node/Redis/worker/proxy infrastructure; **the headless-browser engine — probed and rejected, see §3** |
 | [SearXNG](https://github.com/searxng/searxng) | AGPL-3.0 | weighted reciprocal-rank fusion across sources; typed failure classes driving per-source suspension; duplicate merging that keeps the best fields | any code; its scraped-SERP discovery model |
 | Perplexity | closed | published/standard retrieval technique only — see below | nothing else exists to take |
 
@@ -72,13 +72,19 @@ failure of every source. So a source that had refused us for a day was retried e
 minutes, burning the run's deadline, while a source that had merely been slow once was
 sidelined for the same three minutes as one that had banned us.
 
-**What we implemented.** A `Failure` classification in `research/app/sources.py` with a
-per-class suspension window, recorded per source and reported in `sources_failed` with the
-reason and the remaining window. The distinction that matters for us: **rate-limited**
-(back off long — GDELT's penalty window outlasts a run), **blocked** (back off much longer,
-retrying is what earns a permanent ban), **transport** (back off briefly; it was probably
-us), and **empty** (not a failure at all — a narrow query legitimately matches nothing, and
-reporting that as a broken source is how a working tier comes to look broken).
+**What we implemented — and this row previously overstated it.** Only the distinction that
+was actually costing us anything: **empty is not a failure.** A narrow query legitimately
+matches nothing, and reporting that as a broken source is how a working tier comes to look
+broken — and worse, makes a genuinely broken source indistinguishable from a quiet one. So
+`onsite_one` returns `None` for a failed endpoint and `[]` for "this publisher has nothing",
+and only the first reaches `sources_failed`. `bing_news` already made the same distinction.
+
+The per-class suspension window is **not** implemented: `sources.py` still has one
+`_COOLDOWN_S = 180` applied to every failure of every source, and an earlier version of this
+file claimed otherwise. The one case with real evidence behind it is GDELT, whose penalty
+window outlasts a run — but we have not measured how long it actually is, and inventing a
+number per failure class for three sources would be taxonomy for its own sake. Moved to
+[17-remaining-work.md](./17-remaining-work.md), where an unimplemented idea belongs.
 
 ## 3. The engine waterfall and the per-host verdict — from Firecrawl
 
@@ -103,13 +109,84 @@ those URLs so the fetch budget goes to pages we can actually read, and it labels
 officer's table as *"this publisher requires a browser we do not run"* rather than the
 uninformative "no article text found".
 
-**What is still to come.** The render engine itself: one Playwright container, navigate,
-wait for network idle, return HTML into the trafilatura we already run. Apache-2.0 all the
-way through, and a few hundred lines — we fetch 48 URLs per run, not 48,000, so none of
-Firecrawl's queueing, worker pool or proxy tiering is warranted. Tracked in
-[17-remaining-work.md](./17-remaining-work.md).
+**What we did NOT implement, having measured it.** The render engine. This section used to
+end by describing a Playwright container as obviously-next work. It was probed properly
+before being built, and the case collapsed. The probe: a `python:3.12-slim` image with
+`chromium-headless-shell`, run against the exact pages that fail.
 
-## 4. Retrieval technique — from the published literature, not from Perplexity
+| Finding | Measurement |
+|---|---|
+| The image is four times the service | 1.38 GB against the research engine's 333 MB. It runs at a 384 MB memory limit; launch is 0.08 s and a page costs ~6.3 s with images, media, fonts and stylesheets blocked. So it *works* — that was never the question. |
+| **MSN, the entire justification, is not fixed by a browser** | `msn.com` renders HTTP 200 with the page title of an unrelated Polish article and `innerText` of 25 characters: `"More for You"`. Identical with a real Chrome user-agent, nothing blocked, and an 8-second wait. Firecrawl's verdict service pins `msn.com` to a browser; for these URLs a browser does not help either. |
+| **LiveLaw is a permission problem, not a rendering problem** | The one endpoint a browser genuinely would have unlocked — 0 article links static, 9 rendered. Then we read its `robots.txt`: `Disallow: /search`, `/search?*`, `/*?q=`, `/xhr/`. LiveLaw has closed its search to automated clients. Rendering it anyway would be a deliberate violation, so the adapter was removed instead. |
+| Article extraction never needed it | Across live runs, 48 of 48 fetched pages now yield article text. The static reader is not the bottleneck. |
+| The remaining gaps had an API | Search pages that really were JavaScript-only: six of them run **Quintype**, whose own `/api/v1/advanced-search` returns canonical URL, headline and publication timestamp as JSON in ~0.5 s. Better data than a rendered page, at 1/2800th of the image size. See §5. |
+
+`verdict.py` stays, and its docstring is honest about why: it earns its place on budget
+ordering and on the officer-facing explanation, neither of which needs a browser. What it
+does *not* do any more is imply that a browser is coming.
+
+Revisit this only against a tier that surfaces app-shell pages we are permitted to read and
+that expose no API. That is a real condition, not a formality — nothing we currently query
+meets it.
+
+## 4. Auditing our own adapters — the method, and what it found
+
+Not borrowed from anyone. It is here because it found more recall than any technique above,
+and because the method is reusable whenever an adapter is added.
+
+**The method.** Query every on-site adapter with three *unrelated* subjects and compare the
+link sets. A search endpoint that returns substantially the same links for
+"Bengaluru cyber fraud arrest", "Vipul Singh Khooni encounter Baghpat" and
+"Mysuru land grabbing case chargesheet" is not searching — it is handing us its front page
+with HTTP 200. That failure is invisible in normal operation: the adapter reports success,
+the links are real articles, and they are simply about nothing you asked for.
+
+**What it found.** Five of twelve adapters were not searching.
+
+| Adapter | Verdict |
+|---|---|
+| `thehindu` | JS shell. 154 KB of front page, results fetched client-side from an endpoint the served HTML does not reference. Three unrelated queries, same links. **Removed.** |
+| `udayavani` | Next.js; results exist only inside an RSC payload, with no `<a href>` to read. **Removed.** |
+| `vijaykarnataka` | Returned its section index (`/articlelist/*.cms`). **Removed.** |
+| `livelaw` | Refused by `robots.txt`. **Removed.** |
+| `indianexpress` | Does server-render results — but behind its own front-page promos in the markup. **Kept, and the extractor fixed.** |
+
+Between them they were injecting up to 80 guaranteed-irrelevant candidates into a run that
+can read 48 pages, while reporting themselves as working sources.
+
+**The two fixes.**
+
+1. **Rank search-page links by query-term overlap, not by DOM position**
+   (`_links_from_search_html`). A newsroom puts its promos in the markup first and its
+   results after them, so "take the first five article-shaped links" returned five promos.
+   Ranking, not filtering: a source whose result titles share no word with the query —
+   Indian Kanoon returns case citations — keeps every result it found.
+2. **Use Quintype's search API where it exists** (`kind: "quintype"`, six adapters). Returns
+   the canonical URL, the publisher's headline and `last-published-at`. The date is the real
+   prize: an on-site hit used to arrive undated, so it could not be placed on the timeline
+   or ranked against fresher coverage. `robots.txt` is honoured for the API too — it is the
+   publisher's own endpoint serving their own site, not a dataset published for third
+   parties.
+
+**Measured effect**, standard mode, same subject, GDELT rate-limited in both cases:
+
+| | Before | After |
+|---|---|---|
+| Wall clock | 38.4 s | **22.9 s** |
+| Candidates | 123–128 | 130 |
+| Pages read | 48 | 48 |
+| Readable | ~28 stories, several unreadable | **48 of 48** |
+| Correct source | ranked #1, `probable` | ranked #1, `probable` |
+
+**The cost, stated plainly.** Quintype's `advanced-search` ORs the query terms and an
+exact-phrase query returns zero results, so a search for "Vipul Singh" also returns Manmohan
+Singh. About two-thirds of a run's stories grade `unrelated`. That is consistent with the
+brief — recall over precision, every link shown with its band and its reasons — and global
+title-match ranking keeps the real matches at the head of the read order. It is still the
+strongest argument for the cross-encoder reranker in §5.
+
+## 5. Retrieval technique — from the published literature, not from Perplexity
 
 Perplexity is closed source; there is no code to study and its moat is not code. It is a
 continuously-crawled index, rerankers trained on real relevance judgments, and frontier

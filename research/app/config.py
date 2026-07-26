@@ -93,12 +93,25 @@ class Settings:
     # The adapter is kept because Mojeek offers a licensed API — if that is ever
     # arranged, this becomes a one-line switch rather than a rewrite.
     mojeek_enabled: bool = field(default_factory=lambda: _env("MOJEEK_ENABLED", "false") == "true")
-    # There is deliberately no headless-browser tier. Every URL this engine fetches
-    # comes from a news index or a newsroom's own search, and those pages are
-    # server-rendered because their publishers need them indexed — the live runs read
-    # 30 of 30. A Chromium container would be 2 GB of infrastructure answering a
-    # problem we have not observed. If a tier is ever added that surfaces app-shell
-    # pages, that is when to build it.
+    # There is deliberately no headless-browser tier, and this is now a measured
+    # decision rather than an assumption. A Chromium image was built and probed against
+    # the exact pages that fail; the findings are in
+    # documentation/18-engine-techniques.md. In short:
+    #
+    #   * The image is 1.38 GB against this service's 333 MB, and Chromium would be
+    #     resident in the same process that fetches attacker-influenceable URLs.
+    #   * MSN — the publisher that motivated the idea — is not fixed by a browser. It
+    #     renders 200 OK with an unrelated article's title and 25 characters of body,
+    #     with a real Chrome user-agent and nothing blocked. See verdict.py.
+    #   * LiveLaw's search, the one endpoint a browser genuinely would have unlocked,
+    #     is disallowed by its robots.txt. That is a permission problem, not a
+    #     rendering problem, and rendering it anyway would be a deliberate violation.
+    #   * The remaining gaps were publishers whose search page loads results by
+    #     JavaScript — and six of them run Quintype, whose own JSON search API returns
+    #     better data than a rendered page would. See tiers.ONSITE.
+    #
+    # If a tier is ever added that surfaces app-shell pages we are permitted to read and
+    # that have no API, that is when to revisit this.
 
     # ── model ───────────────────────────────────────────────────────────────
     llm_backend: str = field(default_factory=lambda: _env("RESEARCH_LLM_BACKEND", "openai"))

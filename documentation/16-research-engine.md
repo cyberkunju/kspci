@@ -126,7 +126,7 @@ Grouped by **how each one fails**, because that is what determines how to use it
 |---|---|---|
 | **News feed** | Bing News RSS | The breadth tier, and the one that fixed the engine's worst blind spot. Keyless, answers from a datacenter, multilingual, and the item link embeds the **publisher's** url so there is no redirect to follow. |
 | **Datasets** | GDELT DOC 2.0, Wikipedia, Wikidata, Wayback CDX | Published for machines. No key, no quota, reliable from a datacenter. |
-| **On-site** | 27 official domains + 16 Kannada + 21 Hindi outlets; 13 with a queryable search endpoint | For a court or a newsroom this is simply the correct method, and it reaches vernacular coverage no English-first index surfaces. |
+| **On-site** | 27 official domains + 16 Kannada + 21 Hindi outlets; **9** with a queryable search endpoint — 6 through Quintype's JSON search API, 3 by reading the results page | For a court or a newsroom this is simply the correct method, and it reaches vernacular coverage no English-first index surfaces. Was 13: five adapters were found to be returning their front page regardless of the query and one was disallowed by robots. See [18 §4](./18-engine-techniques.md). |
 | **Metasearch** | SearXNG, Marginalia, (Mojeek) | Long-tail breadth. Deliberately last, deliberately optional. |
 
 ### Why a news feed, and why that one
@@ -142,6 +142,11 @@ choosing. Most Indian newsrooms answer `/search` with a JavaScript shell and han
 their front page; only ThePrint and New Indian Express returned real article urls, and those
 two were added. The rest of the country is reached through the feed instead, which is the
 honest place for it.
+
+That probe was later turned on the adapters we already had, and five of them failed the same
+test — including The Hindu, which had looked like a working source for months because a front
+page of real articles is indistinguishable from results unless you compare two unrelated
+queries. Method and outcome in [18 §4](./18-engine-techniques.md).
 
 **Google News RSS was rejected**, despite returning 56 Hindi items for the same subject:
 `news.google.com/robots.txt` is `Disallow: /` with an allow-list that excludes `/rss`, and
