@@ -520,6 +520,38 @@ function readClaim(val) {
   return { done: true, ts: Date.now() };
 }
 
+/**
+ * Has this message already been answered?
+ *
+ * `claimMessage` refuses a completed message, but it also writes the inbound ledger
+ * row, so it can only be called once per message — on the webhook. The job that
+ * carries the turn POSTs straight to /whatsapp/process, which bypasses it entirely,
+ * and that is the path the job runner retries.
+ *
+ * It has to retry there: Catalyst decides a webhook job failed from the HTTP response
+ * it sees, so a turn slower than its timeout is marked failed and re-dispatched no
+ * matter what status code the function eventually returns. That is how one officer's
+ * question got answered twice, 60 seconds apart — one `retry_interval`.
+ *
+ * Only the **completed** state counts as answered. An in-flight claim must pass,
+ * because the inline path claims the message immediately before processing it, and a
+ * released claim must pass because releasing it is precisely how a failed pre-agent
+ * attempt asks to be retried.
+ *
+ * Fails open on a cache error: answering twice is bad, dropping an officer's message
+ * is worse.
+ */
+async function messageAlreadyAnswered(app, msgId) {
+  if (!msgId) return false;
+  try {
+    const raw = await app.cache().segment().getValue(seenKey(msgId));
+    const val = raw && (raw.cache_value || raw.value || raw);
+    return Boolean(val) && readClaim(val).done;
+  } catch (_) {
+    return false;
+  }
+}
+
 /** Mark a turn finished. After this the message id can never be processed again. */
 async function completeMessage(app, msgId) {
   if (!msgId) return;
@@ -641,6 +673,7 @@ module.exports = {
   ROLES, normalizePhone, getOfficer, invalidateOfficer, alertRecipients,
   upsertOfficer, deleteOfficer, setAlertPrefs, touchOfficer, withinServiceWindow,
   checkRate, claimMessage, completeMessage, releaseMessage, logMessage,
+  messageAlreadyAnswered,
   alertAlreadySent, recentTurns, shapeOfficer, dtNow, genId,
   getPending, parsePending, serializePending, rowIdLiteral,
   mintUndoToken, looksLikeUndoToken, recordUndo, findUndo, consumeUndo,

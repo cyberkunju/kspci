@@ -222,6 +222,17 @@ async function processEvent(app, event) {
   const phone = officers.normalizePhone(event.from);
   if (!phone) return { skipped: 'bad_phone' };
 
+  // Refuse a message that has already been answered, before anything else.
+  //
+  // The webhook claims each wamid once, but the job that carries the turn calls this
+  // function directly and so never passes that check — and the job runner retries on
+  // its own HTTP timeout, independently of the status code we return. A turn slower
+  // than that timeout therefore gets re-dispatched after it has already replied,
+  // which sent one officer the same answer twice.
+  if (await officers.messageAlreadyAnswered(app, event.msgId)) {
+    return { skipped: 'already_answered', msgId: event.msgId };
+  }
+
   const officer = await officers.getOfficer(app, phone);
   if (!officer) return rejectUnknown(app, phone, event);
 
@@ -331,7 +342,18 @@ async function processEvent(app, event) {
         }).slice(0, 4000)
       });
     }
-    return { answered: true, route: result.decision.route, steps: result.decision.steps || 0 };
+    // The tool trace travels with the result as well as going to the decision log.
+    // Catalyst exposes no CLI for function logs, so without this there is no way to
+    // see which tool answered a turn or what it queried — and "the model gave a bad
+    // answer" is unfixable until you know whether it even called the right tool.
+    // Only reachable behind the internal key.
+    return {
+      answered: true,
+      route: result.decision.route,
+      steps: result.decision.steps || 0,
+      tools: result.invoked.map((t) => t.tool),
+      queries: result.executed.map((x) => String(x.zcql).slice(0, 300))
+    };
   } catch (e) {
     // Unexpected failure. Tell the officer something, then decide whether a retry is
     // safe — which depends entirely on whether the agent had started.
