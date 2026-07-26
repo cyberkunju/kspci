@@ -137,6 +137,49 @@ opt-out that fails is reported as a failure, never confirmed. Matching is
 whole-string only: a substring match would unsubscribe an officer who wrote "stop
 the vehicle at the checkpoint".
 
+### Following a reference across turns
+
+Officers do not repeat themselves. They say "number three", "the second one", "that
+case", "and which district was that in". Four things had to be true for that to work,
+and none of them were:
+
+**Grounding has to remember the conversation.** It was per-turn — only identifiers a
+tool returned *this* turn, plus the officer's own words. So the moment an officer asked
+for "full details of number three" about a list we had just sent, the reply cited an
+identifier from the previous turn, nothing could vouch for it, and they got *"I could
+not confirm that against the records"* about our own answer. Twice, because rephrasing
+cannot fix it. The transcript is now a source: an identifier we printed already passed
+this check when it was produced, and one the officer typed is theirs to cite. The narrow
+widening is that a partial mismatch is logged rather than refused, so an identifier that
+slipped through once stays citable — worth it against refusing every follow-up.
+
+**The identifier pattern has to match the data.** `Cases.CrimeNo` in this corpus is a
+**19-digit number** (`1009800812023000014`), not the `4021/2026` form the FIR examples
+use, and the pattern matched neither bare long digits nor anything without a letter
+prefix. `harvest()` therefore never recorded a real CrimeNo as grounded while the
+citation regex cheerfully found it in the reply — so *any* answer that wrote "CrimeNo
+1009800812023000014" was rejected as a hallucination for quoting the database
+correctly. Fields named like identifiers are now harvested verbatim as well, so a
+schema that numbers cases differently cannot silently stop being verifiable.
+
+**A voice note has to leave a transcript in the ledger.** It is claimed before it can be
+transcribed, so its row read `[audio]` — and that row is what the model reads back as
+the officer's turn. A conversation held entirely by voice had no history whatsoever,
+which is how the reported failure was produced in the first place. It is also the better
+audit record: `[audio]` documents that a voice note arrived, the transcript documents
+what was asked.
+
+**And there has to be enough of it.** Six messages at 600 characters is three exchanges
+with every list truncated halfway, which is precisely the context "number three" depends
+on; it is now ten at 1200, keeping each message's head because that is where a numbered
+list's items are. The live turn is also removed from the transcript — the inbound row is
+written at claim time, so the model was being shown every request twice.
+
+Verified end to end over the real webhook path: a list of three Kannur cases, then
+"what is the status of the second one" → the second record's dossier, "and which
+district was that in" → "Kannur district.", "who are the accused in that case" → the
+same record's accused. Three chained references, none of them naming the record.
+
 ### Open frames
 
 When a lookup is genuinely ambiguous the model calls `ask_choice`, which stores a
@@ -145,6 +188,16 @@ retries}`. The next message resolves it. Each option carries a `resolve` string 
 the fully-specified request the agent receives when that option is picked — so
 there is one generic resolver instead of one per frame kind, and no kind can
 silently lack a handler.
+
+Picks are matched the way officers write them, not just as a bare digit: "3", "option 3",
+"number three", "the third one", "pick two", "ಮೂರನೇ", "तीसरा". A position word wrapped in
+filler resolves, guarded so a fresh request that merely contains a number word ("third
+district stats") is still released rather than swallowed as option 3. Cardinals are kept
+apart from true ordinals because *one* is both — the pick in "number one" and filler in
+"the third one" — and counting them together made the second case score two position
+words and get rejected. A bare 19-digit CrimeNo releases the frame too; it matched no
+option and was one word long, so an officer volunteering the exact record they wanted got
+re-prompted for a number between 1 and 3.
 
 The lifecycle is designed so an officer can never be trapped: a five-minute TTL,
 three retries then release, universal cancel tokens in both languages checked
