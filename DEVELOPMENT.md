@@ -394,7 +394,50 @@ All three steps are idempotent and re-runnable. Verify with:
 curl -s https://ksp.cyberkunju.com/server/api/whatsapp/health -H "x-admin-key: $ADMIN_KEY"
 ```
 
-### Meta credentials — wired, and the one thing still blocked
+### The number is now exclusively ours
+
+`+91 94002 45958` (phone id `1079257601947704`, WABA `2306127019919794`, Meta app
+`2592724907814162`) was wired into **three** projects at once on `reticule`
+(`16.112.233.198`): SellThat, Tia and Versifine. A WhatsApp number delivers to exactly one
+webhook, so "sharing" it meant whichever project last claimed a callback silently owned
+inbound for all of them. It is now assigned to KSP alone.
+
+**There are three levels of webhook configuration and the most specific one wins.** This is
+the trap that cost the most time here. Repointing the app-level callback to KSP reported
+`success: true` and changed nothing, because a **phone-number-level override** was still set
+to `https://sellthat.in/webhook/whatsapp`. It is invisible unless you ask for it:
+
+```bash
+curl -s "https://graph.facebook.com/v23.0/2306127019919794/phone_numbers?access_token=$TOK"
+# -> webhook_configuration: { phone_number: ..., application: ... }
+```
+
+All three levels are now KSP: app-level (`POST /<app-id>/subscriptions`), phone-number-level
+(`POST /<phone-id>` with `webhook_configuration.override_callback_uri`), and the WABA has no
+`override_callback_uri` on `subscribed_apps`. Set the phone-number one — the app-level alone
+is not enough.
+
+Server side, on `reticule`:
+
+| Action | Detail |
+|---|---|
+| Stopped, `--restart=no` | `tia-whatsapp-1`, `versifine-bot`, `sellthat-backend-1` |
+| Credentials commented out | `/opt/sellthat/backend/.env`, `~/Deploy/tia/.env`, `/etc/versifine/wabot.env` |
+| Webhook routes retired | `/etc/nginx/snippets/sanket-webhook.conf` and the two blocks in `sellthat.in.conf` now `return 410` |
+| Backups | `/opt/wa-dismantle-backup-<timestamp>/`, path recorded in `/opt/wa-dismantle-latest.txt` |
+
+`sellthat.in/webhook/whatsapp` returns **410** and `tia.cyberkunju.com/webhook/whatsapp`
+returns **502** (its container is down behind the Cloudflare tunnel), so nothing on that host
+can answer Meta's handshake and re-claim the number.
+
+**Consequence worth stating plainly:** SellThat's only input path was WhatsApp, so stopping
+`sellthat-backend-1` also takes `sellthat.in`'s API down — the web container still serves the
+SPA. Tia and Versifine lose only their WhatsApp workers; their api/web/db containers are
+untouched and still running. To reverse any of it, restore the files from the backup
+directory, `docker update --restart=unless-stopped` and start the container, then repoint the
+phone-number override.
+
+### Meta credentials — wired
 
 Real credentials are in place, taken from the same Meta app this machine's other WhatsApp
 projects use (`Projects/Tia`, `Projects/Versifine`, `sellthat`):
@@ -411,33 +454,28 @@ projects use (`Projects/Tia`, `Projects/Versifine`, `sellthat`):
 turn and two early-warning alerts were all delivered to a real handset, and a second dispatch
 suppressed both alerts as duplicates.
 
-**Inbound from Meta is the blocked part, and it is a contention problem, not a credential
-problem.** There is exactly one phone number on this app, and a number delivers to exactly one
-webhook. The app-level callback currently points at `https://tia.cyberkunju.com/webhook/whatsapp`
-(live, answering the handshake), and `sellthat.in` is deployed against the same number too.
-Pointing it at KSP takes inbound away from whichever workload holds it:
+**Inbound arrives at KSP and delivery receipts land in `WaMessages`.** That last part matters
+more than it sounds: before the takeover, a business-initiated message outside Meta's 24-hour
+window was accepted with a message id and then dropped, and the `failed` status went to
+SellThat's webhook — so our ledger said `sent` and the handset showed nothing, with no way to
+tell the difference. Receipts now come to us.
 
-```bash
-# App-level flip — one command, and one command back. Displaces Tia.
-curl -X POST "https://graph.facebook.com/v23.0/2592724907814162/subscriptions" \
-  -d "object=whatsapp_business_account" -d "callback_url=https://ksp.cyberkunju.com/server/api/whatsapp/webhook" \
-  -d "verify_token=$WA_VERIFY_TOKEN" -d "fields=messages" -d "access_token=2592724907814162|$WA_APP_SECRET"
-```
+**The WABA id could not be fetched, only learned.** `me/businesses` is empty and every WABA
+edge and phone→WABA expansion is rejected for a system-user token. It was recovered from a
+15-digit id left in SellThat's container logs, confirmed against the Graph API, and the code
+now captures `entry[0].id` from any callback so a fresh environment never needs that
+archaeology (`lib/wa/inbound.js`, reported by `/whatsapp/health`).
 
-The surgical alternative (`POST /<WABA_ID>/subscribed_apps` with `override_callback_uri`) does
-not help here: with a single number the override and the app default govern the same delivery,
-so still only one workload can receive. The real fix is a second number — a free Meta test
-number is enough for a demo — which needs the Meta UI.
-
-The **WABA id is not obtainable with this token**: `me/businesses` is empty, and
-`owned_whatsapp_business_accounts`, `client_whatsapp_business_accounts` and a phone→WABA field
-expansion are all rejected. It comes from WhatsApp Manager, or from `entry[0].id` on the first
-inbound webhook. That id is also what blocks creating the `ksp_early_warning` template, so
-cold-window alerts fail with `#132001` until it exists. In-window alerts need no template and
-work today.
+**Alert template.** `ksp_early_warning_v2`, UTILITY, four body parameters. The `_v2` is not
+cosmetic: deleting a template puts a short lock on that name and language, `POST` then fails
+with `Message template language is being deleted`, and re-issuing the `DELETE` restarts the
+clock — so a delete-then-create script can never succeed. Meta's own advice is to use a new
+name. The shape is dictated by the sender: `client.js sendTemplate()` emits a single `body`
+component, so all four placeholders must live in the BODY. A header placeholder would fail
+only when a real alert fires outside the window, which is the worst moment to discover it.
 
 Testing inbound needs no Meta routing at all — with the real app secret you can sign a webhook
-yourself, which is how the whole channel was verified end to end.
+yourself, which is how the channel was verified before the takeover.
 
 ### Traps, all of which cost real time
 

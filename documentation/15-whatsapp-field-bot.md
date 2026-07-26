@@ -284,18 +284,31 @@ computation when no snapshot exists, so a fresh environment still works.
 
 ### The alert template
 
-Create this in Meta Business Manager → WhatsApp Manager → Templates, category
-**Utility**, name matching `WA_ALERT_TEMPLATE`, with four body parameters:
+Created as `ksp_early_warning_v2`, category **Utility**, four body parameters:
 
 ```
-KSP Early Warning — {{1}}
+KSP Early Warning                       [static header]
 
-Severity: {{2}}   Forecast period: {{3}}
+District: {{1}}
+Severity: {{2}}
+Forecast period: {{3}}
+
 {{4}}
 
 Decision support for deployment planning only. Not grounds for action against any
 individual. Reply to this message for detail.
+
+Karnataka State Police - Crime Intelligence   [footer]
 ```
+
+Two things about that shape are forced rather than chosen. **Every placeholder lives in
+the BODY** because `client.js sendTemplate()` emits a single `body` component and nothing
+else; a header placeholder would pass review and then fail with a parameter-count
+mismatch the first time a real alert fired outside the 24-hour window. And the name ends
+in `_v2` because deleting a template locks that name and language for a while — `POST`
+returns `Message template language is being deleted`, and re-issuing the `DELETE` restarts
+the clock, so a delete-then-recreate loop never converges. Meta's own advice is to pick a
+new name, which is cheaper than waiting.
 
 ## Security model
 
@@ -339,22 +352,31 @@ individual. Reply to this message for detail.
 | Sending | **verified live** — a signed inbound turn, a Kannada turn and two early-warning alerts delivered to a real handset; a second dispatch suppressed both as duplicates |
 | `DATA_WINDOW` | `2023-07..2025-06`, the period the case records actually cover |
 | Catalyst SDK | **3.4.0** — required; see below |
+| WABA | `2306127019919794` — learned from `entry[0].id`, see below |
+| Webhook | all three levels point at KSP: app, **phone-number override**, and WABA `subscribed_apps` |
+| Alert template | `ksp_early_warning_v2` (UTILITY, four body parameters) |
 
-**Inbound from Meta is the one part still blocked, and it is contention, not credentials.** The app
-has a single phone number, a number delivers to exactly one webhook, and the app-level callback
-currently serves another live workload (`tia.cyberkunju.com`, with `sellthat.in` deployed against
-the same number as well). Pointing it at KSP takes inbound from whoever holds it; a per-WABA
-override does not help with one number. A second number — a free Meta test number is enough for a
-demo — is the real fix, and needs the Meta UI. The exact flip command and the reasoning are in
-`DEVELOPMENT.md` §12.
+**The number is exclusive to KSP now.** It had been wired into three projects at once — SellThat,
+Tia and Versifine — and a WhatsApp number delivers to exactly one webhook, so whichever project
+last claimed a callback silently owned inbound for all of them. The other three are dismantled
+(containers stopped and pinned, credentials removed, webhook routes retired to `410`), with
+backups and a revert path in `DEVELOPMENT.md` §12.
 
-The same UI dependency blocks the alert template: creating it needs the WABA id, which this token
-cannot read (`me/businesses` is empty and every WABA edge is rejected). It arrives as `entry[0].id`
-on the first inbound webhook. Cold-window alerts therefore fail with `#132001`; in-window alerts
-need no template and work today.
+**Webhooks have three levels and the most specific wins.** Repointing the app-level callback
+returned `success: true` and changed nothing, because a phone-number-level override still pointed
+elsewhere. It is invisible unless you ask for `webhook_configuration` on the phone number. Set
+that one; the app-level alone is not enough.
 
-None of that blocks testing. With the real app secret a webhook can be signed locally, which is how
-the whole channel was verified end to end.
+**Delivery receipts now reach us, and that closed a real blind spot.** Before the takeover, a
+business-initiated message outside the 24-hour window was accepted with a message id and then
+dropped, and the `failed` status went to another project's webhook — so the ledger recorded `sent`
+while the handset showed nothing. Both are now visible in `WaMessages`.
+
+**The WABA id cannot be fetched with a system-user token** — `me/businesses` is empty and every
+WABA edge and phone→WABA expansion is rejected. It arrives as `entry[0].id` on any callback, so
+`lib/wa/inbound.js` captures it there and `/whatsapp/health` reports it; `WA_WABA_ID` takes
+precedence once known so a cold start needs no callback. Without it, templates cannot be created
+at all, because template management is WABA-scoped and does not accept a phone number id.
 
 Each console resource has an idempotent step in `tools/steps/`: `create-bucket.js`,
 `create-jobpool.js`, `create-cron.js`. Rerunning one reports what it found rather
