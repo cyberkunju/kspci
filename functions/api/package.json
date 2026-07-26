@@ -4,7 +4,10 @@
   "description": "KSP Crime AI — Advanced I/O API function (Catalyst Serverless)",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "lint:copy": "node scripts/lint-wa-copy.mjs",
+    "smoke": "node scripts/smoke-turn.mjs",
+    "test": "node scripts/lint-wa-copy.mjs && node --test test/*.test.js && node scripts/smoke-turn.mjs"
   },
   "dependencies": {
     "express": "^4.19.2",

@@ -25,6 +25,32 @@
             "SARVAM_TTS_MODEL": "bulbul:v3",
             "SARVAM_TTS_SPEAKER": "ritu",
 
+            "//wa": "--- WhatsApp field-officer channel (Meta Cloud API) ---",
+            "WA_PHONE_NUMBER_ID": "<whatsapp-business-phone-number-id>",
+            "WA_ACCESS_TOKEN": "<permanent-system-user-access-token>",
+            "WA_APP_SECRET": "<meta-app-secret-used-to-verify-webhook-signatures>",
+            "WA_VERIFY_TOKEN": "<random-string-you-also-paste-into-the-meta-webhook-form>",
+            "WA_GRAPH_VERSION": "v25.0",
+            "WA_HTTP_TIMEOUT_MS": "20000",
+
+            "//wa2": "--- Async processing: Catalyst Job Scheduling (webhook job pool) ---",
+            "WA_JOBPOOL": "<webhook-jobpool-name>",
+            "WA_PROCESS_URL": "https://<your-domain>/server/api/whatsapp/process",
+            "WA_INTERNAL_KEY": "<strong-random-key-guarding-/whatsapp/process-and-alert-dispatch>",
+
+            "//wa3": "--- Proactive alerts (template required outside the 24h window) ---",
+            "WA_ALERT_TEMPLATE": "ksp_early_warning",
+            "WA_ALERT_TEMPLATE_LANG": "en",
+            "WA_ALERT_MAX_SENDS": "200",
+
+            "//wa4": "--- Field photo gallery + Zia facial comparison tuning ---",
+            "WA_PHOTO_BUCKET": "ksp-field-photos",
+            "WA_FACE_CANDIDATES": "12",
+            "WA_FACE_CONCURRENCY": "3",
+            "WA_RATE_LIMIT": "60",
+            "WA_AGENT_STEPS": "6",
+            "WA_VOICE_REPLY": "on",
+
             "//3": "--- Optional tuning ---",
             "LLM_TIMEOUT_MS": "60000",
             "LLM_FORCE_REACT": "false",

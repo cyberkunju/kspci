@@ -41,6 +41,7 @@ features**.
 | 12 | **[12-setup-build-run.md](./12-setup-build-run.md)** | Build, run, deploy from scratch; ML reproduce steps |
 | 13 | **[13-file-reference.md](./13-file-reference.md)** | File‑by‑file reference of the whole repo |
 | 14 | **[14-zoho-ai-migration.md](./14-zoho-ai-migration.md)** | Migration to Zoho/Zia AI (QuickML LLM + Zia OCR + Web Speech), provisioning steps |
+| 15 | **[15-whatsapp-field-bot.md](./15-whatsapp-field-bot.md)** | WhatsApp field-officer channel — agent, photo identification, alerts, security model, provisioning |
 
 ---
 
