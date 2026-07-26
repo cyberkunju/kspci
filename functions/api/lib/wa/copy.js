@@ -68,6 +68,13 @@ const EN = {
   alertsUpdated: (districts, severity) => `Alerts set: *${districts}* at *${severity}* and above.`,
   alertsOff: 'Alerts off. Send "alert me about <district>" whenever you want them back.',
 
+  /* --- open-source research ----------------------------------------------- */
+  // The officer must be told two things and no more: that it is running, and roughly how
+  // long. A progress promise with no time attached is what makes people send the request
+  // again, which costs the instance two runs.
+  researchWait: (subject) => `Searching the open internet for *${subject}* now — news, court and government sources in English, Hindi and Kannada, plus whatever our own records hold. About a minute. I will send the findings here; you do not need to wait or ask again.`,
+  researchWaitDeep: (subject) => `Running a *deep* search on *${subject}* — the same sources, read much wider. Up to five minutes. I will send the findings here when they are in; carry on with anything else meanwhile.`,
+
   /* --- undo --------------------------------------------------------------- */
   undoHint: (token) => `\n\n_Undo: reply ${token}_`,
   undoDone: (what) => `↩️ Reversed ${what}.`,
@@ -128,6 +135,8 @@ const KN = {
   alertsOff: 'Alerts ನಿಲ್ಲಿಸಲಾಗಿದೆ. ಬೇಕಾದಾಗ "alert me about <ಜಿಲ್ಲೆ>" ಎಂದು ಕಳುಹಿಸಿ.',
 
   undoHint: (token) => `\n\n_ಹಿಂತೆಗೆಯಲು: ${token} ಎಂದು ಕಳುಹಿಸಿ_`,
+  researchWait: (subject) => `*${subject}* ಬಗ್ಗೆ ಈಗ ಆನ್‌ಲೈನ್ ಹುಡುಕುತ್ತಿದ್ದೇನೆ — ಇಂಗ್ಲಿಷ್, ಹಿಂದಿ ಮತ್ತು ಕನ್ನಡ news, court ಹಾಗೂ ಸರ್ಕಾರಿ ಮೂಲಗಳು, ಜೊತೆಗೆ ನಮ್ಮ ದಾಖಲೆಗಳೂ. ಸುಮಾರು ಒಂದು ನಿಮಿಷ. ಫಲಿತಾಂಶ ಇಲ್ಲಿಯೇ ಕಳುಹಿಸುತ್ತೇನೆ; ಕಾಯುವ ಅಥವಾ ಪುನಃ ಕೇಳುವ ಅಗತ್ಯವಿಲ್ಲ.`,
+  researchWaitDeep: (subject) => `*${subject}* ಬಗ್ಗೆ *deep* ಹುಡುಕಾಟ ನಡೆಸುತ್ತಿದ್ದೇನೆ — ಅದೇ ಮೂಲಗಳು, ಹೆಚ್ಚು ವಿಸ್ತಾರವಾಗಿ. ಗರಿಷ್ಠ ಐದು ನಿಮಿಷ. ಸಿದ್ಧವಾದಾಗ ಇಲ್ಲಿಯೇ ಕಳುಹಿಸುತ್ತೇನೆ; ಅಷ್ಟರಲ್ಲಿ ಬೇರೆ ಕೆಲಸ ಮುಂದುವರಿಸಿ.`,
   undoDone: (what) => `↩️ ${what} ಹಿಂತೆಗೆಯಲಾಗಿದೆ.`,
   undoNotFound: 'ಆ undo ಕೋಡ್ ಸಿಗಲಿಲ್ಲ. ಅವಧಿ ಮುಗಿದಿರಬಹುದು, ಅಥವಾ ಈಗಾಗಲೇ ಬಳಸಿರಬಹುದು.',
   undoAlready: 'ಅದನ್ನು ಈಗಾಗಲೇ ಹಿಂತೆಗೆಯಲಾಗಿದೆ.',
