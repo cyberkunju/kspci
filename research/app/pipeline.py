@@ -22,12 +22,12 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 from . import claims as claims_mod
-from . import attribute, cluster, llm, sources
+from . import attribute, cluster, llm, rerank, sources
 from .config import Budget, settings
 from .extract import extract
 from .governance import DISCLAIMER
 from .models import ATTRIBUTION_RANK, Anchors, Document, Finding, Hit, Story, Tier
-from .net import Fetcher, canonical_url
+from .net import Fetcher, canonical_url, host_of, registrable
 from .fuse import fuse
 from .plan import GdeltPlan, Query, plan_queries, resolve_names
 from .verdict import render_notice, verdicts
@@ -253,7 +253,7 @@ def _prefilter(hits: list[Hit], terms: list[str]) -> list[Hit]:
     """
     needles = [t for t in terms if len(t) >= 4]
 
-    def rank(h: Hit) -> tuple:
+    def rank(h: Hit) -> tuple:  # noqa: F811 — local sort key, see _rank_candidates
         title = (h.title or "").lower()
         snippet = (h.snippet or "").lower()
         if needles and any(n.lower() in title for n in needles):
@@ -269,6 +269,82 @@ def _prefilter(hits: list[Hit], terms: list[str]) -> list[Hit]:
         return (relevance, unreadable, -fused, int(h.tier), h.published or "")
 
     return sorted(hits, key=rank)
+
+
+def _rerank_query(subject: str, anchors: Anchors, question: str) -> str:
+    """One sentence describing what we are looking for, for the cross-encoder.
+
+    Deliberately richer than the search queries. A search engine needs terms that match
+    documents; a cross-encoder needs to know WHO the subject is, because that is what
+    lets it score a namesake low. So the aliases and the place go in, and so does the
+    officer's own question when they asked one — it carries intent that the subject line
+    does not.
+    """
+    parts = [subject]
+    parts += [n for n in anchors.names if n and n.lower() != subject.lower()]
+    place = ", ".join(x for x in (anchors.district, anchors.state) if x)
+    if place:
+        parts.append(f"in {place}")
+    text = " ".join(parts)
+    q = " ".join((question or "").split())
+    return f"{text}. {q}"[:1000] if q else text[:1000]
+
+
+async def _rank_candidates(hits: list[Hit], terms: list[str], *, subject: str,
+                           anchors: Anchors, question: str, dl: Deadline,
+                           progress: Progress | None) -> tuple[list[Hit], str]:
+    """Decide the read order: lexical first, then a cross-encoder over the top of it.
+
+    The lexical pass still runs and still matters. It is the fallback when reranking is
+    unavailable, it breaks ties between candidates the model scores equally, and it puts
+    the candidates the model sees in a sensible order in case the list has to be
+    truncated. What the model changes is the decision that lexical ordering gets wrong:
+    whether a document is about THIS person.
+
+    One rule survives the model: a publisher we have learned we cannot read statically
+    still goes last, however relevant the model thinks it is. A read spent on a page that
+    renders empty is a read spent on nothing, and the model is scoring a headline, not
+    predicting whether we can open the page.
+    """
+    ordered = _prefilter(hits, terms)
+    if not rerank.available() or len(ordered) < 2 or dl.remaining < 6:
+        return ordered, ""
+
+    subset = ordered[:rerank.MAX_DOCUMENTS]
+    docs = [rerank.document_text(h.title, h.snippet,
+                                 registrable(host_of(h.url)), h.published)
+            for h in subset]
+    # A candidate with no headline and no snippet gives the cross-encoder nothing to judge,
+    # and it will still return a number — an arbitrary one. Left in, fourteen untitled
+    # court results scored high enough to consume a third of the read budget and all
+    # graded unrelated. They are held out and given the median score instead, so they
+    # compete on the tier and lexical rank we do have rather than on a guess.
+    judgeable = [i for i, d in enumerate(docs) if len(d.strip(" .[]")) > 12]
+    if not judgeable:
+        return ordered, ""
+    got = await rerank.scores(_rerank_query(subject, anchors, question),
+                              [docs[i] for i in judgeable],
+                              timeout_s=min(20.0, max(4.0, dl.remaining * 0.25)))
+    if not got:
+        return ordered, (f"candidate reranking was unavailable "
+                         f"({rerank.LAST_ERROR.get('reason', 'no scores returned')}); "
+                         "the read order is lexical")
+
+    for i, s in zip(judgeable, got):
+        subset[i].extra["rerank_score"] = round(s, 4)
+    neutral = sorted(got)[len(got) // 2] if got else 0.0
+    baseline = {id(h): i for i, h in enumerate(ordered)}
+
+    def key(h: Hit) -> tuple:
+        unreadable = 1 if verdicts.needs_render(h.url) else 0
+        score = h.extra.get("rerank_score")
+        return (unreadable, -float(neutral if score is None else score),
+                baseline.get(id(h), 0))
+
+    ranked = sorted(ordered, key=key)
+    await _emit(progress, "rank", f"{len(got)} candidates scored by cross-encoder",
+                scored=len(got))
+    return ranked, ""
 
 
 # ── retrieval ───────────────────────────────────────────────────────────────────
@@ -368,7 +444,15 @@ async def run(*, subject: str, kind: str, anchors: Anchors, budget: Budget,
         # 3. RETRIEVE — most plausibly relevant first, so a real match is never the
         # source that went unread because a site returned its front page.
         terms = [subject] + [w for w in subject.split() if len(w) >= 5] + anchors.names
-        docs = await _retrieve(f, _prefilter(hits, terms), budget, dl, progress) if hits else []
+        docs, reranked = [], 0
+        if hits:
+            ordered, rank_warning = await _rank_candidates(
+                hits, terms, subject=subject, anchors=anchors, question=question,
+                dl=dl, progress=progress)
+            if rank_warning:
+                out.warnings.append(rank_warning)
+            reranked = sum(1 for h in ordered if h.extra.get("rerank_score") is not None)
+            docs = await _retrieve(f, ordered, budget, dl, progress)
         out.stages.append("retrieve")
         readable = [d for d in docs if d.ok]
         await _emit(progress, "retrieve", f"{len(readable)} of {len(docs)} readable",
@@ -390,6 +474,7 @@ async def run(*, subject: str, kind: str, anchors: Anchors, budget: Budget,
         # officer can act on, so it must exist even if everything after this fails.
         out.findings = _findings(stories, docs)
         out.counts = _counts(stories, docs, hits)
+        out.counts["reranked"] = reranked
 
         # 6-7. CLAIMS AND SUMMARY — the optional half.
         admitted, refused = claims_mod.admitted(stories)

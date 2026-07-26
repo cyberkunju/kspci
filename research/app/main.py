@@ -30,6 +30,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import governance, llm, sources
+from . import rerank
 from .config import BUDGETS, budget_for, settings
 from .models import Anchors
 from .pipeline import run as run_pipeline
@@ -298,6 +299,10 @@ async def health() -> dict:
         "modes": sorted(BUDGETS),
         "model": {"configured": llm.available(), "backend": llm.backend(),
                   **({"last_error": llm.LAST_ERROR} if llm.LAST_ERROR else {})},
+        # The cross-encoder that decides which of ~130 candidates the run actually reads.
+        # Reported separately from the chat model because losing it degrades the run
+        # quietly — the answer is still produced, from a worse selection of sources.
+        "rerank": rerank.status(),
         "sources": sources.available(),
         "source_status": dict(sources.STATUS),
         # Which publishers this instance has learned it cannot read without a browser.

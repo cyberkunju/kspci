@@ -9,6 +9,9 @@ Three backends:
                 KSP2 function already uses, so the whole system can run on one model.
   * `none`    — no model configured.
 
+Reranking does not go through here: it is a cross-encoder, not a chat model, with its own
+endpoint and its own failure semantics. See rerank.py.
+
 The `none` backend is not a stub, it is a feature. Every claim and every summary in
 this engine is optional decoration on top of a retrieved, attributed, citable source
 list. With no model the run still returns all its sources with their attribution bands

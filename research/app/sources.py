@@ -315,12 +315,24 @@ def _links_from_search_html(body: bytes, base_url: str, *, link_contains: str = 
     # (score, dom_index, url, title). Bounded so a 600 KB results page cannot make this
     # the expensive part of a run.
     scored: list[tuple[int, int, str, str]] = []
+    index_by_url: dict[str, int] = {}
     for a in tree.xpath("//a[@href]")[:1200]:
         href = (a.get("href") or "").strip()
         if not href or href.startswith(("#", "mailto:", "javascript:", "tel:")):
             continue
         absolute = canonical_url(urljoin(base_url, href))
-        if not absolute or absolute in seen:
+        if not absolute:
+            continue
+        if absolute in seen:
+            # The same result is often linked twice — once from its headline and once
+            # from a "Full document" or thumbnail link. Whichever came first won, and on
+            # Indian Kanoon that is the furniture link, so every judgment arrived with no
+            # title at all. An untitled candidate cannot be judged by the reranker or read
+            # by the officer, so the longest real label wins instead of the first.
+            slot = index_by_url[absolute]
+            better = " ".join((a.text_content() or "").split())[:200]
+            if better and not _NAV_TEXT.match(better) and len(better) > len(scored[slot][3]):
+                scored[slot] = (scored[slot][0], scored[slot][1], scored[slot][2], better)
             continue
         if link_contains:
             if link_contains not in absolute:
@@ -335,11 +347,16 @@ def _links_from_search_html(body: bytes, base_url: str, *, link_contains: str = 
         seen.add(absolute)
         haystack = f"{title.lower()} {absolute.lower()}"
         score = sum(1 for n in needles if n in haystack)
+        index_by_url[absolute] = len(scored)
         scored.append((score, len(scored), absolute, title))
         if len(scored) >= limit * 8:
             break
-    scored.sort(key=lambda row: (-row[0], row[1]))
-    return [(u, t) for _, _, u, t in scored[:limit]]
+    # Re-score after the title fix-ups above: a result whose real headline only arrived on
+    # its second anchor would otherwise be ranked on the furniture label.
+    final = [(sum(1 for n in needles if n in f"{t.lower()} {u.lower()}"), i, u, t)
+             for _, i, u, t in scored]
+    final.sort(key=lambda row: (-row[0], row[1]))
+    return [(u, t) for _, _, u, t in final[:limit]]
 
 
 def _quintype_hits(spec: dict, body: bytes, query: str, *, limit: int) -> list[Hit] | None:
