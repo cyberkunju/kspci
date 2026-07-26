@@ -43,11 +43,42 @@ def offline() -> None:
 
     print("\n— ssrf defence —")
     for target in ["127.0.0.1", "169.254.169.254", "10.0.0.5", "192.168.1.1",
-                   "localhost", "0.0.0.0", "[::1]"]:
+                   "localhost", "0.0.0.0", "[::1]",
+                   # IPv4-mapped IPv6. Python's ipaddress treats these as distinct
+                   # objects, so is_private and set membership on the bare v4 form both
+                   # miss them — the metadata endpoint reachable by a spelling.
+                   "::ffff:169.254.169.254", "::ffff:127.0.0.1", "::ffff:10.0.0.5",
+                   # ECS task metadata hands out task IAM credentials.
+                   "169.254.170.2", "169.254.169.253", "fd00:ec2::254",
+                   # RFC 6598 carrier NAT: neither is_private nor is_global in Python.
+                   "100.64.0.1", "100.127.255.254",
+                   # Refused on the name, before DNS is consulted at all.
+                   "metadata.google.internal", "metadata.goog"]:
         ok, why = asyncio.run(resolves_public(target.strip("[]")))
         check(f"blocks {target}", not ok, why)
     ok, why = asyncio.run(resolves_public("1.1.1.1"))
     check("allows a public literal", ok, why)
+    # 100.63.x and 100.128.x sit either side of the CGNAT block and are public.
+    ok, _ = asyncio.run(resolves_public("100.63.255.255"))
+    check("does not over-block below the CGNAT range", ok)
+
+    print("\n— rate limiting: a 429 is obeyed, never retried —")
+    from .net import _retry_after_seconds, host_penalty_remaining, note_rate_limited
+    check("Retry-After in seconds is honoured", _retry_after_seconds("120") == 120.0)
+    check("an HTTP-date Retry-After parses",
+          (_retry_after_seconds("Wed, 21 Oct 2099 07:28:00 GMT") or 0) > 0)
+    check("a wild Retry-After is clamped, not trusted",
+          (_retry_after_seconds("99999999") or 0) <= 900.0)
+    check("nonsense yields no window", _retry_after_seconds("soon") is None)
+    check("no header falls back to a default window",
+          note_rate_limited("penalty.invalid", None) > 0)
+    check("and the host is then skipped without asking again",
+          host_penalty_remaining("penalty.invalid") > 0)
+    check("a host that never 429'd is unpenalised",
+          host_penalty_remaining("clean.invalid") == 0)
+    check("the server's own window wins over our guess",
+          650 <= note_rate_limited("told.invalid", "700") <= 700,
+          str(host_penalty_remaining("told.invalid")))
 
     print("\n— extraction —")
     html = b"""<html><head><title>Man held in Mysuru cheating case</title>

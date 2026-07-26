@@ -41,6 +41,63 @@ _TRACKING_EXACT = {
 
 _ALLOWED_SCHEMES = {"http", "https"}
 
+#: Hosts that have answered 429, and the instant they said we may return. Module-level
+#: on purpose: a rate limit is a property of OUR IP, not of one run, so a penalty
+#: discovered by one run must be visible to the next. This is the single most expensive
+#: thing we got wrong — GDELT rate-limited us on every live run of a testing session
+#: because each run cheerfully re-asked while the previous penalty was still active.
+_HOST_PENALTY: dict[str, float] = {}
+
+#: Used when a 429 carries no Retry-After. Long enough to outlast a per-minute quota
+#: without writing off a source for the whole run.
+_DEFAULT_PENALTY_S = 120.0
+
+#: A Retry-After further out than this is treated as "not within this run's lifetime"
+#: rather than slept on. Nothing here ever waits for a penalty; it records and moves on.
+_MAX_PENALTY_S = 900.0
+
+
+def _retry_after_seconds(value: str | None) -> float | None:
+    """Parse Retry-After. It is legally either a delay in seconds or an HTTP date."""
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        return min(float(raw), _MAX_PENALTY_S)
+    try:
+        from email.utils import parsedate_to_datetime
+        when = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=_dt.timezone.utc)
+    return max(0.0, min((when - now).total_seconds(), _MAX_PENALTY_S))
+
+
+def host_penalty_remaining(host: str) -> float:
+    """Seconds left on a host's rate-limit penalty, 0 when it may be called."""
+    until = _HOST_PENALTY.get((host or "").lower(), 0.0)
+    return max(0.0, until - time.monotonic())
+
+
+def note_rate_limited(host: str, retry_after: str | None = None) -> float:
+    """Record a 429. Returns the penalty length in seconds.
+
+    Deliberately no retry. A 429 is the server saying we are over quota, and asking
+    again — even politely, even later in the same run — is how a temporary throttle
+    becomes a ban. The technique is Hermes Agent's (MIT); their comment puts it well:
+    retrying when the upstream says you are over quota only wastes time.
+    """
+    wait = _retry_after_seconds(retry_after)
+    if wait is None:
+        wait = _DEFAULT_PENALTY_S
+    _HOST_PENALTY[(host or "").lower()] = time.monotonic() + wait
+    return wait
+
 
 def canonical_url(raw: str) -> str:
     """A stable identity for a page.
@@ -97,17 +154,51 @@ def registrable(host: str) -> str:
     return ".".join(parts[-2:])
 
 
+#: Addresses that must never be reached, whatever else the classification says.
+#: Every cloud provider puts credentials on one of these, so this is the floor.
+#: The `::ffff:` duplicates are not redundant: Python's `ipaddress` treats an
+#: IPv4-mapped IPv6 address as a distinct object, so a set membership test on the
+#: bare IPv4 form silently misses `::ffff:169.254.169.254`. See `_is_public_ip`,
+#: which also unwraps the mapping — this set is the belt to that braces.
+_METADATA_ADDRESSES = {
+    "169.254.169.254",          # AWS / GCP / Azure / DigitalOcean / Oracle IMDS
+    "169.254.170.2",            # ECS task metadata — hands out task IAM credentials
+    "169.254.169.253",          # Azure IMDS wire server
+    "100.100.100.200",          # Alibaba Cloud
+    "fd00:ec2::254",            # AWS IPv6 metadata
+    "::ffff:169.254.169.254", "::ffff:169.254.170.2",
+    "::ffff:169.254.169.253", "::ffff:100.100.100.200",
+}
+
+#: Hostnames that resolve to a metadata service. Blocked on the NAME, before any DNS
+#: lookup, because a resolver that answers differently from ours would otherwise win.
+_METADATA_HOSTS = {"metadata.google.internal", "metadata.goog", "metadata"}
+
+#: RFC 6598 carrier-grade NAT. Python reports this range as neither private nor
+#: global, so every `is_private` check misses it — and it is exactly where Tailscale,
+#: WireGuard and carrier NAT put internal hosts.
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+
+
 def _is_public_ip(addr: str) -> bool:
+    """Is this address safe to connect to? Fails closed on anything unparseable."""
     try:
-        ip = ipaddress.ip_address(addr)
+        ip = ipaddress.ip_address(addr.split("%")[0])   # strip IPv6 scope id
     except ValueError:
+        return False
+    # An IPv4-mapped IPv6 address is the embedded IPv4 address for every purpose that
+    # matters here, but none of Python's `is_*` properties look through the mapping.
+    # Judge the address it actually reaches.
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    if str(ip) in _METADATA_ADDRESSES or addr in _METADATA_ADDRESSES:
+        return False
+    if ip.version == 4 and ip in _CGNAT:
         return False
     return not (
         ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast
         or ip.is_reserved or ip.is_unspecified
-        # 169.254.169.254 is link-local and already covered; this is belt-and-braces
-        # for the address every cloud metadata service lives on.
-        or str(ip) in {"169.254.169.254", "100.100.100.200"}
     )
 
 
@@ -119,6 +210,10 @@ async def resolves_public(host: str) -> tuple[bool, str]:
     """
     if not host:
         return False, "no host"
+    # Metadata hostnames are refused before DNS. Resolving them first would mean
+    # trusting the resolver to agree with us about where they point.
+    if host.rstrip(".") in _METADATA_HOSTS:
+        return False, "cloud metadata hostname"
     # A literal IP needs no DNS and must still pass.
     try:
         ipaddress.ip_address(host)
@@ -245,6 +340,12 @@ class Fetcher:
             if not ok:
                 out["error"] = f"blocked: {why}"
                 return out
+            # Do not knock on a door that has just told us to go away. Checked per hop,
+            # because a redirect can land on a host that is already penalised.
+            left = host_penalty_remaining(host)
+            if left:
+                out["error"] = f"rate limited by {host}; {int(left)}s left on the penalty"
+                return out
             if respect_robots and hop == 0:
                 allowed, reason = await self.allowed_by_robots(current)
                 if not allowed:
@@ -261,6 +362,12 @@ class Fetcher:
                     try:
                         out["status"] = resp.status_code
                         out["content_type"] = resp.headers.get("content-type", "")
+                        if resp.status_code == 429:
+                            wait = note_rate_limited(
+                                host, resp.headers.get("retry-after"))
+                            out["error"] = (f"rate limited by {host} "
+                                            f"(retry after {int(wait)}s)")
+                            return out
                         if resp.is_redirect:
                             loc = resp.headers.get("location", "")
                             if not loc:

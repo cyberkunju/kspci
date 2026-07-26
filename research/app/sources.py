@@ -34,7 +34,8 @@ from lxml import html as lxml_html
 
 from .config import settings
 from .models import Hit, Tier
-from .net import Fetcher, RateLimiter, canonical_url, host_of, registrable
+from .net import (Fetcher, RateLimiter, canonical_url, host_of,
+                  host_penalty_remaining, registrable)
 from .tiers import ONSITE, tier_for
 
 # GDELT is generous but slow; ten seconds is not enough and a truncated call looks
@@ -70,9 +71,15 @@ def _cooling(name: str) -> bool:
     return False
 
 
-def _cool(name: str, reason: str) -> None:
+def _cool(name: str, reason: str, seconds: float | None = None) -> None:
+    """Sideline a source. `seconds` overrides the default when the server told us.
+
+    A guessed cooldown is either too short — in which case the next run re-asks a host
+    that is still angry and earns a longer penalty — or too long, and we throw away a
+    source that was ready. When there is a `Retry-After` to read, read it.
+    """
     import time as _t
-    _COOLDOWN[name] = _t.monotonic() + _COOLDOWN_S
+    _COOLDOWN[name] = _t.monotonic() + (seconds if seconds and seconds > 0 else _COOLDOWN_S)
     STATUS[name] = reason
 
 
@@ -138,8 +145,15 @@ async def gdelt(f: Fetcher, query: str, *, limit: int = 40, timespan: str = "3mo
     await _gdelt_limit.acquire()
     r = await f.get(url, respect_robots=False, timeout_s=GDELT_TIMEOUT_S,
                     accept="application/json", max_bytes=8 * 1024 * 1024)
-    if r["status"] == 429:
-        _cool("gdelt", "rate limited (one request per 5s; penalty window active)")
+    # A 429 is now caught inside the fetcher, which reads Retry-After and records a
+    # per-host penalty that outlives this run. Mirror that window into the source
+    # cooldown so the run report can name it, rather than guessing 180s.
+    penalty = host_penalty_remaining("api.gdeltproject.org")
+    if r["status"] == 429 or penalty:
+        _cool("gdelt",
+              f"rate limited; {int(penalty)}s left on the penalty window"
+              if penalty else "rate limited (one request per 5s)",
+              seconds=penalty or None)
         return []
     if r["error"] or r["status"] != 200:
         _cool("gdelt", r["error"] or f"http {r['status']}")
