@@ -87,7 +87,7 @@ export function exportResearchPdf({ result, role }) {
 
   const tierName = ['', 'Official', 'Newsroom', 'Syndicated', 'Unvetted', 'Social'];
   const rows = (r.findings || []).map((f) => `<tr>
-    <td class="band band-${esc(f.attribution)}">${esc(bandLabel(f.attribution))}
+    <td class="band band-${esc(f.attribution)}">${f.marker ? `[${esc(f.marker)}] ` : ''}${esc(bandLabel(f.attribution))}
       ${(f.matched || []).length ? `<div class="meta">matched: ${esc((f.matched || []).join(', '))}</div>` : ''}</td>
     <td>${esc(f.title || f.url)}<div class="meta">${esc((f.why || []).join('; '))}</div></td>
     <td>${esc(f.outlet || '')}

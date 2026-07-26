@@ -137,7 +137,7 @@ export default function Research({ role }) {
       <PageHeader
         eyebrow="OPEN-SOURCE RESEARCH"
         title="Find what the open internet says, and how much of it is really them"
-        description="Searches news, court and government sources in English and Kannada, then grades every source by how confident it is that the source is about your subject. Nothing it returns is evidence."
+        description="Searches news, court and government sources in English, Kannada and Hindi, then grades every source by how confident it is that the source is about your subject. Nothing it returns is evidence."
         badge="OSINT"
       />
 
@@ -314,6 +314,13 @@ export default function Research({ role }) {
                     key: 'attribution', header: 'Confidence', width: pixel(132),
                     renderCell: (f) => (
                       <Stack gap={0.5}>
+                        {/* The citation marker the summary uses for this source. Without
+                            it the summary's "[S3]" resolved to nothing on any screen,
+                            which makes the every-sentence-is-cited contract unverifiable
+                            by the one person who needs to verify it. */}
+                        {f.marker && (
+                          <Text type="supporting" weight="semibold" color="accent">[{f.marker}]</Text>
+                        )}
                         <Badge variant={(BANDS[f.attribution] || {}).variant || 'neutral'}
                           label={(BANDS[f.attribution] || {}).label || f.attribution} />
                         {(f.matched || []).length > 0 && (
