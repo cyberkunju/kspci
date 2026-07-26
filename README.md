@@ -6,8 +6,9 @@ Conversational and predictive crime intelligence, built end to end on Zoho Catal
 An officer asks a question in English or Kannada, typed or spoken. The system answers from the live
 case store and shows the query it ran and the records it read, so the answer can be checked rather
 than trusted. Around that sit the analytics suite, a forecasting engine validated on 6.37 million
-real incidents, a 360° case dossier, scanned-FIR ingestion by OCR, and a WhatsApp channel that puts
-the same platform on a field officer's phone in English, Kannada or Hindi.
+real incidents, a 360° case dossier, scanned-FIR ingestion by OCR, an open-source research engine
+that grades every source by how confident it is the source is really about your subject, and a
+WhatsApp channel that puts the same platform on a field officer's phone in English, Kannada or Hindi.
 
 | | |
 |---|---|
@@ -15,6 +16,7 @@ the same platform on a field officer's phone in English, Kannada or Hindi.
 | WhatsApp field channel | **+91 94002 45958** — [open a chat](https://wa.me/919400245958) |
 | API | `https://ksp.cyberkunju.com/server/api` |
 | Forecast service | `https://kspforecast-50044266480.development.catalystappsail.in` |
+| Research engine | `https://research-50044266480.development.catalystappsail.in` — internal key only |
 | Catalyst project | Project-Rainfall · `51589000000013024` · India DC · Asia/Kolkata |
 
 The web console is open — pick a role in the sidebar and ask it something. The WhatsApp number
@@ -41,15 +43,16 @@ case is represented anywhere in this repository.
 2. [Data](#data)
 3. [Predictive early-warning engine](#predictive-early-warning-engine)
 4. [WhatsApp field channel](#whatsapp-field-channel)
-5. [Analytics and investigation surfaces](#analytics-and-investigation-surfaces)
-6. [Working at national scale](#working-at-national-scale)
-7. [API surface](#api-surface)
-8. [Catalyst services used](#catalyst-services-used)
-9. [Build, run, deploy](#build-run-deploy)
-10. [Repository layout](#repository-layout)
-11. [Security posture — enforced and not enforced](#security-posture--enforced-and-not-enforced)
-12. [Verification](#verification)
-13. [Documentation](#documentation)
+5. [Open-source research engine](#open-source-research-engine)
+6. [Analytics and investigation surfaces](#analytics-and-investigation-surfaces)
+7. [Working at national scale](#working-at-national-scale)
+8. [API surface](#api-surface)
+9. [Catalyst services used](#catalyst-services-used)
+10. [Build, run, deploy](#build-run-deploy)
+11. [Repository layout](#repository-layout)
+12. [Security posture — enforced and not enforced](#security-posture--enforced-and-not-enforced)
+13. [Verification](#verification)
+14. [Documentation](#documentation)
 
 ---
 
@@ -281,6 +284,53 @@ biometric use is written to `WaMessages`. Full design, security model and provis
 
 ---
 
+## Open-source research engine
+
+A separate AppSail service (`research/`, FastAPI on a custom Docker runtime) that searches the open
+internet about a subject and grades every source by how confident it is that the source is really
+about *that* subject. It is separate because a run takes 40 to 300 seconds and an Advanced I/O
+function is killed at 30.
+
+Two ideas do the work.
+
+**Anchors, not names.** "Suresh Kumar" has millions of matches. "Suresh Kumar", Mysuru, aged 34,
+FIR 118/2023, co-accused Manjunath has approximately one. Those facts are in our own Data Store, so
+`functions/api/lib/research.js` reads them and hands them to the engine — which is why the bridge
+lives in the function and not in the browser. The same lookup decides *who the subject is to us*: a
+name that appears as a victim or a complainant and not as an accused is passed through as
+`subject_role` and the engine refuses the run. A person who reported a crime did not volunteer to
+have their open-source footprint assembled.
+
+**Attribution is the product, not retrieval.** Every source is returned with a confidence band —
+confirmed, probable, possible, different person, unrelated — and the reasons behind it. Weak matches
+are shown rather than hidden, because an officer cross-checks everything and a silently dropped
+"possible" reads as certainty. The summary is written only from claims whose quoted span was
+re-found in the stored text of the document it came from; anything that could not be re-found is
+dropped and reported. Caste, religion, community and political affiliation are never carried into a
+summary about a person, in any of the three scripts our sources publish in.
+
+Eight discovery tiers (five live), a Cohere cross-encoder choosing which ~48 of ~140 candidates are
+worth reading, `trafilatura` for boilerplate removal, and no browser anywhere — the render tier was
+measured and rejected rather than assumed.
+
+Where it appears:
+
+- **Desk** — the *Open Sources* panel: purpose field, live stage progress, the anchor summary with
+  its honest strength label, a filterable graded source table, the dated-claims timeline, and a PDF
+  export. Each citation in the summary resolves to a row in the table.
+- **WhatsApp** — the run is started and the turn ends, because there is no honest way to answer
+  inside it. The engine calls back minutes later and the report arrives as its own message, in the
+  officer's language, with the full article url for every source. The report becomes part of the
+  conversation, so the officer can question it afterwards — and asking about a subject already
+  reported reads the report rather than searching again.
+
+Governance is not decoration here: purpose is required and recorded, person-level research needs an
+operational role while aggregate subjects do not, and there is one authoritative gate rather than
+two of differing strictness. Full design, measurements and honest limits:
+[`documentation/16-research-engine.md`](./documentation/16-research-engine.md).
+
+---
+
 ## Analytics and investigation surfaces
 
 Read off the Data Store through ZCQL aggregation, partitioned where national volume requires it.
@@ -354,6 +404,10 @@ Base `/server/api`. JSON in, JSON out. Role in `x-user-role`, user id in `x-user
 | GET | `/investigator/case` | any | dossier by `crimeNo` |
 | GET | `/analytics/forecast` · `earlywarning` · `brief` | any | snapshot forecast, alerts, written brief |
 | GET | `/analytics/backtest` · `watchlist` | analyst+ | scorecard, reoffending list |
+| POST | `/research` | any (the engine decides by subject kind) | start an open-source research run |
+| GET/DELETE | `/research/:id` | any | poll or cancel a run |
+| GET | `/research/health` | any | engine reachability, model, rerank and per-tier state |
+| POST | `/research/callback` | engine (internal key) | a finished run, delivered to WhatsApp |
 | GET/POST | `/whatsapp/webhook` | Meta | verification and inbound messages |
 | POST | `/whatsapp/process` · `/whatsapp/alerts/dispatch` | internal | turn processing, alert fan-out |
 | GET | `/whatsapp/health` | any | channel configuration state |
@@ -361,6 +415,10 @@ Base `/server/api`. JSON in, JSON out. Role in `x-user-role`, user id in `x-user
 | POST | `/admin/forecast/refresh` · `purge` · `dedupe` · `put` | admin key | snapshot lifecycle |
 | POST | `/admin/zcql` | admin key | read-only diagnostic query (SELECT only, refuses mutations) |
 | GET/POST | `/admin/seed` · `/admin/insert` · `/admin/status` · `/admin/reset` | admin key | seeding and maintenance |
+
+`GET /admin/status?llm=1` additionally probes the language model and reports what came back. Without
+it every model failure — an expired credential, a revoked scope, a provider outage — presents
+identically as "something went wrong" on every surface at once.
 
 `POST /chat/:sessionId/pdf` returns `501` on purpose — export is a client-side print pipeline
 (`client/src/lib/pdf.js`), so the feature works without a server round-trip. `/admin/reset` is
@@ -377,7 +435,7 @@ irreversible and does not touch the forecast tables.
 | ZCQL | read layer for every grounded answer |
 | QuickML — LLM Serving | GLM-4.7-Flash (`crm-di-glm47b_30b_it`), 30B MoE / 3B active, 200K context |
 | Zia | OCR (`extractOpticalCharacters`) and face analysis/comparison (`analyseFace`, `compareFace`) |
-| AppSail | Python forecasting service, containerised, scale-to-zero |
+| AppSail | two Python services, containerised, scale-to-zero: the forecasting engine and the open-source research engine |
 | Stratus | object store for field-enrolled photo blobs |
 | Cron | scheduled early-warning push to subscribed officers |
 | Job Scheduling (job pool) | asynchronous WhatsApp turn processing |
@@ -390,8 +448,11 @@ irreversible and does not touch the forecast tables.
 | India data centre (`.in`) | data residency |
 
 Language model, OCR, face comparison, storage, object storage, scheduling, compute, routing and
-hosting are all Catalyst-native. Speech is the single exception, because Catalyst has no developer
-STT/TTS model — confirmed in the live console.
+hosting are all Catalyst-native. Speech is one exception, because Catalyst has no developer STT/TTS
+model — confirmed in the live console. The research engine's two others are named plainly rather than
+buried: a Cohere cross-encoder for candidate reranking and Firecrawl for the general-web discovery
+tier. Both degrade a run rather than failing it when absent, and `/health` reports each separately so
+the degradation is visible instead of silent.
 
 ---
 
@@ -399,14 +460,23 @@ STT/TTS model — confirmed in the live console.
 
 ```bash
 # function
-cd functions/api && npm install && npm test     # 79 checks + copy lint + turn smoke
+cd functions/api && npm install && npm test     # 120 checks + copy lint + turn smoke
 # client
 cd client && npm ci && npm run build            # -> client/dist
+
+# research engine: BUILD THE IMAGE FIRST. catalyst.json points at a docker:// tag, so
+# the deploy ships whatever that tag holds and never builds from research/ — skip this
+# and you get DEPLOYMENT SUCCESSFUL on the previous code, silently.
+docker build -t localhost/ksp-research:latest research/
+for s in selftest selftest_reason selftest_claims selftest_pipeline; do
+  docker run --rm -w /app -e PYTHONPATH=/app localhost/ksp-research:latest python -m app.$s
+done
 
 # deploy
 catalyst deploy --only functions --org 60079622152
 catalyst deploy --only client --ignore-scripts --org 60079622152
 catalyst deploy --only appsail:kspforecast --org 60079622152
+catalyst deploy --only appsail:research --org 60079622152
 ```
 
 Local: `catalyst serve` for the function on `:3000`, `npm run dev` in `client/` for Vite on `:5173`
@@ -466,7 +536,8 @@ functions/api/            Express app on Advanced I/O - every route
   lib/voice.js            Sarvam STT/TTS
   lib/oauth.js            Zoho OAuth token, cached
   lib/wa/                 WhatsApp channel: agent, tools, frames, write gate, copy packs,
-                          roster, photo/biometrics, alerts, inbound routing
+                          roster, photo/biometrics, alerts, research delivery, inbound routing
+  lib/research.js         bridge to the research engine: supplies the anchors from our records
   test/                   node:test suite + scripted turn smoke run + copy lint
 client/                   React 19 + Astryx SPA
 datastore/
@@ -485,9 +556,21 @@ ml/
   score_live.py           score the live Data Store panel
   service/                AppSail FastAPI forecasting service
   RESULTS.md              every measured number, with reproduction commands
+research/                 the open-source research engine (AppSail, custom Docker)
+  app/plan.py             query planning from anchors
+  app/sources.py          the discovery tiers and their adapters
+  app/rerank.py           cross-encoder candidate selection
+  app/extract.py          fetch, boilerplate removal, injection screen
+  app/cluster.py          syndication clustering and independence counting
+  app/attribute.py        the confidence bands and their reasons
+  app/claims.py           claim extraction, span re-verification, the cited summary
+  app/governance.py       purpose binding, role and subject-role refusal, audit lines
+  app/eval_attribution.py hand-labelled attribution harness
+  app/selftest*.py        four offline suites, run inside the built image
 tools/                    CDP browser automation for the Catalyst console (schema changes the
-                          CLI cannot make) and usage.js for spend before a load
-documentation/            01-15, the full technical set
+                          CLI cannot make), usage.js for spend before a load, wa-send/wa-log for
+                          the field channel, connect-proxy.js for the engine deploy
+documentation/            01-18, the full technical set
 ```
 
 ---
@@ -505,7 +588,10 @@ reversibility on writes, grounding refusal, and an audit row per message and per
 
 **Not enforced, and this matters.** Web RBAC is the `x-user-role` request header, trusted as sent
 and defaulting to `investigator`; anyone who can reach the API can claim `admin`. Until roles bind
-to Catalyst Authentication claims, every role gate on the web surface is advisory — and the chat
+to Catalyst Authentication claims, every role gate on the web surface is advisory. The research
+engine inherits this and it costs the most there: its governance layer correctly refuses a
+policymaker's person lookup, and a caller simply says `investigator` instead. Open-source research on
+named individuals is the feature where an advisory role gate is least acceptable. The chat
 tool has no table allow-list, so the gate that blocks writes does not restrict which table a read
 touches. Session-history reads interpolate the session id into the query string rather than binding
 it. The `AuditLog` covers conversational turns; ingestion and admin actions are not written to it,
@@ -521,10 +607,22 @@ Closing the first item is the single highest-value hardening step. The rest are 
 
 ## Verification
 
-- **79 automated checks** on the function (`npm test` in `functions/api`) covering the WhatsApp
+- **120 automated checks** on the function (`npm test` in `functions/api`) covering the WhatsApp
   agent's grounding refusals, write gate, negation handling, undo path, language routing and
-  model-down behaviour — followed by a scripted end-to-end turn smoke run and a copy lint that fails
-  the build when an officer-facing string is missing a language.
+  model-down behaviour, plus the research anchors, role rule and report delivery — followed by a
+  scripted end-to-end turn smoke run and a copy lint that fails the build when an officer-facing
+  string is missing a language.
+- **Four offline suites on the research engine**, run inside the built image so they exercise the
+  code that ships: span verification, the protected-attribute guard in all three scripts, admission
+  and clustering, and the pipeline and API contract with discovery faked — a test that depends on
+  what a newsroom published today fails for reasons unrelated to our code. Plus
+  `app/eval_attribution.py`, a hand-labelled attribution harness with two hard gates at zero: a
+  false confirm, and one of our own documents dismissed.
+- **Live verification of the research path end to end**, on the deployed services and a real
+  handset: a run started from WhatsApp, delivered by callback, questioned afterwards about its own
+  cited sources, in English, Kannada and Hindi — plus the desk panel driven over CDP through the
+  purpose gate, the live stages, the graded table and the export
+  (`tools/steps/check-research.js`).
 - **Real-data forecast validation** on 6.37M incidents across five city portals, 28 panels,
   reproducible from `ml/RESULTS.md`.
 - **A measured noise floor** from six independent realisations of one intensity field, which is what
@@ -550,6 +648,7 @@ Closing the first item is the single highest-value hardening step. The rest are 
 | 11–13 | feature status, setup, file-by-file reference |
 | 14 | migration to Zoho-native AI |
 | 15 | WhatsApp field-officer channel |
+| 16–18 | open-source research engine, its retrieval techniques, and the remaining-work list |
 
 Two files are the operational truth and are kept current ahead of the numbered set:
 [`datastore/DATA_STATE.md`](./datastore/DATA_STATE.md) for what the Data Store holds and what it
