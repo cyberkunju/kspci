@@ -310,10 +310,18 @@ export default function Research({ role }) {
                     )
                   },
                   {
-                    key: 'title', header: 'Source', width: proportional(3, 240),
+                    key: 'title', header: 'Source', width: proportional(3, 260),
                     renderCell: (f) => (
                       <Stack gap={0.5}>
-                        <Text type="body" weight="semibold" maxLines={2}>{f.title || f.url}</Text>
+                        <a href={f.url} target="_blank" rel="noopener noreferrer" className="src-title">
+                          <Text type="body" weight="semibold" maxLines={2}>{f.title || f.url}</Text>
+                        </a>
+                        {/* The exact article url, in full and selectable. An officer
+                            citing a source in a case file needs the link itself, not a
+                            hyperlink they cannot read or paste. */}
+                        <Text type="supporting" color="accent" maxLines={2}>
+                          <span className="src-url">{f.url}</span>
+                        </Text>
                         {/* The reasons are the audit trail. An identification an officer
                             cannot check is one they should not act on. */}
                         <Text type="supporting" color="tertiary" maxLines={3}>{(f.why || []).join(' · ')}</Text>

@@ -402,3 +402,16 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Research source table. The full article url is shown, not just a hyperlink: an
+   officer citing a source in a case file needs the link itself, readable and
+   selectable. Long urls wrap on any character rather than forcing the table wide. */
+.src-title { text-decoration: none; color: inherit; }
+.src-title:hover { text-decoration: underline; }
+.src-url {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  user-select: all;
+}
