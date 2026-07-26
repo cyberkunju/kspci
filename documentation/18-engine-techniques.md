@@ -306,6 +306,39 @@ summarises text we fetched ourselves, with every claim verified against the stor
 So the choice was a paid index or no general web at all, and `available()` reports `web:
 false` rather than letting a press-only run look like an internet-wide one.
 
+**It is now on**, via Firecrawl `/v2/search`. On the first live query it returned Hindustan
+Times, a district news site, X, Instagram, YouTube, a small English local, Bhaskar's
+English edition — and a court record (`VIPUL SINGH Vs State`) that no news tier held.
+
+**And switching it on made the engine worse before it made it better.** Worth recording,
+because "add a tier, get better coverage" is the intuition and it was wrong:
+
+| | Before the tier | Tier on, unconstrained | After the two fixes |
+|---|---|---|---|
+| Readable pages | 48 of 48 | **34 of 48** | 45 of 48 |
+| Kannada sources read | 12 | **1** | 9 |
+| Sources the summary rests on | 2 | **1** | 2 |
+| Confident false identifications | 0 | **1** | 0 |
+
+Three distinct failures from one change:
+
+1. **Social and video pages burn reads.** An Instagram reel or a YouTube watch page has no
+   article body, so the read returns nothing. They now sort behind everything else in the
+   fetch order, next to publishers we have learned we cannot read. They stay in the
+   candidate list and in the officer's table — the link is worth having — they just are
+   not paid for out of the reading budget first.
+2. **Crowding.** At 20 results per query the tier contributed 99 of 228 candidates and
+   pushed Kannada on-site results out of the budget entirely. Ten per query: its job is to
+   reach places nothing else can, and the top ten do that.
+3. **A social profile reached `probable`.** A YouTube channel page titled "From Gaon to
+   Ghar Ghar: My journey of social impact" was graded `probable` for a subject who had been
+   shot dead by the UP STF — a different Vipul Singh, whose own channel repeats his name
+   because it is his. This is the failure mode that motivated §9.
+
+The general lesson: a tier that returns a different KIND of document cannot be added on
+the same terms as one that returns the same kind. The budget and the scorer both had
+assumptions in them that only news pages satisfied.
+
 ---
 
 ## 7. Hermes Agent — what it actually is, and what we took
@@ -407,6 +440,62 @@ report may be the third outlet on a first-round story and corroboration is count
 After the fixes: 72 s, 241 candidates against 133, 119 of 120 pages readable, Kannada
 sources 18 → 28, and the leads were *Sushil Moonch gang*, *Bhabhisa village Shamli*,
 *UP STF Meerut*, *50,000 reward*.
+
+## 9. Measuring whether the answer is right
+
+Not a technique from anywhere. It is here because it is the only part of this engine that
+checks the thing the engine is actually for, and because two of the entries above were
+written on the strength of eyeballing live runs — which is exactly the habit this replaces.
+
+**The distinction.** Every other suite asks *does the code do what it says*. This asks *is
+the answer right*. A pipeline can be perfectly wired and confidently identify the wrong
+person, and only the second question catches that.
+
+**`app/eval_attribution.py`.** Seventeen documents across four subjects. Every one is a
+document this engine actually retrieved during live testing, kept with its real title and a
+faithful excerpt, labelled by hand. The namesake traps are the ones that fooled earlier
+versions — that is why they are in there, and none of them were softened.
+
+Three rates, two of them hard gates at zero:
+
+| Rate | Meaning | Gate |
+|---|---|---|
+| **false confirm** | somebody else's document graded `probable` or better | 0, hard |
+| **wrongly dismissed** | our document graded `unrelated` or `different_person` | 0, hard |
+| **confident recall** | our document graded `probable` or better | 50%, soft |
+
+The asymmetry is deliberate and it is the whole design. A false confirm is *asserted* to
+an officer. A dismissal makes a real source *vanish* from the reasoning. Those are gated
+at zero. Confident recall is reported and floored loosely, because a report that says
+"Vipul, alias Khooni" and never the full name genuinely is weaker evidence — grading it
+`possible` is the correct answer, and it still reaches the officer's table with its
+reasons. A high recall floor would tune the engine towards over-confidence, which is the
+one thing it exists not to do.
+
+**It earned its place immediately by finding two false confirms**, both reproduced from
+live runs, both now fixed and both permanently guarded:
+
+- A story made only of social, forum and unvouched pages could reach `probable`. A profile
+  page carries a name repeatedly *because it belongs to the account holder*, so the
+  multi-name signal that makes a news report convincing fires just as hard on a namesake's
+  own account. Now capped at `possible` unless a newsroom or authoritative document appears
+  somewhere in the cluster — then the identification rests on the report and the profile
+  merely corroborates.
+- In the topic scorer, the keystone term alone could carry a confident band. "Sushil Moonch
+  gang" graded *"Supreme Court cancels Olympian Sushil Kumar's bail"* as `probable`:
+  keystone in the headline, four points plus two, nothing else needed. A multi-word subject
+  now requires more than its rarest single word — the same rule the person scorer already
+  applied to names.
+
+**Current: 0 of 11 false confirms, 0 of 6 dismissals, 4 of 5 confident.** The hardest case
+in the set passes — a namesake sharing both the name *and* the district, where only the
+station and the crime number can carry the refusal.
+
+**What it is not.** Seventeen documents is a regression harness, not a field validation. It
+cannot give the false-confirm rate on the real distribution of KSP casework, because that
+distribution is not in it. Growing it with real case files — especially same-district
+namesakes — is the highest-value work left, and only KSP can do it. Every case added is
+permanent.
 
 ## What none of them do, and why we still exist
 
