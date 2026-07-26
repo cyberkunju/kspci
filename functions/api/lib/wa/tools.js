@@ -71,7 +71,30 @@ const denied = (why) => ({ _DENIED: true, error: why, retry: false });
 
 /* ------------------------------ grounding capture ------------------------------ */
 
-const CRIME_NO = /\b(?:[A-Z]{2,}[0-9]{2,}[A-Z0-9-]*|\d{1,5}\s*\/\s*(?:19|20)\d{2})\b/g;
+/**
+ * Identifier shapes that appear in this corpus.
+ *
+ * The third alternative is not decoration. `Cases.CrimeNo` in the loaded data is a
+ * **19-digit number** (`1009800812023000014`), not the `4021/2026` form the FIR-style
+ * examples use — and the original pattern matched neither bare long digits nor
+ * anything without a letter prefix. So `harvest()` never recorded a single real
+ * CrimeNo as grounded, while `LABELLED_ID` cheerfully cited it out of the model's
+ * reply, leaving zero traceable sources and refusing the answer. Any reply that wrote
+ * "CrimeNo 1009800812023000014" was rejected as a hallucination for quoting the
+ * database correctly.
+ *
+ * Ten digits is the floor, which keeps years, counts, distances and money out.
+ */
+const CRIME_NO = /\b(?:[A-Z]{2,}[0-9]{2,}[A-Z0-9-]*|\d{1,5}\s*\/\s*(?:19|20)\d{2}|\d{10,25})\b/g;
+
+/**
+ * Fields whose value IS an identifier, whatever it looks like.
+ *
+ * Harvested verbatim rather than pattern-matched, so a future schema that numbers
+ * cases differently does not silently stop being verifiable. This is the precise half
+ * of the pairing; CRIME_NO is the half that catches identifiers embedded in prose.
+ */
+const ID_FIELD = /^(?:crimeno|casemasterid|caseid|fir|firno|photoid|ringid)$/i;
 
 /**
  * Record the identifiers a tool actually returned. Walks the result shallowly and
@@ -92,6 +115,12 @@ function harvest(ctx, value, depth = 0) {
   if (typeof value !== 'object') return;
   for (const [k, v] of Object.entries(value)) {
     if (/name$/i.test(k) && typeof v === 'string' && v.trim()) ctx.grounded.names.add(v.trim().toLowerCase());
+    // A field that is an identifier by name is recorded whatever its format, so the
+    // verifier does not depend on a regex keeping pace with the schema.
+    if (ID_FIELD.test(k) && (typeof v === 'string' || typeof v === 'number')) {
+      const raw = String(v).trim();
+      if (raw && raw.length <= 40) ctx.grounded.ids.add(normalizeId(raw));
+    }
     harvest(ctx, v, depth + 1);
   }
 }
@@ -143,12 +172,30 @@ function verifyGrounding(reply, ctx, officerText) {
   }
   if (!cited.length) return { ok: true, cited: [], unverified: [] };
 
-  // Everything that may be cited without a fresh lookup, in canonical form: what
-  // tools returned this turn, plus what the officer supplied themselves — they can
-  // name an FIR we then fail to find, and repeating it back to say so is correct.
+  // Everything that may be cited without a fresh lookup, in canonical form:
+  //
+  //  1. what tools returned this turn;
+  //  2. what the officer supplied themselves — they can name an FIR we then fail to
+  //     find, and repeating it back to say so is correct;
+  //  3. what this conversation has already exchanged.
+  //
+  // (3) is what makes follow-ups work at all. Grounding was per-turn, so the moment an
+  // officer said "full details of number three" about a list we had just given them,
+  // the reply cited an identifier from the previous turn, nothing this turn could
+  // vouch for it, and they got "I could not confirm that against the records" — about
+  // our own answer. Twice in a row, because rephrasing cannot fix it.
+  //
+  // Safe because the transcript is the record of what was actually exchanged: an
+  // identifier we printed already passed this check when it was produced, and one the
+  // officer typed is theirs to cite. The narrow widening is that a partial mismatch is
+  // logged rather than refused, so an identifier that slipped through once stays
+  // citable afterwards — worth it against refusing every follow-up question.
   const sources = new Set();
   for (const id of ctx.grounded.ids) sources.add(canonId(id));
   for (const found of String(officerText || '').match(CRIME_NO) || []) sources.add(canonId(found));
+  for (const turn of Array.isArray(ctx.history) ? ctx.history : []) {
+    for (const found of String((turn && turn.content) || '').match(CRIME_NO) || []) sources.add(canonId(found));
+  }
 
   const unverified = cited.filter((id) => !sources.has(canonId(id)));
 
