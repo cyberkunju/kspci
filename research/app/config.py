@@ -44,12 +44,16 @@ class Budget:
     llm_calls: int
 
 
+# Two modes, on purpose.
+#
+# There used to be a third, `quick`, sized to fit inside an Advanced I/O function's
+# 30-second ceiling so the WhatsApp channel could answer within one request. It was
+# removed because it answered the wrong question: ten pages read is a sample, not
+# research, and an officer who asks what the open internet says about a person deserves
+# the same answer whichever channel they asked from. WhatsApp now starts a real run and
+# the result is delivered when it is ready.
 BUDGETS: dict[str, Budget] = {
-    # Voice/WhatsApp: an officer standing somewhere. Discovery only, no LLM
-    # claim work — the summary comes from one synthesis call.
-    "quick": Budget("quick", wall_s=25, max_queries=6, max_hits=60, max_fetch=10,
-                    max_rounds=1, fetch_concurrency=10, llm_calls=3),
-    # The default desk mode. `max_fetch` is what decides how many of the discovered
+    # The default. `max_fetch` is what decides how many of the discovered
     # links are actually READ rather than merely listed, and reading is what earns an
     # attribution band — an unread link can only ever be a link. Raised from 30 because
     # discovery now routinely returns 70-100 candidates and stopping at 30 left real

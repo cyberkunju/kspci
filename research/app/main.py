@@ -10,8 +10,9 @@ Three endpoints do the work:
   GET  /research/{id}       poll state, and the result once finished
   GET  /research/{id}/stream  the same progress as server-sent events
 
-Plus `POST /research/sync` for quick mode, which fits inside a function's budget and
-saves the caller a polling loop when it does.
+A caller that cannot poll — the WhatsApp channel, whose function is killed at 30 seconds —
+supplies `callback_url` instead and is POSTed the finished result. There is no synchronous
+endpoint: both modes outlive any caller willing to hold a connection open.
 
 Every route requires the internal key. This service reaches the open internet on
 instruction and must never be a URL an outsider can point anywhere.
@@ -73,6 +74,21 @@ class ResearchIn(BaseModel):
     crime_number: str = ""
     anchors: AnchorsIn = Field(default_factory=AnchorsIn)
 
+    #: Short factual statements from the caller's own database about this subject. Used
+    #: in the report, cited as [DB], and kept visibly separate from open-source material.
+    #: Supplied by the caller because only the caller can read its own records — this
+    #: service has no database access and should not have any.
+    records: list[str] = Field(default_factory=list)
+
+    #: Where to POST the finished result. For callers that cannot hold a connection for
+    #: 90 to 300 seconds — which is every Catalyst function, since they are killed at 30.
+    #: Without this, WhatsApp could only ever have had a cut-down mode.
+    callback_url: str = ""
+    callback_key: str = ""
+    #: Opaque value echoed back on the callback so the receiver knows which conversation
+    #: the result belongs to.
+    callback_context: dict = Field(default_factory=dict)
+
 
 def _auth(key: str | None) -> None:
     """Fail closed. With no key configured, nobody may drive this service."""
@@ -130,6 +146,41 @@ def _authorise(body: ResearchIn) -> Anchors:
         date_from=a.date_from, date_to=a.date_to)
 
 
+async def _deliver(run: Run, body: ResearchIn) -> None:
+    """POST the finished result to the caller's callback, if one was given.
+
+    Best-effort and never allowed to fail the run: the result is already in the registry
+    and still pollable, so a failed callback costs a notification, not the research. One
+    retry, because the usual failure here is a cold function instance.
+    """
+    if not body.callback_url:
+        return
+    import httpx
+
+    payload = {"id": run.id, "state": run.state, "context": body.callback_context,
+               "result": run.result, "error": run.error or None}
+    headers = {"Content-Type": "application/json"}
+    if body.callback_key:
+        headers["x-research-callback-key"] = body.callback_key
+    for attempt in (1, 2):
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                r = await client.post(body.callback_url, json=payload, headers=headers)
+            if r.status_code < 400:
+                governance.audit("delivered", run=run.id, officer=body.officer,
+                                 status=r.status_code)
+                return
+            reason = f"http {r.status_code}"
+        except Exception as e:  # noqa: BLE001
+            reason = f"{e.__class__.__name__}: {str(e)[:120]}"
+        if attempt == 2:
+            registry.note(run, "callback_failed", reason)
+            governance.audit("delivery_failed", run=run.id, officer=body.officer,
+                             reason=reason)
+        else:
+            await asyncio.sleep(2)
+
+
 async def _execute(run: Run, body: ResearchIn, anchors: Anchors) -> None:
     async with registry.gate:
         run.state = "running"
@@ -140,10 +191,12 @@ async def _execute(run: Run, body: ResearchIn, anchors: Anchors) -> None:
         try:
             result = await run_pipeline(
                 subject=body.subject, kind=body.kind, anchors=anchors,
-                budget=budget_for(body.mode), question=body.question, progress=progress)
+                budget=budget_for(body.mode), question=body.question,
+                records=body.records, progress=progress)
             run.result = asdict(result)
             run.state = "done"
             registry.note(run, "done", "complete")
+            await _deliver(run, body)
             governance.audit(
                 "completed", run=run.id, officer=body.officer, kind=body.kind,
                 subject=body.subject, purpose=body.purpose, crime_number=body.crime_number,
@@ -178,24 +231,11 @@ async def start(body: ResearchIn) -> dict:
             "poll": f"/research/{run.id}", "stream": f"/research/{run.id}/stream"}
 
 
-@app.post("/research/sync", dependencies=AUTH)
-async def start_sync(body: ResearchIn) -> dict:
-    """Run to completion in the request.
-
-    For quick mode only, and capped below the caller's own 30-second ceiling so the
-    function that called us does not time out holding this connection open.
-    """
-    anchors = _authorise(body)
-    _caps.record(body.officer)
-    budget = budget_for("quick" if body.mode not in {"quick"} else body.mode)
-    governance.audit("started_sync", officer=body.officer, kind=body.kind,
-                     subject=body.subject, purpose=body.purpose, mode=budget.name)
-    result = await run_pipeline(subject=body.subject, kind=body.kind, anchors=anchors,
-                               budget=budget, question=body.question)
-    governance.audit("completed_sync", officer=body.officer, subject=body.subject,
-                     elapsed_s=result.elapsed_s, partial=result.partial,
-                     stories=result.counts.get("stories", 0))
-    return asdict(result)
+# There is deliberately no synchronous endpoint. It existed for `quick` mode, whose
+# whole purpose was to fit inside a 30-second caller; with both remaining modes taking 90
+# to 300 seconds, any caller that holds the connection open is a caller that times out.
+# Callers either poll `GET /research/{id}` or supply `callback_url` and are told when the
+# run finishes.
 
 
 @app.get("/research/{run_id}", dependencies=AUTH)
