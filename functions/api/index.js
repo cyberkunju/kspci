@@ -749,6 +749,15 @@ app.get('/whatsapp/health', adminGuard, async (req, res) => {
     }
   }
 
+  // The WABA id, learned from whichever callback arrived first. Reported here because
+  // it gates message-template management and cannot be read from the Graph API with a
+  // system-user token.
+  try {
+    const adminApp = catalyst.initialize(req, { scope: 'admin' });
+    out.wabaId = (await require('./lib/wa/inbound').knownWabaId(adminApp))
+      || 'not seen yet — arrives on the first Meta callback';
+  } catch (_) { /* diagnostic only */ }
+
   try {
     const adminApp = catalyst.initialize(req, { scope: 'admin' });
     const zcql = adminApp.zcql();

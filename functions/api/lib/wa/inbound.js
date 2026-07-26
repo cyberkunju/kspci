@@ -121,6 +121,52 @@ function normalizeMessage(m, { profileName, phoneNumberId }) {
   return e;
 }
 
+/* ------------------------------ WABA id ------------------------------ */
+
+const WABA_CACHE_KEY = 'wa_waba_id';
+
+/**
+ * Learn the WhatsApp Business Account id from any callback and keep it.
+ *
+ * Every webhook body carries it as `entry[0].id`, and it is the one identifier this
+ * integration cannot obtain any other way: with a system-user token the Graph API
+ * refuses every route to it — `me/businesses` comes back empty, and
+ * `owned_whatsapp_business_accounts`, `client_whatsapp_business_accounts` and a
+ * phone-number field expansion are all rejected outright. Without it, message
+ * templates cannot be listed or created at all, because template management is
+ * WABA-scoped and does not accept a phone number id.
+ *
+ * So it is captured the moment Meta first talks to us, from a message or a delivery
+ * receipt alike, and reported by /whatsapp/health. Written on every callback rather
+ * than once, because Catalyst Cache entries expire and re-learning it costs nothing.
+ */
+async function rememberWabaId(app, body) {
+  const id = String(((Array.isArray(body && body.entry) && body.entry[0]) || {}).id || '').trim();
+  if (!/^\d{5,25}$/.test(id)) return;
+  try { await app.cache().segment().put(WABA_CACHE_KEY, id, 1); } catch (_) { /* diagnostic only */ }
+}
+
+/**
+ * The WABA id: configuration first, then whatever a callback taught us.
+ *
+ * Env wins because it survives a cold start and a cache expiry, and because once the id
+ * is known there is no reason to make an operator wait for Meta to talk to us again
+ * before /whatsapp/health can answer. The learned value remains the fallback for a fresh
+ * environment where nobody has filled it in yet.
+ */
+async function knownWabaId(app) {
+  const configured = String(process.env.WA_WABA_ID || '').trim();
+  if (/^\d{5,25}$/.test(configured)) return configured;
+  try {
+    const raw = await app.cache().segment().getValue(WABA_CACHE_KEY);
+    const val = raw && (raw.cache_value || raw.value || raw);
+    const id = String(val == null ? '' : val).trim();
+    return /^\d{5,25}$/.test(id) ? id : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 /* ------------------------------ fast path ------------------------------ */
 
 /**
@@ -128,6 +174,7 @@ function normalizeMessage(m, { profileName, phoneNumberId }) {
  * Never throws: an error here would make Meta retry a message we already claimed.
  */
 async function acceptWebhook(app, body) {
+  await rememberWabaId(app, body);
   const events = parseWebhook(body);
   const out = { received: events.length, queued: 0, duplicates: 0, statuses: 0, inline: 0 };
 
@@ -588,4 +635,7 @@ function speakable(text) {
     .trim();
 }
 
-module.exports = { parseWebhook, normalizeMessage, acceptWebhook, processEvent, buildTurn, speakable, pendingInteractive };
+module.exports = {
+  parseWebhook, normalizeMessage, acceptWebhook, processEvent, buildTurn, speakable,
+  pendingInteractive, knownWabaId
+};
