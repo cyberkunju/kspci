@@ -51,6 +51,31 @@ If the Data Store is unreachable the run still happens on the name alone and rep
 the anchors were thin. A weakly anchored run that says so is useful; a weakly anchored run
 that claims certainty is dangerous.
 
+### 1b. Our own records go into the report, separately
+
+Anchors shape the *search*. A second, distinct payload shapes the *report*: short factual
+statements read from the KSP Data Store — cases on record, recorded age, offence types,
+arrests, the repeat-offender band, co-accused — assembled by
+`functions/api/lib/research.js` and cited in the summary as **`[DB]`**.
+
+The separation is the whole point. The useful question is almost never "what does the
+internet say about this person" but "does the internet agree with our file", and a report
+that quietly blends the two is unusable as either. So the engine is instructed that `[DB]`
+facts are internal records: it may say our records and a source agree, or that they
+disagree, but it may never let `[DB]` corroborate an open-source claim or raise how certain
+one is. `[DB]` is also validated like any other marker — it is stripped if the model cites
+it on a run where no records were supplied.
+
+Two consequences worth stating:
+
+- **The engine has no database access, and should not have any.** What crosses the boundary
+  is a sentence somebody could read out, not a schema or a row. The service can be
+  compromised without exposing the Data Store.
+- **A failed lookup is never reported as an absence.** "This person is not in our records"
+  and "we could not read our records" are different sentences, and the second one is a note
+  on the run rather than a finding. If we genuinely hold nothing, the report says so — which
+  on a subject the open web is loud about is itself the finding.
+
 ### 2. Attribution is the product
 
 Every source comes back in one of five bands, each with the reasons behind it:
@@ -276,10 +301,17 @@ GDELT's rate-limit penalty window, and the run reported that rather than pretend
 otherwise. The on-site tier carried it, which is the argument for building discovery on
 publishers' own search rather than on a metasearch layer.
 
-Budgets (`research/app/config.py`): **quick** 25 s / 10 fetches, **standard** 90 s / 48,
-**deep** 300 s / 120. `max_fetch` is the number that matters: it decides how many
+**Two modes, and only two** (`research/app/config.py`): **standard** 90 s / 48 reads and
+**deep** 300 s / 120. `max_fetch` is the number that matters — it decides how many
 discovered links are actually READ rather than merely listed, and only a read link can earn
 an attribution band. Deep mode has not been measured against live sources.
+
+There used to be a third, `quick`, at 25 s / 10 reads. It existed for one reason: to fit
+inside an Advanced I/O function's 30-second ceiling so the WhatsApp channel could answer
+within the turn that asked. It was removed because it answered a different question from
+the one the officer asked — ten pages read is a sample, not research — and because the
+better fix was available: **the engine calls back when the run finishes**, so the phone
+gets the same engine as the desk. Both channels now offer exactly standard and deep.
 
 A second live case, run on the deployed service — a wanted man in Baghpat, subject given as
 `"Vipul Singh alias Khooni"` with **no anchors at all**:
@@ -313,18 +345,27 @@ empty result if that assumption is ever broken.
 
 | Method | Route | Notes |
 |---|---|---|
-| `POST` | `/research` | start a run. Body: `subject`, `kind`, `purpose`, `question?`, `mode?`, `crimeNo?`. Returns `{ id, poll, anchors }` |
-| `POST` | `/research/sync` | quick mode, completed inside the request (capped at 27 s) |
+| `POST` | `/research` | start a run. Body: `subject`, `kind`, `purpose`, `question?`, `mode?` (`standard`\|`deep`), `crimeNo?`. Returns `{ id, mode, poll, anchors, records }` |
 | `GET` | `/research/:id` | poll state, events, and the result once finished |
 | `DELETE` | `/research/:id` | cancel |
 | `GET` | `/research/health` | engine reachability and which tiers are live |
+| `POST` | `/research/callback` | **internal.** The engine POSTs a finished run here; guarded by `RESEARCH_INTERNAL_KEY` in the `x-research-callback-key` header, and dispatched by `context.channel` |
 
-All require `x-user-role`; `x-user-id` becomes the officer in the audit line.
+The first four require `x-user-role`; `x-user-id` becomes the officer in the audit line.
+There is no synchronous route — both modes outlive any caller willing to hold a connection
+open, and the one that used to exist only made sense for a mode that no longer does.
 
 ### On the engine (internal, `x-research-key` only)
 
-`POST /research`, `POST /research/sync`, `GET /research/{id}`, `DELETE /research/{id}`,
+`POST /research`, `GET /research/{id}`, `DELETE /research/{id}`,
 `GET /research/{id}/stream` (SSE), `GET /health`.
+
+`POST /research` additionally accepts `records[]`, `callback_url`, `callback_key` and
+`callback_context`. When a callback is given the engine POSTs
+`{ id, state, context, result, error }` to it once the run reaches a terminal state, with
+one retry two seconds later — the usual failure is a cold function instance. A failed
+callback costs a notification, never the research: the result is still in the registry and
+still pollable.
 
 The SSE stream exists for a caller that can hold a connection; the function proxies by
 polling instead, because a long-lived stream through the API Gateway is not a dependency
@@ -339,11 +380,20 @@ worth taking for a progress bar.
   conclude it has hung and start it again), the anchor summary with its strength label, a
   filterable source table with attribution bands, the dated-claims timeline, and PDF
   export via `client/src/lib/pdf.js`.
-- **WhatsApp** — the `open_source_research` tool in `functions/api/lib/wa/tools.js`.
-  Operational roles only, quick mode only, purpose required and not defaulted (a default
-  would satisfy the check while destroying the thing it protects). Returns the confirmed
-  and probable sources; if nothing could be attributed it tells the model to say that
-  plainly rather than report "nothing exists about them".
+- **WhatsApp** — the `open_source_research` tool in `functions/api/lib/wa/tools.js`, with
+  **the same two modes as the desk**. Operational roles only; purpose required and not
+  defaulted, because a default would satisfy the check while destroying the thing it
+  protects.
+
+  The tool is *terminal*: it starts the run, tells the officer what is happening and
+  roughly how long ("about a minute" / "up to five minutes"), and ends the turn. Anything
+  the model added after that would be guessing at findings that do not exist yet. When the
+  engine finishes it calls back and `lib/wa/research.js` sends the report — a summary
+  message, then a sources message carrying **the full article url** for each one, with our
+  own records under their own heading. Chunked to WhatsApp's 4096-character limit, deduped
+  by run id so the engine's retry cannot double-send, and refused with a recorded reason
+  rather than an opaque failure if the officer has fallen outside Meta's 24-hour service
+  window — the result is still in the desk workspace.
 
 ---
 
@@ -360,6 +410,10 @@ runtimes have no `app-config.json`):
 | `OPENAI_API_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` | any OpenAI-compatible endpoint, including a self-hosted vLLM/Ollama |
 | `SEARXNG_URL`, `MARGINALIA_KEY`, `MOJEEK_ENABLED` | optional extra tiers |
 | `RESEARCH_DEFAULT_MODE`, `RESEARCH_RUN_TTL_S`, `RESEARCH_MAX_CONCURRENT`, `RESEARCH_FETCH_TIMEOUT_S`, `RESEARCH_USER_AGENT`, `RESEARCH_CONTACT` | tuning |
+
+**On the function**, additionally: `RESEARCH_CALLBACK_URL` — where the engine POSTs a
+finished run. Defaults to `WA_PROCESS_URL`'s host with `/research/callback`, so a
+deployment that already has the WhatsApp channel configured needs nothing extra.
 
 Two QuickML details that cost real time to find: the org header must be **`CATALYST-ORG`**
 (anything else is a 400 that does not mention headers), and Catalyst's GLM serving returns
