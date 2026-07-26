@@ -282,16 +282,40 @@ def _looks_like_article(url: str, same_site: str) -> bool:
     return bool(_HAS_ID.search(path) or _HEADLINE_SLUG.search(path))
 
 
+def _search_terms(query: str) -> list[str]:
+    """The words worth matching a headline against. Short words match everything."""
+    return [w for w in re.findall(r"\w{4,}", (query or "").lower())]
+
+
 def _links_from_search_html(body: bytes, base_url: str, *, link_contains: str = "",
-                            limit: int = 12) -> list[tuple[str, str]]:
+                            limit: int = 12, terms: list[str] | None = None) -> list[tuple[str, str]]:
+    """Pull the article links out of a search-results page, best first.
+
+    Ordering by query-term overlap rather than by DOM position is what makes this work,
+    and it was a measured fix rather than a refinement. A newsroom's search page carries
+    its own furniture — today's front page, most-read promos, an awards microsite — and
+    those markup blocks come FIRST. Taking the first five article-shaped links therefore
+    returned five promos and none of the results: probed against thehindu.com and
+    indianexpress.com, both returned byte-identical link sets for two unrelated queries,
+    which is what a query-independent front page looks like. Their actual results were in
+    the same document all along, further down.
+
+    So every article-shaped link is collected and then ranked by how many query words
+    appear in its anchor text or its slug. Ranking, not filtering: a source whose result
+    headlines share no word with the query (indiankanoon returns case titles, not
+    headlines) keeps its own order and loses nothing.
+    """
     try:
         tree = lxml_html.fromstring(body)
     except Exception:
         return []
     same_site = registrable(host_of(base_url))
+    needles = terms or []
     seen: set[str] = set()
-    out: list[tuple[str, str]] = []
-    for a in tree.xpath("//a[@href]"):
+    # (score, dom_index, url, title). Bounded so a 600 KB results page cannot make this
+    # the expensive part of a run.
+    scored: list[tuple[int, int, str, str]] = []
+    for a in tree.xpath("//a[@href]")[:1200]:
         href = (a.get("href") or "").strip()
         if not href or href.startswith(("#", "mailto:", "javascript:", "tel:")):
             continue
@@ -309,24 +333,92 @@ def _links_from_search_html(body: bytes, base_url: str, *, link_contains: str = 
         if _NAV_TEXT.match(title):
             title = ""
         seen.add(absolute)
-        out.append((absolute, title))
+        haystack = f"{title.lower()} {absolute.lower()}"
+        score = sum(1 for n in needles if n in haystack)
+        scored.append((score, len(scored), absolute, title))
+        if len(scored) >= limit * 8:
+            break
+    scored.sort(key=lambda row: (-row[0], row[1]))
+    return [(u, t) for _, _, u, t in scored[:limit]]
+
+
+def _quintype_hits(spec: dict, body: bytes, query: str, *, limit: int) -> list[Hit] | None:
+    """Read a Quintype `/api/v1/advanced-search` response.
+
+    Six of the outlets in the registry run Quintype, and its search API answers with the
+    three things link-scraping could never give us: the canonical article url, the
+    publisher's own headline, and `last-published-at` as an epoch. The date is the reason
+    this is worth a separate adapter — an on-site hit used to arrive undated, so it could
+    not be placed on the timeline and could not be ranked against fresher coverage.
+
+    Returns None when the body is not a Quintype search response at all, so the caller
+    can distinguish "this endpoint is broken" from "this publisher has nothing".
+    """
+    import json
+
+    try:
+        data = json.loads(body.decode("utf-8", "replace"))
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or "items" not in data:
+        return None
+
+    out: list[Hit] = []
+    seen: set[str] = set()
+    for it in (data.get("items") or []):
+        if not isinstance(it, dict):
+            continue
+        u = canonical_url(str(it.get("url") or ""))
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        published = ""
+        ts = it.get("last-published-at") or it.get("published-at")
+        if isinstance(ts, (int, float)) and ts > 0:
+            from datetime import datetime, timezone
+            try:
+                published = datetime.fromtimestamp(ts / 1000, timezone.utc).date().isoformat()
+            except (OSError, OverflowError, ValueError):
+                published = ""
+        out.append(Hit(
+            url=u, title=" ".join(str(it.get("headline") or "").split())[:200],
+            published=published, via=f"onsite:{spec['name']}",
+            tier=spec.get("tier", Tier.UNKNOWN), query=query,
+            language=spec.get("lang", "")))
         if len(out) >= limit:
             break
     return out
 
 
-async def onsite_one(f: Fetcher, spec: dict, query: str, *, limit: int = 8) -> list[Hit]:
-    url = spec["url"].replace("{q}", quote_plus(query))
-    r = await f.get(url, respect_robots=True, timeout_s=settings.search_timeout_s)
+async def onsite_one(f: Fetcher, spec: dict, query: str, *, limit: int = 8) -> list[Hit] | None:
+    """One publisher's own search. None means the endpoint failed; [] means no match.
+
+    The distinction is not pedantry. `onsite()` reports failures to the officer, and a
+    narrow query that legitimately matches nothing at one outlet used to be reported as
+    that outlet being unreachable — which makes a working registry look broken and, worse,
+    makes a genuinely broken source indistinguishable from a quiet one.
+    """
+    url = spec["url"].replace("{q}", quote_plus(query)).replace("{n}", str(max(limit, 1)))
+    quintype = spec.get("kind") == "quintype"
+    # robots is honoured for the API too. It is the publisher's own endpoint serving their
+    # own site, not a machine-readable dataset published for third parties, so the polite
+    # default applies and a future `Disallow: /api/` takes effect without a code change.
+    r = await f.get(url, respect_robots=True, timeout_s=settings.search_timeout_s,
+                    accept="application/json" if quintype else None)
     if r["error"] or r["status"] != 200 or not r["content"]:
-        return []
+        return None
+    if quintype:
+        return _quintype_hits(spec, r["content"], query, limit=limit)
     pairs = _links_from_search_html(r["content"], r["final_url"] or url,
-                                   link_contains=spec.get("link_contains", ""), limit=limit)
+                                   link_contains=spec.get("link_contains", ""), limit=limit,
+                                   terms=_search_terms(query))
+    # An HTML search page that yields no article-shaped link is indistinguishable from a
+    # template change, so it stays a failure — unlike the API, it cannot say "no results".
     return [
         Hit(url=u, title=t, via=f"onsite:{spec['name']}", tier=spec.get("tier", Tier.UNKNOWN),
             query=query, language=spec.get("lang", ""))
         for u, t in pairs
-    ]
+    ] or None
 
 
 async def onsite(f: Fetcher, query: str, *, limit_per_site: int = 6,
@@ -343,7 +435,7 @@ async def onsite(f: Fetcher, query: str, *, limit_per_site: int = 6,
     hits: list[Hit] = []
     failed: list[str] = []
     for spec, res in zip(specs, results):
-        if isinstance(res, BaseException) or not res:
+        if isinstance(res, BaseException) or res is None:
             failed.append(f"onsite:{spec['name']}")
             continue
         hits.extend(res)

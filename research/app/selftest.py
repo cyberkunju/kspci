@@ -16,6 +16,7 @@ import sys
 from .extract import extract, guess_language, screen_injection
 from .models import Tier
 from .net import Fetcher, canonical_url, registrable, resolves_public
+from .sources import _links_from_search_html, _quintype_hits, _search_terms
 
 _fails = 0
 
@@ -79,6 +80,51 @@ def offline() -> None:
     dead = extract(url="https://x.com/gone", final_url="", content=b"", content_type="",
                    tier=Tier.NEWS, status=404, via=["test"], error="timeout")
     check("carries the error instead of raising", (not dead.ok) and dead.error == "timeout")
+
+    print("\n— on-site search results are read, not the front page —")
+    # The shape that broke recall in production: a newsroom's search page puts its own
+    # promos in the markup FIRST and the actual results after them. Taking the first two
+    # article links returned two promos.
+    search_page = b"""<html><body>
+      <aside><a href="/entertainment/movies/welcome-to-the-jungle-movie-review/article71149360.ece">
+        Welcome To The Jungle movie review</a>
+      <a href="/sport/anahat-singh-wins-world-junior-squash-title/article71269123.ece">
+        Anahat Singh wins world junior squash title</a></aside>
+      <ul><li><a href="/news/karnataka/two-held-in-bengaluru-cyber-fraud-case/article71269020.ece">
+        Two held in Bengaluru cyber fraud case</a></li>
+      <li><a href="/news/karnataka/cyber-fraud-accused-remanded-in-mysuru/article71269021.ece">
+        Cyber fraud accused remanded in Mysuru</a></li></ul></body></html>"""
+    pairs = _links_from_search_html(search_page, "https://example.com/search/?q=x", limit=2,
+                                    terms=_search_terms("Bengaluru cyber fraud"))
+    check("the matching results outrank the promos",
+          all("cyber-fraud" in u for u, _ in pairs), str([u.rsplit('/', 2)[-2] for u, _ in pairs]))
+    # Ranking, not filtering: a source whose result titles share no word with the query
+    # (indiankanoon returns case numbers) must keep every result it found.
+    unmatched = _links_from_search_html(search_page, "https://example.com/search/?q=x", limit=4,
+                                        terms=_search_terms("Vipul Khooni Baghpat"))
+    check("a source with no title overlap keeps all its results", len(unmatched) == 4,
+          str(len(unmatched)))
+
+    print("\n— quintype search api —")
+    body = (b'{"total": 2, "items": [{"item-type": "story", "headline": "Man held in Mysuru",'
+            b' "url": "https://www.deccanherald.com/india/karnataka/man-held-in-mysuru-4061930",'
+            b' "last-published-at": 1751616000000},'
+            b' {"url": "https://www.deccanherald.com/x/y-1", "headline": "Second story",'
+            b' "last-published-at": null}]}')
+    spec = {"name": "deccanherald", "tier": Tier.NEWS, "lang": "en", "kind": "quintype"}
+    hits = _quintype_hits(spec, body, "mysuru", limit=5)
+    check("both items parsed", hits is not None and len(hits) == 2, str(hits and len(hits)))
+    check("the publisher's own date is carried", hits[0].published == "2025-07-04",
+          hits[0].published)
+    check("a missing date is empty, not guessed", hits[1].published == "")
+    check("headline and tier carried", hits[0].title == "Man held in Mysuru"
+          and hits[0].tier == Tier.NEWS)
+    # "no results" and "endpoint broken" must not look the same: onsite() reports the
+    # second to the officer as a failed source and must not report the first.
+    check("an empty result set is not a failure",
+          _quintype_hits(spec, b'{"total": 0, "items": []}', "q", limit=5) == [])
+    check("a non-quintype body is a failure",
+          _quintype_hits(spec, b"<html>error</html>", "q", limit=5) is None)
 
 
 async def live() -> None:
