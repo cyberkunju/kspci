@@ -729,9 +729,11 @@ app.get('/whatsapp/health', adminGuard, async (req, res) => {
       asyncJobs: set('WA_JOBPOOL') && set('WA_PROCESS_URL') && hasSdkNamespace('jobScheduling'),
       objectStore: hasSdkNamespace('stratus'),
       internalKey: set('WA_INTERNAL_KEY'),
-      // Configured means "a name is set", not "Meta has approved it". An unapproved
-      // template still fails at send time, and the dispatch reports that per officer.
-      alertTemplate: set('WA_ALERT_TEMPLATE'),
+      // Templates are off by policy: this deployment sends free-form only, inside the
+      // 24-hour service window, and an alert for a closed window is deferred rather
+      // than downgraded. The refusal is enforced in lib/wa/client.js sendTemplate, so
+      // this reports the actual switch rather than whether a template name is set.
+      templatesEnabled: String(process.env.WA_ALLOW_TEMPLATES || '').toLowerCase() === 'true',
       photoBucket: process.env.WA_PHOTO_BUCKET || 'ksp-field-photos'
     }
   };

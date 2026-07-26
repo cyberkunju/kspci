@@ -389,6 +389,21 @@ async function processEvent(app, event) {
         }).slice(0, 4000)
       });
     }
+    // The officer is reachable right now, so hand over anything the alert cron could not
+    // deliver while their 24-hour window was shut. This is what keeps a free-form-only
+    // channel from sitting on a warning until the next cron cycle happens to catch them.
+    //
+    // Deliberately last, after the reply has gone and the message has been completed:
+    // it must never delay an answer, and a failure here must not fail the turn. Dedupe
+    // is shared with the cron, so nothing is sent twice.
+    let alertsFlushed = 0;
+    try {
+      const flushed = await require('./alerts').flushAlertsFor(app, officer);
+      alertsFlushed = (flushed && flushed.sent) || 0;
+    } catch (e) {
+      console.error('wa alert flush failed', phone, String((e && e.message) || e));
+    }
+
     // The tool trace travels with the result as well as going to the decision log.
     // Catalyst exposes no CLI for function logs, so without this there is no way to
     // see which tool answered a turn or what it queried — and "the model gave a bad
@@ -399,7 +414,8 @@ async function processEvent(app, event) {
       route: result.decision.route,
       steps: result.decision.steps || 0,
       tools: result.invoked.map((t) => t.tool),
-      queries: result.executed.map((x) => String(x.zcql).slice(0, 300))
+      queries: result.executed.map((x) => String(x.zcql).slice(0, 300)),
+      alertsFlushed
     };
   } catch (e) {
     // Unexpected failure. Tell the officer something, then decide whether a retry is

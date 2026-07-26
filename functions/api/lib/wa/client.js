@@ -307,7 +307,24 @@ async function sendButtons(to, body, buttons, { header, footer } = {}) {
  * An approved template — the only thing Meta permits outside the 24-hour window,
  * so this is what proactive alerts ride on. `params` fill {{1}}..{{n}} in order.
  */
+/**
+ * Send an approved message template.
+ *
+ * **Disabled by policy.** Templates are billable and this deployment is deliberately
+ * free-form only: a business-initiated message goes out only while the officer's
+ * 24-hour service window is open, and otherwise waits. The refusal lives here, at the
+ * single transport every template send must pass through, rather than at the one call
+ * site that happens to exist today — a policy enforced only where it is currently
+ * needed is a policy the next feature silently breaks.
+ *
+ * Set `WA_ALLOW_TEMPLATES=true` to turn the capability back on. Nothing else is
+ * required; the send itself is unchanged and still works.
+ */
 async function sendTemplate(to, name, params = [], { language } = {}) {
+  if (String(process.env.WA_ALLOW_TEMPLATES || '').toLowerCase() !== 'true') {
+    return fail('templatesDisabled',
+      'Template sending is disabled (WA_ALLOW_TEMPLATES is not true). This deployment sends free-form only, inside the 24-hour service window.');
+  }
   if (!name) return fail('missingConfig', 'WA_ALERT_TEMPLATE is not configured');
   try {
     const r = await post({

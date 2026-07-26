@@ -10,10 +10,11 @@
  *
  * Two constraints from Meta shape the delivery:
  *
- *  - Outside the 24-hour customer service window (i.e. the officer has not
- *    messaged us today) a business-initiated message MUST be an approved
- *    template. Inside it, free-form is allowed and carries far more detail. Both
- *    paths are implemented; the window is decided per officer from LastSeenAt.
+ *  - Outside the 24-hour customer service window (i.e. the officer has not messaged
+ *    us today) a business-initiated message would have to be an approved template,
+ *    which is billable. This deployment does not send templates at all: the alert is
+ *    **deferred**, not downgraded and not dropped. The window is decided per officer
+ *    from LastSeenAt.
  *
  *  - Duplicate suppression is not optional. A cron that re-sends the same 3am
  *    alert because the last run half-failed destroys trust in the channel
@@ -94,9 +95,10 @@ function freeFormBody(alert, advisory, horizon) {
 
 /**
  * Run one dispatch cycle.
- * @param {object} opts.dryRun  compute and report without sending
+ * @param {boolean} opts.dryRun  compute and report without sending
+ * @param {string}  opts.only    restrict to a single officer's phone (see flushAlertsFor)
  */
-async function dispatchAlerts(app, { dryRun = false } = {}) {
+async function dispatchAlerts(app, { dryRun = false, only = null } = {}) {
   const engine = require('../backtest');
   // Read the batch-scored snapshot rather than recomputing. Recomputing the national panel here
   // exceeds ZCQL's processing ceiling past ~1M rows in Cases, and even where it succeeds an
@@ -105,15 +107,16 @@ async function dispatchAlerts(app, { dryRun = false } = {}) {
   if (ew.error) return { error: ew.error };
 
   const alerts = (ew.alerts || []).filter((a) => RANK[a.severity]);
-  const roster = await officers.alertRecipients(app);
+  const wanted = only ? officers.normalizePhone(only) : null;
+  const roster = (await officers.alertRecipients(app))
+    .filter((o) => !wanted || o.phone === wanted);
   const report = {
     horizon: ew.horizon, alerts: alerts.length, officers: roster.length,
-    sent: 0, skippedDuplicate: 0, skippedUnsubscribed: 0, skippedNoTemplate: 0, failed: 0,
+    sent: 0, skippedDuplicate: 0, skippedUnsubscribed: 0, deferredWindowClosed: 0, failed: 0,
     detail: [], dryRun
   };
 
   const advisoryCache = new Map();
-  const templateName = process.env.WA_ALERT_TEMPLATE || '';
 
   for (const officer of roster) {
     const matches = alerts.filter((a) => wants(officer, a));
@@ -125,44 +128,35 @@ async function dispatchAlerts(app, { dryRun = false } = {}) {
       const key = `alert_${officer.officerId || officer.phone}_${alert.district}_${ew.horizon}_${alert.severity}`.replace(/\s+/g, '_');
       if (await officers.alertAlreadySent(app, key)) { report.skippedDuplicate++; continue; }
 
-      if (!inWindow && !templateName) {
-        report.skippedNoTemplate++;
-        report.detail.push({ phone: officer.phone, district: alert.district, skipped: 'outside 24h window and no template configured' });
+      // Window shut: hold the alert, do not downgrade it and do not mark it done.
+      //
+      // Checked before the advisory so a deferred alert costs no model call. Nothing
+      // is written to the ledger either, which is the whole point — the dedupe key
+      // stays unclaimed so the next cycle after the officer messages us delivers it.
+      // Writing a "blocked" row here would silently retire a genuine warning.
+      if (!inWindow) {
+        report.deferredWindowClosed++;
+        report.detail.push({
+          phone: officer.phone, district: alert.district, severity: alert.severity,
+          deferred: 'outside the 24h service window; will send once the officer messages'
+        });
         continue;
       }
 
       const advisory = await advisoryFor(app, alert, advisoryCache);
       if (dryRun) {
-        report.detail.push({ phone: officer.phone, district: alert.district, severity: alert.severity, via: inWindow ? 'free-form' : 'template', advisory });
+        report.detail.push({ phone: officer.phone, district: alert.district, severity: alert.severity, via: 'free-form', advisory });
         continue;
       }
 
-      let res = inWindow
-        ? await wa.sendText(officer.phone, freeFormBody(alert, advisory, ew.horizon))
-        : await wa.sendTemplate(officer.phone, templateName, [
-          alert.district, alert.severity.toUpperCase(), ew.horizon, advisory
-        ], { language: officer.language === 'kn' ? 'kn' : undefined });
-
-      // LastSeenAt said the window was open and Meta disagreed — its clock is the
-      // one that counts. Retry ONCE on the template path, and exactly once: a
-      // rejected template means the template itself is wrong, and hammering it
-      // just burns quota.
-      // Only from the free-form path. If the first attempt WAS the template, a
-      // window-closed rejection means the template itself is the problem, and
-      // re-sending it is pure waste.
-      if (!res.ok && inWindow && res.kind === 'windowClosed' && templateName) {
-        res = await wa.sendTemplate(officer.phone, templateName, [
-          alert.district, alert.severity.toUpperCase(), ew.horizon, advisory
-        ], { language: officer.language === 'kn' ? 'kn' : undefined });
-        if (res.ok) report.viaTemplateFallback = (report.viaTemplateFallback || 0) + 1;
-      }
+      const res = await wa.sendText(officer.phone, freeFormBody(alert, advisory, ew.horizon));
 
       if (res.ok) {
         // Write the ledger row under the dedupe key, so this exact alert can never
         // be sent to this officer twice.
         await officers.logMessage(app, {
           direction: 'alert', msgId: key, phone: officer.phone, officerId: officer.officerId,
-          type: inWindow ? 'alert-text' : 'alert-template',
+          type: 'alert-text',
           body: `${alert.severity} ${alert.district} ${alert.predicted} vs ${alert.baseline} :: ${advisory}`,
           status: 'sent'
         });
@@ -170,14 +164,11 @@ async function dispatchAlerts(app, { dryRun = false } = {}) {
       } else {
         report.failed++;
         report.detail.push({ phone: officer.phone, district: alert.district, error: res.kind + ': ' + res.message });
-        // A closed window with no usable template: record it so the next cycle
-        // does not retry the same rejected send.
-        if (res.kind === 'windowClosed') {
-          await officers.logMessage(app, {
-            direction: 'alert', msgId: key, phone: officer.phone, officerId: officer.officerId,
-            type: 'alert-blocked', body: 'window closed; approved template required', status: 'failed'
-          });
-        }
+        // Nothing is recorded on failure, including a window Meta says is shut while
+        // LastSeenAt said otherwise — its clock is the one that counts, and the alert
+        // simply has not been delivered yet. A ledger row here would claim the dedupe
+        // key and retire a warning that never arrived.
+        if (res.kind === 'windowClosed') report.deferredWindowClosed++;
       }
       if (report.sent >= SEND_CAP()) {
         report.detail.push({ note: `send cap ${SEND_CAP()} reached; remaining alerts deferred to the next cycle` });
@@ -188,4 +179,24 @@ async function dispatchAlerts(app, { dryRun = false } = {}) {
   return report;
 }
 
-module.exports = { dispatchAlerts, wants, watchedDistricts, freeFormBody };
+/**
+ * Deliver whatever this one officer is still owed, now that they are demonstrably
+ * reachable.
+ *
+ * This is what makes free-form-only alerting actually work. A cron can only reach an
+ * officer whose 24-hour window happens to be open when it fires; everyone else is
+ * deferred to a later cycle, and with a daily cron that can mean waiting until tomorrow
+ * morning for a warning that was ready today. But an officer who has just messaged us
+ * has, by definition, an open window — so the cheapest reliable trigger is the officer
+ * themselves.
+ *
+ * Called after a turn is complete, so it costs the officer nothing: their reply has
+ * already been sent. Dedupe is unchanged, so an alert delivered by the cron is not
+ * repeated here and vice versa.
+ */
+async function flushAlertsFor(app, officer) {
+  if (!officer || !officer.phone) return { sent: 0 };
+  return dispatchAlerts(app, { only: officer.phone });
+}
+
+module.exports = { dispatchAlerts, flushAlertsFor, wants, watchedDistricts, freeFormBody };
