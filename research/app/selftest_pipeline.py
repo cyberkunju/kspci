@@ -301,6 +301,19 @@ def test_api() -> None:
     check("no key is rejected", client.post("/research", json=body).status_code == 401)
     check("a wrong key is rejected", client.post(
         "/research", json=body, headers={"x-research-key": "nope"}).status_code == 401)
+    # Authentication must be decided BEFORE the body is VALIDATED. Reading the header
+    # inside the handler answers 422 here, naming every required field to a caller who
+    # has not authenticated.
+    #
+    # Syntactically broken JSON is a separate case and deliberately not asserted:
+    # FastAPI parses the raw body before it solves dependencies, so that still answers
+    # 422 — which discloses nothing beyond "this endpoint expects JSON".
+    for route in ("/research", "/research/sync"):
+        r = client.post(route, json={})
+        check(f"an unauthenticated empty body on {route} is 401, not a schema hint",
+              r.status_code == 401, f"{r.status_code} {r.text[:60]}")
+    check("an unauthenticated stream is refused",
+          client.get("/research/rq_x/stream").status_code == 401)
 
     r = client.post("/research", json={**body, "purpose": "check"}, headers=key)
     check("an empty purpose is refused", r.status_code == 403, str(r.status_code))

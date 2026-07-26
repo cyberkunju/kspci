@@ -24,7 +24,7 @@ import json
 import time
 from dataclasses import asdict
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -81,6 +81,22 @@ def _auth(key: str | None) -> None:
         raise HTTPException(503, "RESEARCH_INTERNAL_KEY is not configured")
     if not key or not secrets_equal(key, expected):
         raise HTTPException(401, "unauthorized")
+
+
+def require_key(x_research_key: str | None = Header(default=None)) -> None:
+    """The same check, as a dependency, so it runs BEFORE the body is validated.
+
+    Reading the header inside the handler looks equivalent and is not: FastAPI validates
+    the request body first, so an unauthenticated caller sending `{}` got a 422 naming
+    every required field. Small leak, but it is the schema of an internet-facing service
+    handed to someone who has not authenticated, and it means their payload was parsed
+    before we decided whether to talk to them at all. Dependencies are solved before
+    body validation, so this answers 401 first.
+    """
+    _auth(x_research_key)
+
+
+AUTH = [Depends(require_key)]
 
 
 def secrets_equal(a: str, b: str) -> bool:
@@ -147,9 +163,8 @@ async def _execute(run: Run, body: ResearchIn, anchors: Anchors) -> None:
                              subject=body.subject, error=run.error)
 
 
-@app.post("/research")
-async def start(body: ResearchIn, x_research_key: str | None = Header(default=None)) -> dict:
-    _auth(x_research_key)
+@app.post("/research", dependencies=AUTH)
+async def start(body: ResearchIn) -> dict:
     anchors = _authorise(body)
     _caps.record(body.officer)
     run = registry.create(subject=body.subject, kind=body.kind, mode=budget_for(body.mode).name,
@@ -163,14 +178,13 @@ async def start(body: ResearchIn, x_research_key: str | None = Header(default=No
             "poll": f"/research/{run.id}", "stream": f"/research/{run.id}/stream"}
 
 
-@app.post("/research/sync")
-async def start_sync(body: ResearchIn, x_research_key: str | None = Header(default=None)) -> dict:
+@app.post("/research/sync", dependencies=AUTH)
+async def start_sync(body: ResearchIn) -> dict:
     """Run to completion in the request.
 
     For quick mode only, and capped below the caller's own 30-second ceiling so the
     function that called us does not time out holding this connection open.
     """
-    _auth(x_research_key)
     anchors = _authorise(body)
     _caps.record(body.officer)
     budget = budget_for("quick" if body.mode not in {"quick"} else body.mode)
@@ -184,18 +198,16 @@ async def start_sync(body: ResearchIn, x_research_key: str | None = Header(defau
     return asdict(result)
 
 
-@app.get("/research/{run_id}")
-async def poll(run_id: str, x_research_key: str | None = Header(default=None)) -> dict:
-    _auth(x_research_key)
+@app.get("/research/{run_id}", dependencies=AUTH)
+async def poll(run_id: str) -> dict:
     run = registry.get(run_id)
     if run is None:
         raise HTTPException(404, "no such run (it may have expired)")
     return run.public(with_events=True)
 
 
-@app.delete("/research/{run_id}")
-async def cancel(run_id: str, x_research_key: str | None = Header(default=None)) -> dict:
-    _auth(x_research_key)
+@app.delete("/research/{run_id}", dependencies=AUTH)
+async def cancel(run_id: str) -> dict:
     run = registry.get(run_id)
     if run is None:
         raise HTTPException(404, "no such run")
@@ -205,16 +217,14 @@ async def cancel(run_id: str, x_research_key: str | None = Header(default=None))
     return {"id": run.id, "state": "cancelled"}
 
 
-@app.get("/research/{run_id}/stream")
-async def stream(run_id: str, request: Request,
-                 x_research_key: str | None = Header(default=None)) -> StreamingResponse:
+@app.get("/research/{run_id}/stream", dependencies=AUTH)
+async def stream(run_id: str, request: Request) -> StreamingResponse:
     """Progress as server-sent events.
 
     A deep run takes minutes, and a spinner with no detail invites the officer to
     conclude it has hung. Streaming the stages costs nothing and shows the engine
     working: how many sources were found, how many were readable, how many graded.
     """
-    _auth(x_research_key)
     run = registry.get(run_id)
     if run is None:
         raise HTTPException(404, "no such run")
