@@ -19,7 +19,7 @@
  *
  *   OSINT research engine (lib/research.js -> AppSail service in research/):
  *   POST   /research             start a run (anchored from our own records)
- *   POST   /research/sync        quick run, completed inside the request
+ *   POST   /research/callback    internal: engine delivers a finished run (WhatsApp push)
  *   GET    /research/:id         poll state, and the result once finished
  *   DELETE /research/:id         cancel a running job
  *   GET    /research/health      engine reachability + which source tiers are live
@@ -469,19 +469,38 @@ app.post('/research', requireRole(), researchRoute(async (req, research) => {
   });
 }));
 
-// Quick mode, run inside this request. For callers that cannot poll — the WhatsApp
-// channel and the voice assistant. Capped below the function's own 30s ceiling.
-app.post('/research/sync', requireRole(), researchRoute(async (req, research) => {
-  const { subject, kind, purpose, question, crimeNo } = req.body || {};
-  if (!subject || !String(subject).trim()) {
-    const e = new Error('subject required'); e.status = 400; e.code = 'no_subject'; throw e;
+// There is no synchronous research route. Both modes take 90 to 300 seconds and this
+// function is killed at 30, so a caller that cannot poll (the WhatsApp channel) asks the
+// engine to call back here when the run finishes.
+//
+// Authenticated with the research internal key, which the engine echoes back — the same
+// shared secret in the opposite direction. Not behind requireRole: the engine has no role,
+// and the officer this result belongs to is named in the callback context, not the header.
+app.post('/research/callback', async (req, res) => {
+  if (!secretMatches(req.headers['x-research-callback-key'], process.env.RESEARCH_INTERNAL_KEY)) {
+    return res.status(401).json({ error: 'unauthorized' });
   }
-  const adminApp = catalyst.initialize(req, { scope: 'admin' });
-  return research.sync(adminApp, {
-    subject, kind, purpose, question, crimeNo,
-    role: req.userRole, officer: req.headers['x-user-id'] || 'demo-user'
-  });
-}));
+  // Answer first for the delivery attempt's own sake? No — the same reasoning as the
+  // WhatsApp webhook applies. A serverless instance can be frozen the moment the response
+  // is written, and what would be lost is the officer's report.
+  try {
+    const { result, context, error, id } = req.body || {};
+    const channel = (context && context.channel) || '';
+    if (channel !== 'whatsapp') {
+      // Nothing to push. The run is still pollable, so this is not a failure.
+      return res.json({ accepted: true, delivered: false, reason: 'no delivery channel' });
+    }
+    const adminApp = catalyst.initialize(req, { scope: 'admin' });
+    const { deliver } = require('./lib/wa/research');
+    const out = await deliver(adminApp, { result, context, error, runId: id });
+    res.json({ accepted: true, ...out });
+  } catch (e) {
+    console.error('research callback failed:', String((e && e.message) || e));
+    // 200 regardless: the engine retries once on a non-2xx, and a retry cannot help with
+    // a failure on our side — it would only re-enter the code path that just failed.
+    if (!res.headersSent) res.json({ accepted: true, delivered: false, error: 'delivery_failed' });
+  }
+});
 
 app.get('/research/:id', requireRole(), researchRoute((req, research) => research.poll(req.params.id)));
 app.delete('/research/:id', requireRole(), researchRoute((req, research) => research.cancel(req.params.id)));

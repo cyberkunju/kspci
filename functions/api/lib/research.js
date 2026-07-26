@@ -32,7 +32,10 @@ const START_TIMEOUT_MS = Number(process.env.RESEARCH_START_TIMEOUT_MS || 15000);
 const POLL_TIMEOUT_MS = Number(process.env.RESEARCH_POLL_TIMEOUT_MS || 20000);
 // A sync run is capped well below the function's own 30s ceiling: the engine's quick
 // budget is 25s, and we must still be able to read and return its response.
-const SYNC_TIMEOUT_MS = Number(process.env.RESEARCH_SYNC_TIMEOUT_MS || 27000);
+// The only two modes. `quick` was removed: it existed to fit inside this function's
+// 30-second ceiling, and ten pages read is a sample rather than research. Callers that
+// cannot poll supply a callback instead and are told when the run finishes.
+const MODES = ['standard', 'deep'];
 
 const esc = (s) => String(s == null ? '' : s).replace(/'/g, '');
 const clean = (s) => String(s == null ? '' : s).trim();
@@ -181,6 +184,117 @@ function pushUnique(arr, value, cap) {
 
 const short = (e) => String((e && e.message) || e).slice(0, 120);
 
+/* ------------------------------ our own records ------------------------------ */
+
+/**
+ * What OUR database already holds about this subject, as short factual statements.
+ *
+ * Distinct from anchors, and the distinction matters. Anchors go INTO the search — they
+ * are what makes "Suresh Kumar" findable. These go into the REPORT: the officer reading
+ * what the open web says should see it beside what we already hold, because the useful
+ * question is almost never "what does the internet say" but "does the internet agree
+ * with our file".
+ *
+ * The engine cites these as [DB] and is instructed never to let them corroborate an
+ * open-source claim. It gets statements rather than rows on purpose: the engine has no
+ * database access and should not have any, so what crosses the boundary is a sentence
+ * somebody could read out, not a schema.
+ *
+ * Returns [] when we hold nothing, and the engine then says nothing about records —
+ * "our database has no entry" is a claim only a completed query can make, and a partial
+ * failure here must not be reported as an absence.
+ */
+async function recordsFor(app, { kind = 'person', subject = '', crimeNo = '' } = {}) {
+  const name = clean(subject);
+  const safeName = esc(name);
+  const out = [];
+  const notes = [];
+  const add = (s) => { if (s && out.length < 20) out.push(s); };
+
+  if (crimeNo) {
+    try {
+      const rows = await q(app,
+        `SELECT CrimeNo, CrimeHead, CrimeSubHead, Gravity, CaseStatus, DistrictName, `
+        + `StationName, CrimeRegisteredDate, ActsSections, CourtName, OfficerName, `
+        + `AccusedCount, VictimCount, BriefFacts FROM Cases WHERE CrimeNo='${esc(crimeNo)}' LIMIT 1`);
+      const c = rows[0];
+      if (c) {
+        add(`Case ${clean(c.CrimeNo)} is on record: ${clean(c.CrimeHead)}`
+          + `${clean(c.CrimeSubHead) ? ' / ' + clean(c.CrimeSubHead) : ''}`
+          + `, registered at ${clean(c.StationName)} station, ${clean(c.DistrictName)} district`
+          + `${clean(c.CrimeRegisteredDate) ? ', on ' + clean(c.CrimeRegisteredDate) : ''}.`);
+        if (clean(c.CaseStatus)) add(`Its status in our records is ${clean(c.CaseStatus)}`
+          + `${clean(c.CourtName) ? ' before ' + clean(c.CourtName) : ''}.`);
+        if (clean(c.ActsSections)) add(`Sections invoked: ${clean(c.ActsSections)}.`);
+        if (Number(c.AccusedCount) > 0) {
+          add(`${Number(c.AccusedCount)} accused and ${Number(c.VictimCount) || 0} victim(s) `
+            + 'are recorded against it.');
+        }
+        if (clean(c.BriefFacts)) add(`Brief facts on file: ${clean(c.BriefFacts).slice(0, 400)}`);
+      }
+    } catch (e) { notes.push('case records unavailable: ' + short(e)); }
+  }
+
+  if (kind === 'person' && name) {
+    let accused = [];
+    try {
+      accused = await q(app,
+        `SELECT AccusedName, AgeYear, Gender, DistrictName, CrimeNo, CrimeSubHead `
+        + `FROM Accused WHERE AccusedName='${safeName}' LIMIT 25`);
+    } catch (e) { notes.push('accused records unavailable: ' + short(e)); }
+
+    if (accused.length) {
+      const districts = [...new Set(accused.map((a) => clean(a.DistrictName)).filter(Boolean))];
+      const heads = [...new Set(accused.map((a) => clean(a.CrimeSubHead)).filter(Boolean))];
+      const numbers = [...new Set(accused.map((a) => clean(a.CrimeNo)).filter(Boolean))];
+      const age = accused.map((a) => Number(a.AgeYear)).find((n) => n > 0);
+      add(`${name} appears in our records as an accused in ${accused.length} case(s)`
+        + `${districts.length ? ', in ' + districts.slice(0, 4).join(', ') : ''}.`);
+      if (age) add(`Recorded age: ${age}.`);
+      if (heads.length) add(`Offence types recorded: ${heads.slice(0, 6).join(', ')}.`);
+      if (numbers.length) add(`Case numbers: ${numbers.slice(0, 6).join(', ')}.`);
+    } else if (!notes.length) {
+      add(`${name} does not appear as an accused in our records.`);
+    }
+
+    try {
+      const arrests = await q(app,
+        `SELECT ArrestType, ArrestDate, DistrictName FROM Arrests `
+        + `WHERE AccusedName='${safeName}' ORDER BY ArrestDate DESC LIMIT 5`);
+      if (arrests.length) {
+        add('Arrests on record: ' + arrests.map((a) => (
+          `${clean(a.ArrestType) || 'arrest'}${clean(a.ArrestDate) ? ' ' + clean(a.ArrestDate) : ''}`
+          + `${clean(a.DistrictName) ? ' (' + clean(a.DistrictName) + ')' : ''}`
+        )).join('; ') + '.');
+      }
+    } catch (e) { notes.push('arrest records unavailable: ' + short(e)); }
+
+    try {
+      const risk = await q(app,
+        `SELECT TotalCases, ViolentCases, RiskScore, RiskBand, Factors FROM OffenderRisk `
+        + `WHERE AccusedName='${safeName}' LIMIT 1`);
+      const r = risk[0];
+      if (r) {
+        add(`Our repeat-offender profile scores them ${clean(r.RiskBand) || 'unrated'} `
+          + `(${Number(r.RiskScore) || 0}/100) across ${Number(r.TotalCases) || 0} case(s), `
+          + `${Number(r.ViolentCases) || 0} violent.`);
+      }
+    } catch (e) { notes.push('risk profile unavailable: ' + short(e)); }
+
+    try {
+      const links = await q(app,
+        `SELECT AccusedA, AccusedB, SharedCases FROM CoAccusedLinks `
+        + `WHERE AccusedA='${safeName}' OR AccusedB='${safeName}' `
+        + `ORDER BY SharedCases DESC LIMIT 6`);
+      const others = links.map((l) => (clean(l.AccusedA) === name ? clean(l.AccusedB) : clean(l.AccusedA)))
+        .filter((x) => x && x !== name);
+      if (others.length) add(`Co-accused in our records: ${others.slice(0, 5).join(', ')}.`);
+    } catch (e) { notes.push('co-accused records unavailable: ' + short(e)); }
+  }
+
+  return { records: out, notes };
+}
+
 /* ---------------------------------- proxy ---------------------------------- */
 
 async function call(path, { method = 'GET', body, timeoutMs } = {}) {
@@ -241,7 +355,8 @@ async function call(path, { method = 'GET', body, timeoutMs } = {}) {
  */
 async function requestBody(app, {
   subject, kind = 'person', purpose = '', question = '', mode = 'standard',
-  role = 'investigator', officer = '', crimeNo = ''
+  role = 'investigator', officer = '', crimeNo = '',
+  callbackUrl = '', callbackContext = null
 }) {
   let anchors = { names: [clean(subject)].filter(Boolean) };
   let meta = { subjectRole: '', matchedRecords: 0, notes: ['records were not consulted'] };
@@ -252,11 +367,29 @@ async function requestBody(app, {
   } catch (e) {
     meta = { subjectRole: '', matchedRecords: 0, notes: ['anchor lookup failed: ' + short(e)] };
   }
+
+  // What our own file says, for the report. Separate from anchors, which shape the
+  // search. A failure here costs the [DB] half of the report and nothing else.
+  let records = [];
+  try {
+    const got = await recordsFor(app, { kind, subject, crimeNo });
+    records = got.records;
+    meta.notes = meta.notes.concat(got.notes);
+  } catch (e) {
+    meta.notes.push('record summary unavailable: ' + short(e));
+  }
+
   return {
     body: {
-      subject: clean(subject), kind, purpose, question, mode, role,
+      subject: clean(subject), kind, purpose, question,
+      mode: MODES.includes(mode) ? mode : 'standard', role,
       officer: officer || 'unknown', crime_number: clean(crimeNo),
-      subject_role: meta.subjectRole, anchors
+      subject_role: meta.subjectRole, anchors, records,
+      ...(callbackUrl ? {
+        callback_url: callbackUrl,
+        callback_key: INTERNAL_KEY,
+        callback_context: callbackContext || {}
+      } : {})
     },
     meta
   };
@@ -266,14 +399,10 @@ async function requestBody(app, {
 async function start(app, opts) {
   const { body, meta } = await requestBody(app, opts);
   const out = await call('/research', { method: 'POST', body, timeoutMs: START_TIMEOUT_MS });
-  return { ...out, anchors: summariseAnchors(body.anchors), anchorNotes: meta.notes };
-}
-
-/** Run to completion inside this request. Quick mode only — see SYNC_TIMEOUT_MS. */
-async function sync(app, opts) {
-  const { body, meta } = await requestBody(app, { ...opts, mode: 'quick' });
-  const out = await call('/research/sync', { method: 'POST', body, timeoutMs: SYNC_TIMEOUT_MS });
-  return { ...out, anchors: summariseAnchors(body.anchors), anchorNotes: meta.notes };
+  return {
+    ...out, mode: body.mode, anchors: summariseAnchors(body.anchors),
+    records: body.records, anchorNotes: meta.notes
+  };
 }
 
 const poll = (id) => call('/research/' + encodeURIComponent(id));
@@ -297,7 +426,7 @@ function summariseAnchors(a) {
 }
 
 module.exports = {
-  configured, anchorsFor, start, sync, poll, cancel, health,
+  configured, anchorsFor, recordsFor, start, poll, cancel, health, MODES,
   // exported for tests
   _internals: { requestBody, summariseAnchors, applyCase, pushUnique }
 };
